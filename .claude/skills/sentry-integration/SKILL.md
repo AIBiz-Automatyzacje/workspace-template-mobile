@@ -254,15 +254,114 @@ Sentry.setContext('auth', {
 
 ---
 
+## React Native (Expo)
+
+Sentry w aplikacji mobilnej różni się od React + Vite — inny SDK, inny sourcemaps flow, inna integracja z navigation.
+
+### Setup `@sentry/react-native` (NIE `@sentry/react`)
+
+```bash
+bunx expo install @sentry/react-native
+```
+
+W `app.json` dodaj plugin Sentry żeby sourcemaps były automatycznie uploadowane przy `eas build`:
+
+```json
+{
+  "expo": {
+    "plugins": [
+      [
+        "@sentry/react-native/expo",
+        {
+          "organization": "your-org",
+          "project": "your-project",
+          "url": "https://sentry.io/"
+        }
+      ]
+    ]
+  }
+}
+```
+
+### Inicjalizacja w `app/_layout.tsx` (Expo Router root)
+
+```typescript
+import * as Sentry from '@sentry/react-native';
+import { isRunningInExpoGo } from 'expo';
+import { useNavigationContainerRef } from 'expo-router';
+
+const navigationIntegration = Sentry.reactNavigationIntegration({
+  enableTimeToInitialDisplay: !isRunningInExpoGo(),
+});
+
+Sentry.init({
+  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
+  enableNative: !isRunningInExpoGo(),  // crashy native — tylko w dev clients/preview/release
+  tracesSampleRate: 1.0,
+  integrations: [navigationIntegration],
+  enableAutoSessionTracking: true,
+});
+
+function RootLayout() {
+  const ref = useNavigationContainerRef();
+  useEffect(() => {
+    if (ref) navigationIntegration.registerNavigationContainer(ref);
+  }, [ref]);
+  // ...
+}
+
+export default Sentry.wrap(RootLayout);
+```
+
+### Sourcemaps przez EAS Build
+
+Plugin Sentry (skonfigurowany powyżej) automatycznie uploaduje sourcemaps przy każdym `eas build` na podstawie `SENTRY_AUTH_TOKEN` w EAS secrets:
+
+```bash
+eas secret:create --name SENTRY_AUTH_TOKEN --value "$TOKEN" --type string
+```
+
+**Bez tokena:** stack traces w Sentry pokażą minified bundle (nieczytelny). Token jest wymagany dla każdego release/preview profilu.
+
+### Crash capture — JS errors + native crashes
+
+`@sentry/react-native` łapie:
+- **JS errors:** automatycznie (przez globalErrorHandler)
+- **Native crashes (iOS Swift / Android Kotlin):** automatycznie pod warunkiem `enableNative: true` i build z dev-client / preview / release. Expo Go **nie raportuje** native crashy (sandbox).
+- **ANR (Application Not Responding) Android:** wbudowane od `@sentry/react-native@5+`
+- **Promise rejections:** automatycznie
+
+### Navigation breadcrumbs
+
+`reactNavigationIntegration` automatycznie loguje każdą zmianę route jako breadcrumb. W panelu Sentry zobaczysz: `Login → Dashboard → Settings → [crash]`. Krytyczne dla diagnozy "co user robił przed crashem".
+
+### Mobile-specific context
+
+```typescript
+import * as Device from 'expo-device';
+import * as Application from 'expo-application';
+
+Sentry.setContext('device', {
+  model: Device.modelName,                          // np. "iPhone 15 Pro"
+  osName: Device.osName,                            // "iOS" / "Android"
+  osVersion: Device.osVersion,                      // "18.0"
+  appVersion: Application.nativeApplicationVersion, // "1.2.3"
+  buildNumber: Application.nativeBuildVersion,      // "42"
+});
+```
+
+To pomaga filtrować w Sentry per-platform / per-version.
+
+---
+
 ## Resources
 
 Szczegółowe wzorce znajdują się w:
 
-- **[react-sentry-patterns.md](resources/react-sentry-patterns.md)** - Pełna konfiguracja React + Vite, ErrorBoundary, performance, session replay
+- **[react-sentry-patterns.md](resources/react-sentry-patterns.md)** - Pełna konfiguracja React + Vite, ErrorBoundary, performance, session replay (zostaje jako referencja)
 - **[edge-functions-sentry.md](resources/edge-functions-sentry.md)** - Wzorce dla Supabase Edge Functions (Deno), shared helpers, Stripe tracking
 
 ---
 
-**Skill Status**: COMPLETE
-**Line Count**: < 200 (following 500-line rule)
+**Skill Status**: COMPLETE + sekcja React Native (Expo) maj 2026
 **Progressive Disclosure**: Reference files for detailed patterns

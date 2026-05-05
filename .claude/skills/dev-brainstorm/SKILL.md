@@ -8,6 +8,8 @@ argument-hint: "[pomysł na feature lub problem do zbadania]"
 
 **Uwaga: Aktualny rok to 2026.** Używaj tego przy datowaniu dokumentów.
 
+**Kontekst stacku:** ten projekt to repo szablonowe pod aplikacje **mobilne** (Expo/React Native). Pytania o store distribution (App Store / Google Play), OTA strategy (EAS Update), native dependencies, deep linking, biometry, push notifications, `expo-secure-store` są **w scope**. Pytania o SEO, SSR, browser compatibility, web bundle size są **poza scope** — przekieruj rozmowę na mobile equivalents (np. "App Store search visibility" zamiast SEO, "embedded vs OTA" zamiast SSR).
+
 Brainstorming odpowiada na pytanie **CO** budować poprzez dialog. Poprzedza `/dev-plan`, który odpowiada na pytanie **JAK** to zbudować.
 
 Trwałym wynikiem tego workflow jest **dokument wymagań** (requirements doc). Dokument musi być na tyle konkretny, żeby planowanie nie musiało wymyślać zachowań produktu, granic scope'u ani kryteriów sukcesu.

@@ -89,7 +89,7 @@ Wymagania wykonania:
 - Zaimplementuj kod dla wszystkich niezaznaczonych checkboxow (z wyjatkiem "Weryfikacja:")
 - NAPISZ testy dla checkboxow z prefixem "Test:" RAZEM z kodem
 - NIE wykonuj checkboxow "Weryfikacja:" — sa dla Agent 5 w review
-- Uruchom pelna walidacje przed commitem (typecheck, test, build)
+- Uruchom pelna walidacje przed commitem (typecheck, test, expo-doctor — NIE eas build, to zbyt drogie)
 
 Nie pytaj uzytkownika o potwierdzenie — dzialaj autonomicznie.
 
@@ -262,16 +262,14 @@ opisu problemu w checklist i raporcie review:
    AKCJA:
    1. Znajdz przyczyne (zwykle w kodzie UI/stylu/a11y/interakcji)
    2. Napraw przyczyne
-   3. Re-uruchom weryfikacje wizualna PRZEZ agent-browser:
-      - Ustal URL aplikacji (zwykle http://localhost:5173 dla Vite)
-      - `agent-browser open <URL>` + `wait --load networkidle`
-      - `agent-browser snapshot -i`
-      - Wykonaj scenariusz z opisu checkboxa Weryfikacja:
-      - Ustaw viewport jesli scenariusz tego wymaga (desktop/mobile)
-      - `agent-browser snapshot -i` po akcji
-      - Zweryfikuj ze oczekiwany stan jest widoczny
-      - `agent-browser screenshot` jako dowod (zapisz w $1/)
-   4. Odznacz checkbox Weryfikacja: DOPIERO po wizualnym PASS.
+   3. Re-uruchom weryfikacje na emulatorze PRZEZ Maestro:
+      - Sprawdz czy emulator iOS/Android jest uruchomiony
+      - Sprawdz czy aplikacja jest zainstalowana (preview build)
+      - Zlokalizuj lub utworz flow YAML: `.maestro/<feature>-<scenario>.yaml`
+      - `maestro test .maestro/<flow>.yaml`
+      - Zbierz screenshoty z `.maestro/screenshots/` (zapisz do $1/)
+      - Zweryfikuj exit code (0 = pass) + ze wszystkie `assertVisible` przeszly
+   4. Odznacz checkbox Weryfikacja: DOPIERO po Maestro PASS.
       NIE odznaczaj na podstawie samego "naprawilem kod" —
       to jest antywzorzec (test weakening).
 
@@ -283,7 +281,7 @@ opisu problemu w checklist i raporcie review:
 
 === PO WSZYSTKICH NAPRAWACH ===
 
-1. Uruchom pelna walidacje (typecheck, test, build — komendy z package.json)
+1. Uruchom pelna walidacje (typecheck, test, expo-doctor — komendy z package.json; NIE eas build)
 2. Commituj zmiany: `fix([nazwa-zadania]): poprawki po review fazy {AKTUALNA_FAZA.numer} (cykl {fix_cykl + 1})`
 3. Staguj tylko pliki zmienione w tym cyklu fix — nie uzywaj `git add .`
 
@@ -335,7 +333,7 @@ Wykonaj pelna walidacje calego projektu po autopilocie.
 Przeczytaj konfiguracje projektu zeby ustalic komendy — NIE zgaduj:
 
 1. Jesli istnieje `package.json`:
-   - Przeczytaj sekcje `scripts` — szukaj: typecheck, lint, test, build, check
+   - Przeczytaj sekcje `scripts` — szukaj: typecheck, lint, test, check
    - Wykryj package manager:
      * `bun.lockb` → `bun run <script>`
      * `pnpm-lock.yaml` → `pnpm <script>`
@@ -343,10 +341,11 @@ Przeczytaj konfiguracje projektu zeby ustalic komendy — NIE zgaduj:
      * `package-lock.json` → `npm run <script>`
    - Jesli brak skryptu typecheck → sprobuj `tsc --noEmit` (jesli tsconfig.json istnieje)
    - Jesli brak skryptu test → pomin z adnotacja "brak"
+   - Stack mobile (Expo): zamiast `build` uzywaj `bunx expo-doctor`. NIE odpalaj `eas build` (cost + czas).
 
-2. Jesli istnieje `Makefile` → uzyj `make <target>` (typecheck, test, build)
+2. Jesli istnieje `Makefile` → uzyj `make <target>` (typecheck, test)
 3. Jesli istnieje `pyproject.toml` → uzyj narzedzi Python (mypy, pytest, ruff)
-4. Jesli istnieje `Cargo.toml` → `cargo check && cargo test && cargo build`
+4. Jesli istnieje `Cargo.toml` → `cargo check && cargo test`
 
 Jesli nie mozesz ustalic komend — ZATRZYMAJ i zwroc "brak konfiguracji" jako FAIL.
 
@@ -357,7 +356,7 @@ Uruchom w kolejnosci (zatrzymaj przy pierwszym FAIL, nie kontynuuj dalej):
 1. Typecheck: <wykryta komenda>
 2. Lint (jesli skrypt istnieje): <wykryta komenda>
 3. Test: <wykryta komenda>
-4. Build: <wykryta komenda>
+4. Validation (mobile): `bunx expo-doctor` (sprawdza deps compat z Expo SDK; szybkie, free)
 
 === KROK 3: Obsluga bledow ===
 
@@ -372,7 +371,7 @@ Jesli ktores FAIL:
 - Typecheck: PASS/FAIL (komenda: ...)
 - Lint: PASS/SKIPPED/FAIL
 - Testy: PASS/FAIL (X/Y przeszlo, komenda: ...)
-- Build: PASS/FAIL (komenda: ...)
+- expo-doctor: PASS/FAIL (lub n/a)
 - Naprawione bledy (jesli byly): lista commitow
 - Pozostale bledy (jesli sa): lista z lokalizacjami
 ```
@@ -474,7 +473,7 @@ Problemy wymagajace uwagi: {lista lub "brak"}
 | Git conflict | STOP. Poinformuj uzytkownika o konflikcie i sciezce do pliku. |
 | Brak faz do wykonania | Przeskocz do Fazy 2 (complete/compound). |
 | Skill tool nie dziala w Agent | FALLBACK: Agent czyta `.claude/skills/{nazwa}/SKILL.md` i wykonuje instrukcje bezposrednio. |
-| E2E Agent 5 zwraca FAIL | Traktuj jako P2. Fix agent musi re-uruchomic agent-browser po naprawie kodu i zweryfikowac wizualnie przed odznaczeniem checkboxa. |
+| E2E Agent 5 zwraca FAIL | Traktuj jako P2. Fix agent musi re-uruchomic Maestro flow po naprawie kodu i zweryfikowac na emulatorze przed odznaczeniem checkboxa. |
 | E2E Agent 5 SKIP / nie uruchomiony (brak dev server, env error) | Orkiestrator w kroku 1c MUSI wykryc niezaznaczone checkboxy Weryfikacja: i dodac kazdy jako P2. Agent 5 SKIP != brak problemow — to niezweryfikowane wymagania. |
 
 ## Fallback: Jesli Skill tool nie dziala w Agent

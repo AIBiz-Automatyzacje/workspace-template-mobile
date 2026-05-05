@@ -289,4 +289,140 @@ if (user) { /* autoryzacja */ }
 
 ---
 
-**Status Skilla**: Modułowa struktura z progressive loading dla optymalnego zarządzania kontekstem. Zaktualizowany do standardów Marzec 2026.
+## Mobile (Expo / React Native)
+
+Specyfika Supabase w aplikacji mobilnej. Zapamiętaj: **server-side code → Edge Functions, NIE Expo API Routes** (Decyzja architektoniczna repo #3 — Edge Functions są bliżej bazy, mają natywną integrację z auth, jeden billing).
+
+### Session persistence — `expo-secure-store` zamiast `localStorage`
+
+`localStorage` **nie istnieje** na natywie. Skonfiguruj custom storage:
+
+```typescript
+// lib/supabase.ts
+import 'react-native-url-polyfill/auto';
+import { createClient } from '@supabase/supabase-js';
+import * as SecureStore from 'expo-secure-store';
+
+const ExpoSecureStoreAdapter = {
+  getItem: (key: string) => SecureStore.getItemAsync(key),
+  setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
+  removeItem: (key: string) => SecureStore.deleteItemAsync(key),
+};
+
+export const supabase = createClient(
+  process.env.EXPO_PUBLIC_SUPABASE_URL!,
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
+  {
+    auth: {
+      storage: ExpoSecureStoreAdapter,
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false,  // mobile NIE używa URL detection
+    },
+  }
+);
+```
+
+`expo-secure-store` używa Keychain (iOS) / Keystore (Android) — sekrety szyfrowane przez OS. To jest **wymagane**, nie opcjonalne (kompromis na sesję = lekceważenie wymagań App Store / Play Store).
+
+### OAuth deep linking — schema `yourapp://`, NIE `https://`
+
+Aplikacja mobilna nie ma URL-a, więc OAuth redirect musi iść na app scheme. W `app.json`:
+
+```json
+{
+  "expo": {
+    "scheme": "yourapp",
+    "ios": { "bundleIdentifier": "com.example.yourapp" },
+    "android": { "package": "com.example.yourapp" }
+  }
+}
+```
+
+Flow:
+
+```typescript
+// hooks/useGoogleAuth.ts
+import * as WebBrowser from 'expo-web-browser';
+import { makeRedirectUri } from 'expo-auth-session';
+
+const redirectTo = makeRedirectUri({ scheme: 'yourapp', path: 'auth/callback' });
+// → "yourapp://auth/callback"
+
+const { data, error } = await supabase.auth.signInWithOAuth({
+  provider: 'google',
+  options: { redirectTo, skipBrowserRedirect: true },
+});
+
+if (data?.url) {
+  const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+  if (result.type === 'success') {
+    const { url } = result;
+    const params = new URLSearchParams(url.split('#')[1]);
+    await supabase.auth.setSession({
+      access_token: params.get('access_token')!,
+      refresh_token: params.get('refresh_token')!,
+    });
+  }
+}
+```
+
+Konfiguracja dostawcy OAuth (Google Console / Supabase dashboard): dodaj `yourapp://auth/callback` jako Allowed redirect URL **obok** zwykłego `https://...supabase.co/auth/v1/callback`.
+
+### Realtime lifecycle — AppState listener
+
+Realtime socket rozłącza się gdy aplikacja idzie w background (system iOS/Android oszczędza baterii). Bez listenera channel zostanie offline po wakeup.
+
+```typescript
+// hooks/useRealtimeChannel.ts
+import { AppState } from 'react-native';
+import { useEffect } from 'react';
+
+useEffect(() => {
+  const channel = supabase.channel('messages')
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, handleMessage)
+    .subscribe();
+
+  const subscription = AppState.addEventListener('change', (nextState) => {
+    if (nextState === 'active') {
+      channel.subscribe();
+    } else if (nextState === 'background') {
+      channel.unsubscribe();
+    }
+  });
+
+  return () => {
+    channel.unsubscribe();
+    subscription.remove();
+  };
+}, []);
+```
+
+### Offline-first — React Query persist do AsyncStorage
+
+```typescript
+// app/_layout.tsx
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+
+const persister = createAsyncStoragePersister({ storage: AsyncStorage });
+
+<PersistQueryClientProvider
+  client={queryClient}
+  persistOptions={{ persister, maxAge: 1000 * 60 * 60 * 24 }}  // 24h
+>
+  {children}
+</PersistQueryClientProvider>
+```
+
+Cache utrzymuje się po zamknięciu aplikacji — szybsze otwarcie + offline reads.
+
+### Środowiskowe (env vars w Expo)
+
+- **Klient (widoczne):** `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY`. Prefix `EXPO_PUBLIC_` jest wymagany żeby Expo zbundlował zmienną.
+- **Server (Edge Functions):** `SUPABASE_SERVICE_ROLE_KEY` — TYLKO w `supabase/functions/<x>/`. NIGDY z prefiksem `EXPO_PUBLIC_*` (klient by zobaczył).
+
+---
+
+**Status Skilla**: Modułowa struktura z progressive loading dla optymalnego zarządzania kontekstem. Zaktualizowany do standardów Marzec 2026 + sekcja Mobile (Expo) maj 2026.

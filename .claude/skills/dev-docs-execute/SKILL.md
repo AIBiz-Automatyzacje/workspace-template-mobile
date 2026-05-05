@@ -44,7 +44,7 @@ KAŻDY Implementation Unit z fazy MUSI być wykonany przez subagenta zadeklarowa
 - **Inline fallback** — TYLKO gdy IU nie ma `Delegate to:` (legacy plan sprzed reformy delegacji) lub jest trywialny (literówka w stringu, zmiana jednej stałej). W każdym innym przypadku NIE używaj inline.
 
 **Krok 3 — Dla każdego IU wywołaj Agent tool:**
-- `subagent_type` = wartość pola `Delegate to:` z IU (`feature-builder-ui` | `feature-builder-data` | `feature-builder-fullstack`)
+- `subagent_type` = wartość pola `Delegate to:` z IU (`feature-builder-mobile-ui` | `feature-builder-mobile-data` | `feature-builder-mobile-fullstack`)
 - `prompt` = cały blok IU dosłownie (Cel, Wymagania, Pliki, Podejście, Wzorce, Scenariusze testowe, Weryfikacja) + ścieżka do dokumentacji zadania (`$1`) + numer IU
 
 **Krok 4 — Po otrzymaniu raportu od subagenta zweryfikuj `Status:`**
@@ -59,7 +59,7 @@ KAŻDY Implementation Unit z fazy MUSI być wykonany przez subagenta zadeklarowa
 - Sprawdź czy w planie (`docs/plans/`) lub w pliku z planem zadania istnieje sekcja "Granice scope'u" / "Poza zakresem"
 - Jeśli tak → przeczytaj ją i NIE implementuj niczego co jest tam wymienione, nawet jeśli wydaje się przydatne
 - Jeśli zadanie wymaga pracy poza zakresem → STOP, poinformuj użytkownika
-- Checkboxy z prefixem `Weryfikacja:` NIE wykonuj — zostaną zweryfikowane wizualnie w przeglądarce podczas `/dev-docs-review`
+- Checkboxy z prefixem `Weryfikacja:` NIE wykonuj — zostaną zweryfikowane na emulatorze przez Maestro (`mobile-e2e-maestro`) podczas `/dev-docs-review`
 - Realizuj zadania z fazy zgodnie ze strategią delegacji z sekcji 2.5 (Agent tool z `subagent_type` z pola `Delegate to:` IU). Testy są pisane przez subagenta razem z kodem (część jego workflow) — nie zlecaj ich osobno
 - NIE przechodź do następnych faz
 - Zatrzymaj się po ukończeniu tej jednej fazy

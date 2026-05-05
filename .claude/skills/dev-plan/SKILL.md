@@ -134,6 +134,22 @@ Sklasyfikuj pracę w jedną z tych głębokości:
 
 Jeśli głębokość jest niejasna, zadaj jedno celowane pytanie i kontynuuj.
 
+#### 0.7 Wykrycie stacku
+
+Sprawdź czy projekt to **Expo (mobile)** czy inny stack. Heurystyka — projekt jest Expo gdy spełniony jest co najmniej jeden warunek:
+- Istnieje `app.json`, `app.config.ts`, lub `app.config.js`
+- `package.json` zawiera `"expo": "..."` w `dependencies`
+- Istnieje folder `app/` z plikami routes (Expo Router) lub `App.tsx` jako entry point
+
+Jeśli projekt to Expo:
+- W decyzjach `Delegate to:` używaj **mobile builderów** (`feature-builder-mobile-ui` | `feature-builder-mobile-data` | `feature-builder-mobile-fullstack`)
+- W `Skills in play:` używaj prefiksu `expo-*` + `expo-overview` jako pierwszego skilla
+- Scenariusze E2E delegowane do `mobile-e2e-maestro` (Maestro CLI na emulatorze; web E2E tooling jest poza scope)
+- Server-side code → Supabase Edge Functions (NIE Expo API Routes — Decyzja architektoniczna repo)
+- Persystencja sesji → `expo-secure-store` (NIE `localStorage`)
+
+Tabela decyzyjna w sekcji 3.5 ma pełną regułę.
+
 ### Faza 1: Zbierz kontekst
 
 #### 1.1 Research lokalny (uruchamiany zawsze)
@@ -272,15 +288,15 @@ Dla każdego unitu dołącz:
 - **Wymagania** — które wymagania lub kryteria sukcesu realizuje
 - **Zależności** — co musi istnieć wcześniej
 - **Pliki** — dokładne ścieżki plików do stworzenia, modyfikacji lub testowania
-- **Delegate to** — subagent wykonujący ten unit (`feature-builder-ui` | `feature-builder-data` | `feature-builder-fullstack`). Reguła decyzyjna w sekcji 3.5.
+- **Delegate to** — subagent wykonujący ten unit (`feature-builder-mobile-ui` | `feature-builder-mobile-data` | `feature-builder-mobile-fullstack`). Reguła decyzyjna w sekcji 3.5.
 - **Skills in play** — lista skilli aktywnych podczas implementacji (mirror frontmatter `skills:` wybranego subagenta). Dokumentacyjne, dla czytelności planu.
 - **Podejście** — kluczowe decyzje, przepływ danych, granice komponentów lub notatki integracyjne
 - **Notatka wykonawcza** — opcjonalna, tylko gdy unit korzysta z niestandardowej postawy wykonawczej jak test-first lub characterization-first
 - **Wzorce do naśladowania** — istniejący kod lub konwencje do odwzorowania
-- **Scenariusze testowe** — konkretne zachowania, edge cases i ścieżki awarii do pokrycia. Rozróżniaj typy: `[Unit]` dla testów kodu, `[E2E]` dla scenariuszy do weryfikacji w przeglądarce przez `/agent-browser`
+- **Scenariusze testowe** — konkretne zachowania, edge cases i ścieżki awarii do pokrycia. Rozróżniaj typy: `[Unit]` dla testów kodu, `[E2E]` dla scenariuszy do weryfikacji na emulatorze przez `mobile-e2e-maestro` (Maestro CLI)
 - **Weryfikacja** — jak implementator powinien wiedzieć że unit jest ukończony, wyrażona jako oczekiwane wyniki a nie skrypty komend shellowych
 
-Każdy feature-bearing unit powinien zawierać ścieżkę pliku testowego w `**Pliki:**`. Dla unitów modyfikujących komponenty UI lub ścieżki użytkownika — dołącz scenariusze `[E2E]` opisujące flow do przetestowania przez `/agent-browser` (otwórz URL, zrób snapshot, kliknij X, sprawdź Y, zrób screenshot).
+Każdy feature-bearing unit powinien zawierać ścieżkę pliku testowego w `**Pliki:**`. Dla unitów modyfikujących ekrany/komponenty UI lub ścieżki użytkownika — dołącz scenariusze `[E2E]` opisujące flow do przetestowania przez Maestro (launch app, tap/scroll/swipe, asercje, deep linking, screenshot).
 
 Używaj `Notatka wykonawcza` oszczędnie. Dobre użycia:
 - `Notatka wykonawcza: Zacznij od failing integration testu dla kontraktu request/response.`
@@ -295,11 +311,11 @@ Każdy Implementation Unit MUSI mieć zadeklarowany `Delegate to:` — nazwa sub
 
 | Ścieżki w `Pliki:` | Subagent | Skille (mirror dla `Skills in play:`) |
 |---|---|---|
-| Tylko `*.tsx` w `src/components/`, `src/features/<x>/components/`, `src/pages/`, lub `*.css` | `feature-builder-ui` | tailwind-react-guidelines, ux-ui-guidelines |
-| Tylko `*.ts` w `src/lib/`, `src/hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-data` | supabase-dev-guidelines, security |
-| Mix UI i danych w jednym atomowym IU | `feature-builder-fullstack` | tailwind-react-guidelines, ux-ui-guidelines, supabase-dev-guidelines, security |
+| Tylko `*.tsx` w `app/`, `components/`, `screens/`, lub native config (`app.json`, `app.config.ts`) | `feature-builder-mobile-ui` | expo-overview, expo-building-native-ui, expo-tailwind-setup |
+| Tylko `*.ts` w `lib/`, `hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-mobile-data` | expo-overview, expo-native-data-fetching, supabase-dev-guidelines, security |
+| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-building-native-ui, expo-tailwind-setup, expo-native-data-fetching, supabase-dev-guidelines, security |
 
-**Reguła praktyczna:** jeśli da się rozsądnie podzielić na dwa osobne IU (jeden UI, drugi data) — podziel. `feature-builder-fullstack` używaj **tylko** gdy podział byłby sztuczny (np. formularz logowania, gdzie UI bez auth call lub auth call bez formularza są bezużyteczne).
+**Reguła praktyczna:** jeśli da się rozsądnie podzielić na dwa osobne IU (jeden UI, drugi data) — podziel. `feature-builder-mobile-fullstack` używaj **tylko** gdy podział byłby sztuczny (np. ekran logowania z OAuth, gdzie UI bez auth call lub auth call bez ekranu są bezużyteczne).
 
 Pole `Skills in play:` jest dokumentacyjnym mirror frontmatter `skills:` wybranego subagenta — pozwala czytelnikowi planu zrozumieć kontekst implementacji bez wchodzenia do pliku subagenta.
 
@@ -423,9 +439,9 @@ origin: docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md  # dołącz gdy plan
 - Stwórz: `ścieżka/do/nowego_pliku`
 - Modyfikuj: `ścieżka/do/istniejącego_pliku`
 - Test (unit): `ścieżka/do/pliku_testowego`
-- Test (e2e): `Scenariusz: [opis flow do weryfikacji przez /agent-browser]`
+- Test (e2e): `Scenariusz: [opis flow do weryfikacji przez mobile-e2e-maestro / Maestro YAML]`
 
-**Delegate to:** feature-builder-ui | feature-builder-data | feature-builder-fullstack
+**Delegate to:** feature-builder-mobile-ui | feature-builder-mobile-data | feature-builder-mobile-fullstack
 
 **Skills in play:** [lista skilli — mirror frontmatter `skills:` wybranego subagenta]
 
@@ -440,7 +456,7 @@ origin: docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md  # dołącz gdy plan
 **Scenariusze testowe:**
 - [Unit] [Konkretny scenariusz z oczekiwanym zachowaniem]
 - [Unit] [Edge case lub ścieżka awarii]
-- [E2E] [Flow do weryfikacji przez /agent-browser: otwórz URL, kliknij X, sprawdź Y]
+- [E2E] [Flow do weryfikacji przez Maestro: launchApp, tapOn X, assertVisible Y, takeScreenshot]
 
 **Weryfikacja:**
 - [Wynik który powinien być prawdziwy gdy unit jest ukończony]
