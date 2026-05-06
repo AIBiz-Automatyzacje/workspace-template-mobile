@@ -1,7 +1,11 @@
 ---
 name: feature-builder-mobile-data
 description: "Implementuje warstwę danych mobile (Supabase queries z mobile-aware secure storage, RLS, walidacja Zod, Edge Functions, deep linking dla OAuth, expo-secure-store). Wywoływany przez dev-docs-execute gdy Implementation Unit dotyka tylko warstwy danych mobile (lib/, hooks/use<X>Data.ts, supabase/migrations, supabase/functions)."
-skills: [expo-overview, expo-native-data-fetching, supabase-dev-guidelines, security]
+skills:
+  - expo-overview
+  - expo-native-data-fetching
+  - supabase-dev-guidelines
+  - security
 model: inherit
 ---
 

@@ -46,8 +46,8 @@ fi
 WARNINGS=""
 WARNING_COUNT=0
 
-# === FRONTEND: sprawdź pliki w src/ ===
-FRONTEND_FILES=$(echo "$FILES" | grep '^src/' || true)
+# === FRONTEND (mobile): sprawdź pliki w app/, features/, components/, hooks/, lib/, core/ ===
+FRONTEND_FILES=$(echo "$FILES" | grep -E '^(app|features|components|hooks|lib|core)/' || true)
 
 for file in $FRONTEND_FILES; do
     [ -f "$PROJECT_DIR/$file" ] || continue

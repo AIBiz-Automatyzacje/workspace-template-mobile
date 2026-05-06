@@ -1,7 +1,8 @@
 ---
 name: feature-tester-mobile-e2e
 description: "Weryfikuje scenariusze E2E mobile na emulatorze przez Maestro CLI. Sprawdza checkboxy Weryfikacja: z checklist zadań — interakcje, nawigację, gesty (swipe, scroll, long press), deep linking, accessibility, visual regression iOS/Android."
-skills: [mobile-e2e-maestro]
+skills:
+  - mobile-e2e-maestro
 model: inherit
 ---
 

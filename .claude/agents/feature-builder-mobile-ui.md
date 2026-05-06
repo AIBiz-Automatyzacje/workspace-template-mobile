@@ -1,7 +1,10 @@
 ---
 name: feature-builder-mobile-ui
 description: "Implementuje warstwę UI mobile (komponenty React Native, Expo Router, NativeWind, native tabs, animacje Reanimated, dostępność iOS VoiceOver/Android TalkBack). Wywoływany przez dev-docs-execute gdy Implementation Unit dotyka tylko warstwy prezentacji mobile (*.tsx w app/, components/, screens/, native config)."
-skills: [expo-overview, expo-building-native-ui, expo-tailwind-setup]
+skills:
+  - expo-overview
+  - expo-building-native-ui
+  - expo-tailwind-setup
 model: inherit
 ---
 

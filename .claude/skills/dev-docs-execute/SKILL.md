@@ -47,6 +47,13 @@ KAŻDY Implementation Unit z fazy MUSI być wykonany przez subagenta zadeklarowa
 - `subagent_type` = wartość pola `Delegate to:` z IU (`feature-builder-mobile-ui` | `feature-builder-mobile-data` | `feature-builder-mobile-fullstack`)
 - `prompt` = cały blok IU dosłownie (Cel, Wymagania, Pliki, Podejście, Wzorce, Scenariusze testowe, Weryfikacja) + ścieżka do dokumentacji zadania (`$1`) + numer IU
 
+**WAŻNE — NIE kopiuj `Skills in play:` do promptu subagenta.** Skille są wstrzykiwane automatycznie z frontmatter `skills:` zadeklarowanego subagenta przy starcie jego sesji (zgodnie z dokumentacją Anthropic: *"the full content of each skill is injected into the subagent's context, not just made available for invocation"*). Pole `Skills in play:` w planie technicznym jest **dokumentacyjne dla czytelnika planu**, nie executable. Wpisywanie skilli do promptu jest:
+- redundantne (subagent już ma je w kontekście),
+- mylące (sugeruje że subagent ma je załadować ręcznie przez Skill tool — nie ma),
+- może wprowadzać szum jeśli orkiestrator wymieni inną listę skilli niż frontmatter agenta.
+
+Jeśli IU wymaga skilla którego subagent nie ma w frontmatter — to znak że albo wybrałeś niewłaściwego subagenta (sprawdź regułę decyzyjną z planu), albo frontmatter agenta wymaga aktualizacji (zgłoś userowi jako odchylenie od planu).
+
 **Krok 4 — Po otrzymaniu raportu od subagenta zweryfikuj `Status:`**
 
 - `completed` → zaloguj raport w pliku z kontekstem zadania, kontynuuj do kolejnego IU

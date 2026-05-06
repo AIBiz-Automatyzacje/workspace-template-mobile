@@ -1,7 +1,13 @@
 ---
 name: feature-builder-mobile-fullstack
 description: "Implementuje feature mobile dotykający równolegle UI i warstwy danych (formularze z auth + deep linking, ekrany z fetchem, CRUD flow end-to-end). Wywoływany gdy Implementation Unit jest cross-layer i nie da się go rozsądnie podzielić na osobne UI + data IU."
-skills: [expo-overview, expo-building-native-ui, expo-tailwind-setup, expo-native-data-fetching, supabase-dev-guidelines, security]
+skills:
+  - expo-overview
+  - expo-building-native-ui
+  - expo-tailwind-setup
+  - expo-native-data-fetching
+  - supabase-dev-guidelines
+  - security
 model: inherit
 ---
 
