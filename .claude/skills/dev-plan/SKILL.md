@@ -293,8 +293,9 @@ Dla każdego unitu dołącz:
 - **Podejście** — kluczowe decyzje, przepływ danych, granice komponentów lub notatki integracyjne
 - **Notatka wykonawcza** — opcjonalna, tylko gdy unit korzysta z niestandardowej postawy wykonawczej jak test-first lub characterization-first
 - **Wzorce do naśladowania** — istniejący kod lub konwencje do odwzorowania
-- **Scenariusze testowe** — konkretne zachowania, edge cases i ścieżki awarii do pokrycia. Rozróżniaj typy: `[Unit]` dla testów kodu, `[E2E]` dla scenariuszy do weryfikacji na emulatorze przez `mobile-e2e-maestro` (Maestro CLI)
-- **Weryfikacja** — jak implementator powinien wiedzieć że unit jest ukończony, wyrażona jako oczekiwane wyniki a nie skrypty komend shellowych
+- **Scenariusze testowe** — konkretne zachowania, edge cases i ścieżki awarii do pokrycia. Rozróżniaj typy: `[Unit]` dla testów kodu, `[E2E]` dla scenariuszy do weryfikacji na emulatorze przez `mobile-e2e-maestro` (Maestro CLI), `[Manual]` dla pojedynczych testów wymagających człowieka (np. weryfikacja na fizycznym urządzeniu, akceptacja designera)
+- **Weryfikacja** — wyłącznie **automatyzowalne** kryteria PASS/FAIL: komenda CLI (typecheck/test/lint/grep) **lub** scenariusz E2E weryfikowalny przez Maestro CLI na emulatorze. Każdy checkbox `Weryfikacja:` musi być możliwy do domknięcia bez udziału człowieka, wyrażony jako oczekiwany wynik a nie literalny skrypt komend shellowych. Powód: `/dev-docs-review` automatycznie odznacza `Weryfikacja:` po PASS — checkbox nieautomatyzowalny pozostanie wiecznie `[ ]` i zafałszuje raport postępu. Jeśli kryterium wymaga człowieka — przenieś do `Operator checklist` lub do `Scenariusze testowe` jako `[Manual]`
+- **Operator checklist** *(opcjonalne)* — kroki wymagające człowieka (manual test na fizycznym urządzeniu, weryfikacja przez QA, akceptacja designera, sprawdzenie haptyki/dźwięku). Są celowo poza automatyzacją autopilota — operator zaznacza je ręcznie po wykonaniu. Pomiń sekcję jeśli IU nie ma takich kroków
 
 Każdy feature-bearing unit powinien zawierać ścieżkę pliku testowego w `**Pliki:**`. Dla unitów modyfikujących ekrany/komponenty UI lub ścieżki użytkownika — dołącz scenariusze `[E2E]` opisujące flow do przetestowania przez Maestro (launch app, tap/scroll/swipe, asercje, deep linking, screenshot).
 
@@ -457,9 +458,14 @@ origin: docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md  # dołącz gdy plan
 - [Unit] [Konkretny scenariusz z oczekiwanym zachowaniem]
 - [Unit] [Edge case lub ścieżka awarii]
 - [E2E] [Flow do weryfikacji przez Maestro: launchApp, tapOn X, assertVisible Y, takeScreenshot]
+- [Manual] [Krok wymagający człowieka, np. weryfikacja na fizycznym urządzeniu iOS] *(opcjonalne — używaj gdy automatyzacja jest niemożliwa)*
 
-**Weryfikacja:**
-- [Wynik który powinien być prawdziwy gdy unit jest ukończony]
+**Weryfikacja:** *(wyłącznie automatyzowalne — CLI lub E2E przez Maestro na emulatorze; rzeczy ręczne idą do Operator checklist niżej)*
+- [Komenda CLI z oczekiwanym wynikiem, np. "bun run typecheck przechodzi bez błędów"]
+- [Scenariusz Maestro z oczekiwanym stanem widocznym na emulatorze]
+
+**Operator checklist:** *(opcjonalne — kroki wymagające człowieka, NIE odznaczane przez autopilot)*
+- [ ] [Krok wymagający operatora, np. "QA weryfikuje haptykę i dźwięki na realnym iPhone"]
 
 ## Wpływ systemowy
 
@@ -544,6 +550,7 @@ Przed finalizacją sprawdź:
 - Pole `Skills in play:` w każdym IU jest spójne z frontmatter `skills:` wybranego subagenta
 - Jeśli postawa test-first lub characterization-first była explicite lub silnie implikowana, relevantne unity niosą ją dalej z lekką `Notatką wykonawczą`
 - Scenariusze testowe są konkretne bez stawania się kodem testowym
+- Każdy checkbox `Weryfikacja:` jest automatyzowalny (CLI lub E2E przez Maestro na emulatorze). Kroki wymagające człowieka (fizyczne urządzenie, QA, designer) są w `Operator checklist` lub jako `[Manual]` w `Scenariusze testowe` — nigdy w `Weryfikacja:`
 - Odroczone elementy są explicite i nie ukryte jako fałszywa pewność
 
 Jeśli plan pochodzi z requirements doc, przeczytaj ponownie ten dokument i zweryfikuj:
