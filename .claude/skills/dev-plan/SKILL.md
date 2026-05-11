@@ -313,8 +313,8 @@ Każdy Implementation Unit MUSI mieć zadeklarowany `Delegate to:` — nazwa sub
 | Ścieżki w `Pliki:` | Subagent | Skille (mirror dla `Skills in play:`) |
 |---|---|---|
 | Tylko `*.tsx` w `app/`, `components/`, `screens/`, lub native config (`app.json`, `app.config.ts`) | `feature-builder-mobile-ui` | expo-overview, expo-building-native-ui, expo-tailwind-setup |
-| Tylko `*.ts` w `lib/`, `hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-mobile-data` | expo-overview, expo-native-data-fetching, supabase-dev-guidelines, security |
-| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-building-native-ui, expo-tailwind-setup, expo-native-data-fetching, supabase-dev-guidelines, security |
+| Tylko `*.ts` w `lib/`, `hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-mobile-data` | expo-overview, expo-native-data-fetching, supabase-dev-guidelines, security, sentry-integration |
+| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-building-native-ui, expo-tailwind-setup, expo-native-data-fetching, supabase-dev-guidelines, security, sentry-integration |
 
 **Reguła praktyczna:** jeśli da się rozsądnie podzielić na dwa osobne IU (jeden UI, drugi data) — podziel. `feature-builder-mobile-fullstack` używaj **tylko** gdy podział byłby sztuczny (np. ekran logowania z OAuth, gdzie UI bez auth call lub auth call bez ekranu są bezużyteczne).
 

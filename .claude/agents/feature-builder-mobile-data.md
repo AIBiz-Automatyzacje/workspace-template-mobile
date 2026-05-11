@@ -6,6 +6,7 @@ skills:
   - expo-native-data-fetching
   - supabase-dev-guidelines
   - security
+  - sentry-integration
 model: inherit
 ---
 
