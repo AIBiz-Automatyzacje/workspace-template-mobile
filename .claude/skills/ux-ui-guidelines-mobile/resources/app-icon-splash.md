@@ -1,0 +1,419 @@
+# App icon & splash — pierwsza interakcja
+
+App icon = jedna z 30 ikon na ekranie home. Splash = pierwsza klatka po tap. Jeśli te dwa elementy są przeciętne, reszta apki musi pracować dwa razy ciężej żeby naprawić wrażenie.
+
+---
+
+## App icon — pryncypia
+
+### 1. Recognizable at 16px
+
+**Test sylwetki:** zrenderuj ikonę 16x16 w grayscale. Czy dalej rozpoznajesz brand?
+
+- **TAK** — sylwetka jest unikalna, focal point widoczny
+- **NIE** — za dużo detali, generic gradient, brak focal point
+
+**Dlaczego 16px:** spotlight search, notification grouping, app switcher na Androidzie low-density. Jeśli sylwetka działa w 16px, działa wszędzie.
+
+### 2. No text — z wyjątkami
+
+**Reguła:** ikona to symbol, nie billboard. 1024×1024 marketing asset to nie miejsce na slogan.
+
+**Wyjątki gdzie tekst działa:**
+
+| Brand | Tekst | Dlaczego działa |
+|-------|-------|-----------------|
+| Slack | "S" hashtag-style | Wordmark = ich logo, nie dodatkowy element |
+| Tinder | Płomień + "tinder" | Niski profil, integralny z mark |
+| Trello | "T" w boxie | Single letter, wzmocnione kolorem |
+
+**Anti-wzorzec:** "MyApp" napisane małą czcionką pod logo. Nieczytelne w 60px (home screen na iPhonie SE), wygląda tanio.
+
+### 3. Single focal point
+
+Oko ma znaleźć "co to" w 1 sekundę. Wielo-elementowe ikony (3 obiekty + tło + gradient + tekst) → cognitive overload.
+
+**Test:** pokaż ikonę komuś na 1 sekundę, schowaj. Co zapamiętali? Jeśli "kolor" lub "coś niebieskiego" — nie ma focal point.
+
+### 4. Iconic, not photographic
+
+Płaski symbol > zdjęcie produktu > realistyczna ilustracja.
+
+**Powód:** photo na 60px traci szczegóły, wygląda mętnie. Płaski symbol skaluje się idealnie. Wszystkie premium apki (Things, Linear, Bear, Apollo) używają płaskich, abstrakcyjnych mark.
+
+**Trend 2026:** subtle gradient + 1 element + soft shadow = premium feel. Zamiast realistyczny photo.
+
+### 5. Scalable design
+
+Wektor (Figma, Sketch, Affinity Designer) — nie raster. Test na każdym rozmiarze:
+
+- 1024 (App Store)
+- 180 (iPhone 3x home)
+- 120 (iPhone 2x)
+- 60 (iPhone settings)
+- 40 (notifications)
+
+Detal który ginie w 40px — usuń. Lepiej prosty, działający na każdym rozmiarze, niż "skomplikowany ale piękny w 1024px".
+
+### 6. Brand consistency
+
+Paleta kolorów ikony = dominująca paleta apki. User otwiera ikonę → splash → home. Wszystko to powinno wyglądać jak jedna myśl.
+
+**Apple: "continuity from icon to splash to home screen"** — Linear robi to wzorcowo (purple gradient continuity).
+
+---
+
+## iOS specific
+
+### Required sizes (rendered)
+
+System wygeneruje wszystkie z 1024×1024 source przy `expo-app-icon` lub Asset Catalog. Source powinien być:
+
+- 1024×1024px PNG
+- bez alpha channel (App Store rejection)
+- bez rounded corners (system applies mask)
+- bez drop shadow (system applies)
+- bez glossy effect (już od iOS 7+)
+
+### iOS 18+ icon variants
+
+iOS 18 wprowadziło 3 warianty wymagane dla premium feel:
+
+| Wariant | Kiedy renderowane | Design challenge |
+|---------|-------------------|------------------|
+| **Light** | Default home screen, Light mode | Standard ikona |
+| **Dark** | Dark mode home screen | NIE inwertuj kolory — manualnie zaprojektuj. Black/dark background, jasne details |
+| **Tinted** | Tinted mode (Settings → Display) | System aplikuje user color tint. Design musi działać w monochrome — sylwetka, brak gradientów, light/transparent base |
+
+**Praktyka:** dark = 90% apek robi źle (auto-invert wygląda tanio). Manualnie zaprojektowany dark daje feel premium.
+
+**Tinted:** najtrudniejszy. Test: zrender ikonę w 100% white na transparentnym tle. Działa? OK. Nie działa? Tinted wariant będzie rozmazany.
+
+### iOS tools
+
+- **`expo-app-icon`** config plugin — wszystko z source 1024
+- **Bakery** (Mac app) — visual editor wariantów iOS 18
+- **Icon Set Creator** (Mac App Store) — exporty
+- **Figma Apple icon template** — community plugin
+
+```json
+// app.json (Expo)
+{
+  "expo": {
+    "icon": "./assets/icon.png",
+    "ios": {
+      "icon": {
+        "light": "./assets/icon-light.png",
+        "dark": "./assets/icon-dark.png",
+        "tinted": "./assets/icon-tinted.png"
+      }
+    }
+  }
+}
+```
+
+---
+
+## Android specific
+
+### Adaptive icons (Android 8+)
+
+Android masks ikonę do shape ustawionej przez user / OEM (Pixel = circle, Samsung = squircle, OnePlus = teardrop). Ikona musi mieć **2 warstwy:**
+
+| Layer | Rozmiar | Co zawiera |
+|-------|---------|------------|
+| **Foreground** | 108×108 dp (centralne 72×72 dp visible after mask) | Logo, mark — **safe zone = 66dp central** |
+| **Background** | 108×108 dp (fills shape) | Solid color, gradient, lub simple pattern |
+
+**Anti-pattern:** logo w foreground extending to edges → system mask cropuje krawędzie → logo wygląda obcięte na Pixel circle mask.
+
+**Safe zone:** trzymaj wszystko ważne w centralnym 66dp circle of foreground layer. Reszta = decoration acceptable to crop.
+
+### Monochrome (Android 13+)
+
+Android 13+ "themed icons" — system rendering w monochrome user-tint. Wymaga **3 warstwy:**
+
+| Layer | Cel |
+|-------|-----|
+| Foreground | Color version |
+| Background | Color version |
+| Monochrome | **Single color silhouette** dla theme system |
+
+```json
+// app.json
+{
+  "expo": {
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon-fg.png",
+        "backgroundColor": "#0f172a",
+        "monochromeImage": "./assets/icon-mono.png"
+      }
+    }
+  }
+}
+```
+
+### Tools
+
+- **Android Asset Studio** (romannurik.github.io/AndroidAssetStudio) — preview adaptive icon w shape masks
+- **Material Icon Generator** w Android Studio
+- **Figma plugin "Adaptive Icon"** — Foreground + Background preview
+
+### Legacy fallback (Android 7-)
+
+PNG icons w mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi sizes. Expo handle to automatycznie z `icon` source.
+
+---
+
+## Common mistakes
+
+- Same icon as competitor → user confusion. Research category top 20
+- Detail invisible at 60px → smudge. Simplify
+- Cropped logo by Android mask → trzymaj się safe zone 66dp central
+- Photorealistic 3D → dated (skeuomorphism). Flat lub soft shadow
+- Generic AI-gradient → looks like every 2024 startup
+- Pure white/black background → disappears na home screen
+- Identical to favicon → mobile icon ma inne wymagania
+
+---
+
+## App Store / Play Store optimization
+
+**Pierwsza impresja = 60% decyzji w 7 sekund** (Apple's own UX research, Google Play data). Icon + screenshot 1 = 90% wpływu.
+
+**A/B testing:**
+
+| Platform | Tool |
+|----------|------|
+| iOS | Apple App Store Connect — Product Page Optimization (do 3 wariantów, traffic split) |
+| Android | Google Play Console — Store Listing Experiments |
+
+**Seasonal variants** (Apollo dla Reddit, Halide camera): subtle zmiana per holiday/event. Buduje engagement, ale drogie utrzymanie.
+
+**iOS 10.3+ alternate icons** API: user może zmienić icon w app settings. Nice-to-have feature dla premium apek.
+
+```tsx
+// React Native
+import { setAppIcon } from 'react-native-dynamic-app-icon';
+
+await setAppIcon('darkVariant');
+```
+
+---
+
+## Splash screen — pryncypia
+
+### Cel splash
+
+**NIE jest:** branding showcase, marketing moment, animation playground.
+
+**JEST:** smooth transition while app loads. Tap → splash → content. Im krótszy, tym lepszy.
+
+### Duration
+
+| Czas | Akcja |
+|------|-------|
+| **<1s** | Idealne. User nie zauważa "loadingu" |
+| **1-2s** | Akceptowalne. Bez loading indicator |
+| **2-3s** | Show subtle progress. Inaczej user myśli że apka się zawiesiła |
+| **>3s** | Problem. Dlaczego load tak długo? Optimize fonts, code splitting, lazy initial screen |
+
+**Reguła Apple:** splash w app review > 3s = rejection (lub conditional approval).
+
+### Design rules
+
+- **Logo only, centered.** Bez wersji, bez slogana, bez "Loading..."
+- **Brand color background** — kontynuacja z app icon
+- **Match home screen entry** — co user zobaczy po splash, splash powinien tonalnie pasować
+- **Match dark/light mode** — system mode → odpowiedni splash variant
+
+**Anti-patterns:**
+
+- Loading bar — sugeruje że apka jest slow
+- Marketing copy ("Welcome to MyApp") — cheap, trash UX
+- Version number — irrelevant, user nie potrzebuje
+- Different style than app — splash pomarańczowy + app niebieski = jarring
+
+---
+
+## expo-splash-screen — implementation
+
+```ts
+// app.json
+{
+  "expo": {
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#0f172a",
+          "dark": {
+            "image": "./assets/splash-dark.png",
+            "backgroundColor": "#020617"
+          }
+        }
+      ]
+    ]
+  }
+}
+```
+
+**Image guidelines:**
+
+- 1242×2436 (iPhone 11 Pro / 14 Pro size) — wystarczy do scaling
+- PNG z transparent background (jeśli content-only)
+- `resizeMode`:
+  - `'contain'` — logo centered, full visible (most common)
+  - `'cover'` — logo fills, może być cropped (rzadko)
+  - `'native'` — Android only, native splash
+
+### Programmatic hide
+
+Splash by default hides after JS bundle loaded. Ale **Twoje data nie są jeszcze ready** — fonty, initial query, auth check.
+
+Pattern: `preventAutoHideAsync` → load critical resources → `hideAsync`.
+
+```tsx
+import { useEffect, useState } from 'react';
+import * as SplashScreen from 'expo-splash-screen';
+import { useFonts } from 'expo-font';
+
+// Prevent auto-hide TYLKO RAZ przy app load
+SplashScreen.preventAutoHideAsync();
+
+export default function App() {
+  const [fontsLoaded] = useFonts({
+    'Inter-Regular': require('./assets/fonts/Inter-Regular.ttf'),
+    'Inter-SemiBold': require('./assets/fonts/Inter-SemiBold.ttf'),
+  });
+
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    async function prepare() {
+      try {
+        // Load auth, prefetch critical data
+        await checkAuthState();
+        await prefetchInitialData();
+      } catch (error) {
+        console.error('Splash prep failed', error);
+      } finally {
+        setIsReady(true);
+      }
+    }
+    prepare();
+  }, []);
+
+  useEffect(() => {
+    if (fontsLoaded && isReady) {
+      SplashScreen.hideAsync();
+    }
+  }, [fontsLoaded, isReady]);
+
+  if (!fontsLoaded || !isReady) {
+    return null; // Splash still showing
+  }
+
+  return <RootNavigator />;
+}
+```
+
+**Pamiętaj:** `preventAutoHideAsync` ZAWSZE z `hideAsync` w `finally`. Inaczej user trapped na splash forever przy error.
+
+---
+
+## Animated splash
+
+**Kiedy YES:**
+- Brand commitment (Wellspoken, Headspace, Linear)
+- Continuity z app icon (icon zoom out → splash → home)
+- Wartość >>> koszt (animacja musi być excellent, nie OK)
+
+**Kiedy NO:**
+- Twoja apka ma 5 minut content i splash trwa 3s — overinvestment
+- Zwykle splash > 1s = problem, nie feature
+
+### Reanimated entry
+
+Pattern: `useSharedValue` dla scale (0.8 → 1.05 → 1) + opacity (0 → 1), `withSequence` w `useEffect`. Logo uses `Animated.Image` z `useAnimatedStyle` mapping shared values na `transform: scale` i `opacity`. Total duration 600-900ms, callback w finalnym `withTiming` dispatchuje `onAnimationComplete` i hide splash.
+
+### Lottie
+
+Dla complex animation (Headspace flowing shapes). `lottie-react-native` package. Trzymaj animation 800-1200ms. Powyżej = irritating na cold start.
+
+---
+
+## Splash anti-patterns
+
+- 5s branded video → uninstall przed app load
+- Loading bar 0-100% → sugeruje "slow app"
+- Wersja apki / build number → nie potrzebne
+- Marketing copy ("Welcome to MyApp") → cheap
+- Animowana 1.5s przy każdym cold start → po 3 razach denerwuje
+- Splash z innym layoutem niż home → jarring transition
+- Audio na splash → **NIGDY** (głośnik w autobusie = self-trauma)
+
+---
+
+## Premium examples
+
+- **Things 3** — minimal logo, splash <500ms
+- **Linear** — gradient continuity icon → splash → home (same purple, same direction)
+- **Apollo** — subtle bounce 800ms, tactile feel
+- **Bear** — same silhouette icon i splash, perfect continuity
+- **Headspace** — Lottie 1s, bo brand JEST animacją
+
+---
+
+---
+
+## Checklist — icon + splash
+
+### App icon
+
+- [ ] 1024×1024 source bez alpha, bez rounded corners, bez shadow
+- [ ] Test 16px sylwetka — rozpoznawalne?
+- [ ] Test 60px home screen — czysty focal point?
+- [ ] iOS dark variant — manualnie zaprojektowany (nie auto-invert)
+- [ ] iOS tinted variant — działa w monochrome
+- [ ] Android adaptive: foreground + background warstwy
+- [ ] Android safe zone: ważny content w 66dp central
+- [ ] Android monochrome variant
+- [ ] Brand color = home screen entry color
+- [ ] Test w App Store category — różni się od konkurencji?
+
+### Splash
+
+- [ ] <1s ideally, <3s maximum
+- [ ] Logo only — bez tekstu, bez wersji
+- [ ] Brand color background
+- [ ] Dark mode variant
+- [ ] `preventAutoHideAsync` + `hideAsync` w finally
+- [ ] Match style entry screen (color, mood)
+- [ ] Brak loading bar
+- [ ] Brak audio
+- [ ] Test cold start na low-end Android
+
+---
+
+## Powiązane
+
+- `[[icons.md]]` — UI icons (różne pryncypia od app icon)
+- `[[platform-conventions.md]]` — iOS vs Android visual language
+- `[[typography.md]]` — font loading w splash screen flow
+- `[[states-loading-empty-error.md]]` — co po splash gdy data nie loaded
+
+---
+
+## Źródła
+
+- Apple HIG — App Icons (developer.apple.com/design/human-interface-guidelines/app-icons)
+- Apple HIG — Launching (developer.apple.com/design/human-interface-guidelines/launching)
+- Material 3 — Adaptive Icons (m3.material.io/styles/icons/designing-icons)
+- Android Asset Studio (romannurik.github.io/AndroidAssetStudio)
+- expo-splash-screen (docs.expo.dev/versions/latest/sdk/splash-screen)
+- expo-app-icon (docs.expo.dev/versions/latest/config/app)
+- iOS 18 icon variants — Apple WWDC24 sessions

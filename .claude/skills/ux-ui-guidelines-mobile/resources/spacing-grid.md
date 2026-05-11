@@ -1,0 +1,385 @@
+# Spacing & Grid — system 8pt
+
+System 8pt grid, tokeny spacingowe, safe areas, Dynamic Island, touch targets, NativeWind preset. Fundament, na którym stoi cały interfejs — jeśli zrobiony dobrze, apka wygląda profesjonalnie nawet z prostymi komponentami.
+
+---
+
+## Dlaczego 8pt grid
+
+Każdy spacing w apce = wielokrotność 8: `8, 16, 24, 32, 40, 48, 56, 64`. Czemu osemka?
+
+**Dzieli się ładnie.** 8/2=4, 8/4=2. Na różnych gęstościach ekranu (1x, 1.5x, 2x, 3x, 4x density) wartości pozostają całkowite — brak sub-pixel rendering, brak rozmytego stylu.
+
+**Skaluje proporcjonalnie.** iOS ma 1x, 2x, 3x. Android ma mdpi, hdpi, xhdpi, xxhdpi, xxxhdpi (1x → 4x). 8pt = 8px na 1x, 16px na 2x, 24px na 3x, 32px na 4x. Bez fragmentacji.
+
+**Tworzy dyscyplinę.** Designer mówi "tu daj 15px" = sygnał że nie ma systemu. W 8pt grid nigdy nie pojawia się arbitralna wartość. Zamiast 50 decyzji spacingowych dziennie — system decyduje za ciebie.
+
+**Tworzy naturalne proporcje.** Element o paddingu 16, marginesie 24, gap 8 — relacje są harmoniczne, bo wszystkie pochodzą z tej samej skali.
+
+---
+
+## Tokeny spacingowe
+
+Standardowy zestaw tokenów. Zdefiniuj raz, używaj wszędzie.
+
+| Token | Pixele | Zastosowanie |
+|-------|--------|--------------|
+| `xs` | 4 | Pomiędzy ikoną a tekstem, hairline gaps |
+| `sm` | 8 | Inner padding (chip, badge), gap w gęstym UI |
+| `md` | 12 | Padding średnich elementów (input internal) |
+| `lg` | 16 | **Domyślny screen padding**, card padding, gap między elementami |
+| `xl` | 24 | Section gaps, padding hero, between cards |
+| `2xl` | 32 | Major section breaks, padding around hero |
+| `3xl` | 48 | Vertical rhythm między dużymi sekcjami |
+| `4xl` | 64 | Splash, marketing, breathing room na hero |
+
+**Reguła:** 90% paddingów i marginesów to `sm`, `md`, `lg`. Wartości większe (`xl`+) głównie do separacji semantycznie różnych sekcji.
+
+---
+
+## 4pt half-step — kiedy OK, kiedy nie
+
+Czasami 8pt jest za luźne. 4pt half-step (`4, 12, 20, 28`) bywa potrzebny.
+
+**Kiedy 4pt OK:**
+- Gęsty UI (tabela, dashboard, gęsta lista) — `12` zamiast `16` mieści więcej
+- Padding wewnątrz małych komponentów (chip 4pt vertical, 8pt horizontal)
+- Pomiędzy ikoną 16x16 a tekstem (`gap-1` = 4pt)
+
+**Kiedy unikać:**
+- Screen-level layout — trzymaj 8pt grid
+- Większe odległości (`>24`) — używaj wielokrotności 8
+- Gdy nie masz uzasadnienia "dlaczego 12 a nie 16"
+
+**Reguła:** jeśli używasz 4pt, to świadomie i konsekwentnie w danym kontekście. Mieszanie 4 i 8 ad-hoc = sygnał braku systemu.
+
+---
+
+## Padding vs margin vs gap — różnice praktyczne
+
+W RN i NativeWind masz wszystkie trzy. Kiedy co?
+
+| Konstrukcja | Kiedy używać |
+|-------------|--------------|
+| `padding` | Przestrzeń WEWNĄTRZ elementu — między brzegiem a contentem (button, card, screen) |
+| `margin` | Przestrzeń NA ZEWNĄTRZ — między bratami w starszych layoutach |
+| `gap` | Przestrzeń MIĘDZY dziećmi flexa/grida — preferowany w Flexbox |
+
+**W 2026 reguła:**
+- **Containerze flex/grid → `gap`** (NIE `margin` na dzieciach)
+- **Padding wewnątrz komponentu → `padding`**
+- **`margin` tylko gdy gap niemożliwy** (np. element odpada od layoutu, sticky)
+
+```tsx
+// DOBRE — gap między dziećmi flexa
+<View className="flex-row gap-3">
+  <Item />
+  <Item />
+  <Item />
+</View>
+
+// ZŁE — margin na dzieciach (potrzebny last-child override)
+<View className="flex-row">
+  <Item className="mr-3" />
+  <Item className="mr-3" />
+  <Item />            {/* trzeba pamiętać o usunięciu marginu */}
+</View>
+```
+
+---
+
+## Safe areas — `useSafeAreaInsets`
+
+Współczesne urządzenia mają notch, Dynamic Island, home indicator, status bar. Content nie może być pod tymi elementami.
+
+### `react-native-safe-area-context` — must-have
+
+```tsx
+// app/_layout.tsx
+import { SafeAreaProvider } from "react-native-safe-area-context";
+
+export default function RootLayout() {
+  return (
+    <SafeAreaProvider>
+      <Slot />
+    </SafeAreaProvider>
+  );
+}
+```
+
+```tsx
+// W ekranie
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+export default function Screen() {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      style={{
+        paddingTop: insets.top,
+        paddingBottom: insets.bottom,
+      }}
+      className="flex-1 bg-background px-4"
+    >
+      <Content />
+    </View>
+  );
+}
+```
+
+### Kiedy respektować, kiedy ignorować
+
+| Sytuacja | Insets |
+|----------|--------|
+| Header / nav bar | `paddingTop: insets.top` (lub native header) |
+| Tab bar / bottom buttons | `paddingBottom: insets.bottom` |
+| Full-bleed image (hero) | **Ignoruj** insets — image rozciąga się pod notch |
+| Modal / sheet | Sheet API obsługuje insets automatycznie |
+| Background color (gradient, solid) | Ignoruj insets — rozciąga się do brzegu |
+| Tekst, content interaktywny | Zawsze respektuj insets |
+
+### Dynamic Island i notch — część designu
+
+Apple promuje traktowanie Dynamic Island i notch jako część designu, NIE jako przeszkodę. Apki które zostawiają duży black bar pod notchem wyglądają tanio.
+
+```tsx
+// DOBRE — full-bleed image z content respektującym insets
+<View className="flex-1">
+  <Image
+    source={hero}
+    className="absolute inset-0 h-72 w-full"  // pod notchem
+    resizeMode="cover"
+  />
+  <View style={{ paddingTop: insets.top }} className="flex-1 px-4">
+    <Text className="text-display text-white">Title</Text>
+  </View>
+</View>
+```
+
+---
+
+## Tab bar / Navigation bar — wymiary per platforma
+
+| Element | iOS | Android |
+|---------|-----|---------|
+| **Tab bar height (sam tab bar)** | 49pt | 56dp (Material) / 80dp (M3 navigation bar) |
+| **Tab bar + safe area bottom (iPhone 15 Pro)** | 83pt | n/a (gestural nav może mieć 0) |
+| **Header / Nav bar** | 44pt + status bar | 56dp |
+| **Status bar (notch device)** | ~47pt (iPhone 15 Pro) | 24-28dp |
+| **Dynamic Island clearance** | ~37pt (height) | n/a |
+
+**Zasada:** używaj `useSafeAreaInsets` zamiast hardcodować — różne urządzenia, różne wartości.
+
+---
+
+## Touch target — minimum i recommended
+
+| Standard | iOS | Android | WCAG 2.2 |
+|----------|-----|---------|----------|
+| **Minimum** | 44pt | 48dp | 24x24px (AA) |
+| **Recommended** | 44-48pt | 48-56dp | 44x44px (AAA) |
+| **Optimum dla emocjonalnie tap-tap-tap** | 48-56pt | 56-64dp | — |
+
+**Dlaczego:**
+- 44pt iOS to *fingertip width* przeciętnego dorosłego
+- 48dp Android = ten sam wymiar fizyczny (1dp ≈ 1pt na większości urządzeń)
+- 24x24 to absolutne minimum WCAG, ale nie pewny tap z grubych palców
+
+### Hit area expansion — pseudo-element
+
+Jeśli widoczny element jest mniejszy (np. ikona 20x20 w toolbarze), rozszerz hit area:
+
+```tsx
+// React Native — Pressable ma hitSlop
+<Pressable
+  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+  onPress={handlePress}
+>
+  <Icon size={20} />  {/* widoczny 20x20 */}
+  {/* hit area = 20 + 24 = 44pt */}
+</Pressable>
+```
+
+**Reguła kolizji:** dwa interaktywne elementy NIGDY nie mogą mieć nakładających się hit areas. Jeśli `hitSlop` powoduje overlap, zmniejsz lub zwiększ odstęp między elementami.
+
+---
+
+## Optical alignment vs grid — kiedy łamać
+
+Czasem geometryczny środek nie wygląda jak optyczny środek. Łam grid optycznie:
+
+| Sytuacja | Korekta |
+|----------|---------|
+| Trójkąt Play (▶) wycentrowany | Przesuń o 1-2px w prawo |
+| Tekst kursywą obok prostego | Lekko zmniejsz spacing po prawej |
+| Ikona z asymetrycznym ciężarem (gwiazdka, strzałka) | Adjust w SVG viewBox albo `marginLeft: 1` |
+| Button z tekstem + ikoną po prawej | Padding po stronie ikony = padding po stronie tekstu - 2px |
+| Krąg vs kwadrat tej samej szerokości | Krąg może wymagać lekkiej korekcji wertykalnej |
+
+```tsx
+// Optical — buton z ikoną, mniej paddingu po stronie ikony
+<Pressable className="pl-4 pr-3.5 flex-row items-center gap-2 h-12">
+  <Text>Continue</Text>
+  <ArrowRightIcon />
+</Pressable>
+```
+
+Reguła: jeśli wygląda nie tak, zaufaj OKU, nie linijce.
+
+---
+
+## NativeWind preset — `tailwind.config.js`
+
+```js
+// tailwind.config.js
+module.exports = {
+  content: ["./app/**/*.{js,jsx,ts,tsx}", "./components/**/*.{js,jsx,ts,tsx}"],
+  presets: [require("nativewind/preset")],
+  theme: {
+    extend: {
+      spacing: {
+        // 8pt grid jako default — Tailwind już ma 0.5, 1, 2, 3, 4, 6, 8, 12, 16
+        // Dodatkowe semantic aliases
+        xs: "4px",
+        sm: "8px",
+        md: "12px",
+        lg: "16px",
+        xl: "24px",
+        "2xl": "32px",
+        "3xl": "48px",
+        "4xl": "64px",
+      },
+      borderRadius: {
+        // Tokeny radius — outer = inner + padding (concentric)
+        sm: "6px",
+        md: "10px",
+        lg: "14px",
+        xl: "20px",
+        "2xl": "28px",
+      },
+    },
+  },
+};
+```
+
+```tsx
+// Użycie
+<View className="px-lg py-xl gap-md">
+  <Card />
+  <Card />
+</View>
+
+// Albo standardowe Tailwind klasy (które NativeWind mapuje na pixele zgodne z 8pt)
+<View className="px-4 py-6 gap-3">
+  <Card />
+</View>
+```
+
+---
+
+## Patterns — typowe layouty
+
+### Screen container
+
+```tsx
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+function Screen({ children }) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View
+      style={{ paddingTop: insets.top, paddingBottom: insets.bottom }}
+      className="flex-1 bg-background px-4"
+    >
+      {children}
+    </View>
+  );
+}
+```
+
+### Card list
+
+```tsx
+<ScrollView contentContainerClassName="px-4 py-6 gap-3">
+  {items.map((item) => (
+    <View key={item.id} className="bg-surface rounded-xl p-4 gap-2">
+      <Text className="text-headline">{item.title}</Text>
+      <Text className="text-body text-muted-foreground">{item.body}</Text>
+    </View>
+  ))}
+</ScrollView>
+```
+
+### Form
+
+```tsx
+<View className="gap-6">           {/* between fields */}
+  <View className="gap-2">         {/* label + input */}
+    <Text className="text-footnote">Email</Text>
+    <TextInput className="h-12 px-4 rounded-xl border border-border" />
+  </View>
+  <View className="gap-2">
+    <Text className="text-footnote">Password</Text>
+    <TextInput className="h-12 px-4 rounded-xl border border-border" />
+  </View>
+  <Pressable className="h-12 rounded-xl bg-primary justify-center items-center">
+    <Text className="text-bodyEmphasis text-primary-foreground">Sign in</Text>
+  </Pressable>
+</View>
+```
+
+---
+
+## Concentric padding/radius
+
+Gdy zagnieżdżasz elementy zaokrąglone, outer radius musi równać się inner + padding:
+
+```
+outerRadius = innerRadius + padding
+```
+
+```tsx
+// DOBRE — outer 20px, padding 8px, inner 12px
+<View className="rounded-2xl p-2 bg-surface">  {/* 20px radius */}
+  <View className="rounded-xl bg-card">         {/* 12px radius = 20 - 8 ✓ */}
+    <Content />
+  </View>
+</View>
+
+// ZŁE — same radius wewnętrznie i zewnętrznie
+<View className="rounded-2xl p-2">
+  <View className="rounded-2xl">  {/* wygląda "off" — inner pochłania padding */}
+    <Content />
+  </View>
+</View>
+```
+
+Patrz [[resources/visual-polish-mobile.md]] dla pełnej reguły concentric.
+
+---
+
+## Checklist spacing & grid
+
+- [ ] Wszystkie paddingi/marginesy/gapy = wielokrotność 4 (preferencyjnie 8)
+- [ ] Tokens spacingowe zdefiniowane w `tailwind.config.js`, nie hardcoded
+- [ ] `gap` zamiast `margin` w kontenerach flex/grid
+- [ ] `useSafeAreaInsets` na każdym screenie z headerem / bottomem
+- [ ] Touch targets minimum 44pt iOS / 48dp Android (recommended 48-56)
+- [ ] `hitSlop` na małych ikonach (< 44pt visible)
+- [ ] Dynamic Island i notch traktowane jako część designu (nie black bar)
+- [ ] Concentric radius przy zagnieżdżonych elementach
+- [ ] Brak nakładających się hit areas na sąsiadujących interaktywnych elementach
+- [ ] Optical alignment używany świadomie (Play, italic, asymetryczne ikony)
+
+---
+
+## Powiązane
+
+- [[resources/typography.md]] — line-height ↔ vertical rhythm
+- [[resources/platform-conventions.md]] — touch targets per platforma, tab bar dimensions
+- [[resources/visual-polish-mobile.md]] — concentric radius, optical alignment
+- [[resources/ai-pitfalls.md]] — niespójny spacing jako AI signature
+
+*Źródła: Apple HIG Layout (developer.apple.com/design/human-interface-guidelines/layout), Material 3 Layout (m3.material.io/foundations/layout), react-native-safe-area-context (github.com/th3rdwave/react-native-safe-area-context), wiki/typografia-i-spacing. Ostatni update: 2026-05-10.*
