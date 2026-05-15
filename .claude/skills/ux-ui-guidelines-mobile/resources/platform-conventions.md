@@ -22,6 +22,60 @@ W 2026 Apple zaostrza review — apki ignorujące HIG (custom hamburger menu na 
 
 ---
 
+## iOS 26 — Liquid Glass jako nowy design language
+
+W 2025 Apple wprowadził **Liquid Glass** — translucentny język wizualny zastępujący solid surfaces na wszystkich platformach Apple. Pełna oficjalna specyfikacja: WWDC25 sesje "Meet Liquid Glass" + "Get to know the new design system" + dokumentacja na developer.apple.com.
+
+**Co to jest mechanicznie:** soczewka zaginająca i koncentrująca światło zamiast rozpraszania (klasyczny blur). Dotyk podświetla powierzchnię od miejsca tapnięcia na zewnątrz, ruch urządzenia przesuwa wirtualne źródła światła. Dwa warianty:
+- **Regular** — adaptacyjny, auto-flips light/dark, działa wszędzie. Default.
+- **Clear** — permanentna przezroczystość, wymaga **dimming layer** pod spodem. Tylko nad media-rich contentem.
+
+**Kluczowa zasada Apple — najczęściej łamana:** glass jest **wyłącznie dla warstwy nawigacji**. Nigdy w warstwie contentu, nigdy glass na glass. Tab bar kurczy się przy scrollu w dół i wraca przy scrollu w górę — priorytet contentu. Alerty spawnują się z punktu tapnięcia zamiast pełnoekranowego takeover.
+
+**iOS 26 typografia update:** w alertach i onboardingu **grubsza i wyrównana do lewej** (lepsza czytelność). Tab bar default zawiera dedykowaną zakładkę Search.
+
+### Trzy strategie buildera
+
+| Strategia | Pros | Cons | Kiedy wybrać |
+|-----------|------|------|--------------|
+| **Pełna adopcja Liquid Glass** | "Modern iOS 26 native feel", App Store featuring boost | Krzywa nauki, wymaga audytu kontrastu na każdym ekranie | Apka z dużym budżetem i zespołem QA |
+| **Świadome odrzucenie** (solid surfaces) | Defensible jako accessibility-first, czytelność, brand identity | Może wyglądać "dated" za 2-3 lata na iOS | Apki z silnym brand color (np. burgundowy heritage), apki accessibility-critical |
+| **Hybryda** | Best of both — premium feel tylko gdzie ma sens | Wymaga dyscypliny: glass tylko w warstwach z kontrolowanym tłem | Większość premium apek 2026 |
+
+**Praktyczna reguła z migracji wczesnych adopters:** nie mieszaj Liquid Glass z flat design w jednym ekranie. Albo cały ekran jest "glassy" (z kontrolą kontrastu), albo cały solid.
+
+### Migracja techniczna (escape hatch Apple)
+
+Glass aktywuje się **tylko po rekompilacji z Xcode 26** — sam update iOS nie zmienia apki. `UIDesignRequiresCompatibility = YES` w Info.plist to oficjalny escape hatch — apka pozostaje w starym design language. Po rekompilacji wszystkie buttony auto-capsulify, **tylko vibrant tinty przetrwają szklane overlaye** (pastele znikają). Unikaj ikon circle-in-circle — kontener już zapewnia zaokrąglenie.
+
+→ Patrz [[resources/accessibility-mobile.md]] dla Reduce Transparency i fallback strategies.
+
+→ Patrz [[resources/app-icon-splash.md]] dla nowych zasad ikon Apple iOS 26.
+
+---
+
+## Material 3 Expressive — design wsparty danymi
+
+W 2025 Google przed projektowaniem M3 Expressive przeprowadził **46 badań z 18 000+ uczestników** (oficjalna prezentacja Google Android Developers). To największy peer-reviewed dataset w historii Material Design. Wyniki:
+
+- Elementy UI w wersjach Expressive są znajdowane **do 4× szybciej** niż w nie-Expressive ekranach
+- **87% userów w grupie 18-24 preferuje** Expressive nad standardowym MD3
+
+**Kluczowe zmiany architektoniczne (Compose Material3 1.4):**
+- **Physics-based spring motion tokens** zastępują krzywe easingowe — wybierasz `standard` lub `expressive` motion scheme zamiast ręcznie dobierać parametry
+- **Shape morphing wbudowany w buttony** — koło transformuje się w kwadrat przy nacisku przez parametr `shapes`
+- **Bouncy animations** — powiadomienia reagują na odrzucenia
+- **Variable fonts** i personalizowalne palety
+- Navigation rail zastępuje drawer jednym adaptywnym komponentem reagującym na szerokość ekranu
+
+### Co to znaczy dla cross-platform buildera
+
+**Strategia M3E na Androidzie + HIG na iOS jest teraz wsparta nauką**, nie kompromisem. Google ma twarde dane uzasadniające expressive design. Apple ma Liquid Glass jako brand-driven moat. **Hybrydowa unifikacja ("ten sam design na obu") tracona w obu kierunkach** — bo każda platforma optymalizuje pod inny vector (Apple = premium feel + spatial computing, Google = mierzalna użyteczność).
+
+**Kontekst fragmentacji:** M3E istnieje głównie w apkach Google i na Pixelach (większość OEM nadal używa starszych warstw Material). Liquid Glass jest obowiązkowy dla wszystkich iOS devów po rekompilacji Xcode 26.
+
+---
+
 ## Tabela porównawcza (cheat sheet)
 
 | Element | iOS HIG | Material 3 |
@@ -166,6 +220,37 @@ Trend: zamiast instalować dependency, **kopiujesz kod komponentu** i dostajesz 
 
 ## Najczęstsze błędy cross-platform (anti-patterns)
 
+### 🔴 Tab bar = akcje zamiast nawigacji
+
+**Najczęściej mylona reguła HIG.** Tab bar służy **WYŁĄCZNIE do nawigacji** między głównymi sekcjami apki — nigdy do akcji (dodaj, udostępnij, filtruj).
+
+```tsx
+// ZŁE — "Dodaj" w tab barze to akcja, nie nawigacja
+<Tabs>
+  <Tab name="Home" />
+  <Tab name="Add" /> {/* ← anti-pattern */}
+  <Tab name="Profile" />
+</Tabs>
+```
+
+**Praktyczny test:**
+- Tap przenosi do innego ekranu/sekcji = **tab bar OK**
+- Tap wywołuje akcję w bieżącym kontekście = **toolbar / FAB / inline button**
+
+**iOS 26 preferowany pattern dla akcji:** **Floating Action Button (FAB) po prawej stronie tab baru** — dedykowany button akcji poza nawigacją. Apple oficjalnie promuje ten układ od WWDC25 (mimo że historycznie FAB był Material-only).
+
+```tsx
+// DOBRZE iOS 26 — akcja jako FAB obok tab baru
+<View>
+  <Tabs>{/* tylko nawigacja */}</Tabs>
+  <FloatingActionButton onPress={onAdd} position="bottom-right" />
+</View>
+```
+
+→ Patrz [[resources/navigation-patterns.md]] dla FAB placement i konfliktów z tab barem.
+
+---
+
 ### 🔴 Hamburger menu na iOS
 
 ```tsx
@@ -255,6 +340,31 @@ Android oczekuje `slide_from_bottom` lub `fade` dla większości push transition
 
 **Lekcja:** brand color ≠ semantic action color. Możesz mieć burgundowy brand i niebieski "Continue" — to jest OK.
 
+### Arc Search — platform-native specifics (Christine Rode talk, Config London)
+
+> *Single talk credible source — Christine Rode, designerka Arc Search z track record Facebook + WhatsApp + Deliveroo. Konkretne przykłady, nie uniwersalna zasada.*
+
+Christine Rode na Config London (Figma's annual conference) pokazała jak Arc Search **różnicuje konkretne komponenty per platforma**, mimo że logika jest wspólna. WhatsApp wymieniony jako gold standard "ten sam produkt, natywny per platforma".
+
+**Konkretne decyzje z Arc Search:**
+
+| Komponent | iOS | Android |
+|-----------|-----|---------|
+| **Voice search overlay** | Gradient + blur (premium feel) | Flat overlapping colors (Material flat) |
+| **Toggle / Switch** | Prosty iOS Switch | Material fluid squish shapes (deformacja przy interakcji) |
+| **Tab switcher** | Mirror native iOS app switcher | Mirror native Android app switcher |
+
+**Ogólna reguła wyciągnięta z prezentacji (potwierdzona przez Apple HIG i Material 3):**
+
+| Wymiar | iOS | Android |
+|--------|-----|---------|
+| **Blury** | Heavy, częste | Rzadkie, delikatne |
+| **Drop shadows** | Duże, miękkie | Tylko dla floating elements |
+| **Zaokrąglenia** | Rounded rectangles standardowo | Większa swoboda, square OK |
+| **Kolory** | Gradient + transparency | Solid colors |
+
+**Lekcja:** "platform-native" to nie tylko nawigacja — to **decyzje wizualne per komponent**. Twój przycisk voice search może wyglądać inaczej na każdej platformie i to jest właściwe podejście, nie kompromis.
+
 ---
 
 ## React Native — file structure suggestion
@@ -300,4 +410,4 @@ components/
 - [[resources/color-darkmode.md]] — iOS Dynamic Color vs Material You
 - [[resources/ai-pitfalls.md]] — mieszanie konwencji platformowych jako AI signature
 
-*Źródła: Apple Human Interface Guidelines (developer.apple.com/design/human-interface-guidelines), Material Design 3 (m3.material.io), wiki/ios-hig, wiki/material-design-3, wiki/react-native-expo, r/reactnative platform-specific debates. Ostatni update: 2026-05-10.*
+*Źródła: Apple Human Interface Guidelines (developer.apple.com/design/human-interface-guidelines), Apple WWDC25 sesje "Meet Liquid Glass" + "Get to know the new design system" (oficjalne specs), Material Design 3 (m3.material.io), Google Android Developers M3 Expressive prezentacja (46 badań / 18K uczestników — peer-reviewed dataset), Christine Rode @ Config London (Figma annual conference), wiki/ios-hig, wiki/material-design-3, wiki/react-native-expo. Ostatni update: 2026-05-15.*

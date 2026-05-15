@@ -221,7 +221,23 @@ useEffect(() => {
 </View>
 ```
 
-> **Uwaga:** jeśli używasz natywnych iOS API (BlurView z `expo-blur`), system **sam** obsługuje Reduce Transparency. Custom rgba + blur — musisz sam.
+### Natywne API vs custom — KTO odpowiada za fallback
+
+**To jest praktyczna decyzja, którą każdy mobile dev powinien zrozumieć przed wyborem implementacji glass/blur effects.**
+
+| Implementacja | Toggle "Reduce Transparency" | Twoja odpowiedzialność |
+|---------------|------------------------------|------------------------|
+| **Natywne Apple API** (`UIVisualEffectView` przez `expo-blur` `BlurView`) | **System auto-handluje** — zamienia na solid surface przy włączonym toggle | Zero — używasz native, dostajesz fallback za darmo |
+| **Natywne Liquid Glass modifier** (Expo UI / SwiftUI `.glassBackgroundEffect()`) | **System auto-handluje** — Apple egzekwuje accessibility automatycznie | Zero |
+| **Custom implementacja** (rgba + manual blur, web-style backdrop-filter, custom shaders) | **NIE jest auto-handlowane** — toggle nie zna twojego custom kodu | **TY musisz** wykryć `isReduceTransparencyEnabled` i renderować solid alternative |
+
+**Praktyczna konsekwencja:**
+
+- **Jeśli używasz `expo-blur` `BlurView`** → możesz zignorować ten kod, system robi za ciebie. To powód #1 dlaczego warto preferować native API nad custom implementacjami glass/blur.
+- **Jeśli używasz custom rgba + blur** (najczęstszy scenariusz w cross-platform RN) → MUSISZ napisać fallback jak w przykładzie powyżej. Brak fallbacku = naruszenie WCAG 2.2 + złe doświadczenie dla low-vision userów.
+- **Jeśli używasz Liquid Glass przez Expo UI / SwiftUI** → identycznie jak natywne API, system handluje fallback za ciebie.
+
+**Reguła:** za każdym razem, gdy widzisz `rgba()` z alpha < 1.0 LUB `backdropFilter: 'blur(...)'` w kodzie, **sprawdź czy ten widok ma fallback dla Reduce Transparency**. Jeśli nie — dodaj. To jest najczęstsze niedopatrzenie a11y w premium-looking apkach.
 
 ---
 

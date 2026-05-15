@@ -205,6 +205,33 @@ Jeśli widoczny element jest mniejszy (np. ikona 20x20 w toolbarze), rozszerz hi
 
 ---
 
+## Gdzie umieszczać główne CTA — środek ekranu, nie "thumb zone"
+
+**Klasyczny mit obalony przez własnego autora.** Diagram "thumb reach zone" (zielona/żółta/czerwona strefa zasięgu kciuka) z 2013 roku był przez dekadę cytowany jako podstawa decyzji o umieszczaniu CTA u dołu ekranu. **Steven Hoober — autor oryginalnych badań — opublikował korektę** (na podstawie własnych primary research): wyniki pokazały dokładne przeciwieństwo popularnej interpretacji.
+
+**Co naprawdę pokazują dane Hoobera:**
+- **Środek ekranu jest dotykany najczęściej, najszybciej i najdokładniej** — nie krawędzie
+- **Jednoręczne użycie to mniej niż 50%** wszystkich interakcji (nie większość, jak zakładał viralowy diagram)
+- Użytkownicy **nieustannie zmieniają chwyt** — przekładają telefon, używają drugiej ręki, kładą na stole
+- Na dużych telefonach **gorna strefa jest poza zasięgiem** przy jednoręcznym użyciu — **CTA na górze = "najdroższy błąd UX"**
+- **Dolne krawędzie również są trudne** w zasięgu na nowoczesnych dużych telefonach (iPhone Pro Max, Samsung Ultra)
+
+**Praktyczna reguła 2026:**
+
+| Strefa ekranu | Charakterystyka | Co tu umieszczać |
+|---------------|-----------------|------------------|
+| **Górna 20%** | Trudna jednoręcznie, ale używana wzrokowo | Header, tytuł, mniej krytyczne info |
+| **Środkowa 60%** | **Najczęściej i najdokładniej dotykana** | **Główne CTA, primary actions, content interaktywny** |
+| **Dolna 20%** | Bottom navigation (rzadziej dotykana niż środek!) | Tab bar (nawigacja), secondary actions |
+
+**Test do code review:** zamiast "one-thumb test" (czy zasięg kciuka?) → **"center-screen test"** (czy główne CTA są w środkowej części ekranu?).
+
+**Wyjątek dla nawigacji:** bottom tab bar pozostaje na dole nie dlatego że "łatwy do tapnięcia", tylko dlatego że jest **przewidywalny** (user wie gdzie szukać) i **nie konkuruje wizualnie z contentem**. Te dwa argumenty są niezależne od dyskredytowanej "thumb zone".
+
+→ Patrz [[resources/platform-conventions.md]] dla tab bar HIG (wyłącznie nawigacja, nie akcje).
+
+---
+
 ## Optical alignment vs grid — kiedy łamać
 
 Czasem geometryczny środek nie wygląda jak optyczny środek. Łam grid optycznie:
@@ -332,31 +359,56 @@ function Screen({ children }) {
 
 ---
 
-## Concentric padding/radius
+## Concentric shapes — 3 oficjalne typy iOS 26
 
-Gdy zagnieżdżasz elementy zaokrąglone, outer radius musi równać się inner + padding:
+Apple na WWDC25 (sesja "Get to know the new design system") sformalizował **3 typy kształtów** które są podstawą iOS 26 Liquid Glass design language. Każdy element UI należy do jednej kategorii:
+
+| Typ | Definicja | Przykłady użycia |
+|-----|-----------|------------------|
+| **`fixed`** | Stały radius niezależny od kontekstu | Małe ikony, badges, dots |
+| **`capsule`** | Radius = połowa wysokości (pełna pigułka) | Pill buttons, tagi, chipy, status pills |
+| **`concentric`** | Radius = radius rodzica MINUS padding | Zagnieżdżone karty, button w karcie, content w sheet |
+
+**Kluczowa reguła Apple — concentric jest obowiązkowy w zagnieżdżeniach:** każdy zagnieżdżony element musi liczyć swój radius z radiusu rodzica. To eliminuje "off feel" gdy inner element wygląda jak płaski prostokąt w zaokrąglonym pudełku.
 
 ```
-outerRadius = innerRadius + padding
+concentricInnerRadius = parentRadius - padding
 ```
 
 ```tsx
-// DOBRE — outer 20px, padding 8px, inner 12px
-<View className="rounded-2xl p-2 bg-surface">  {/* 20px radius */}
-  <View className="rounded-xl bg-card">         {/* 12px radius = 20 - 8 ✓ */}
+// DOBRE — concentric: outer 20px, padding 8px, inner 12px
+<View className="rounded-2xl p-2 bg-surface">  {/* parent 20px radius */}
+  <View className="rounded-xl bg-card">         {/* 12px = 20 - 8 ✓ concentric */}
     <Content />
   </View>
 </View>
 
-// ZŁE — same radius wewnętrznie i zewnętrznie
+// DOBRE — capsule button (radius = h/2)
+<Pressable className="h-12 px-6 rounded-full bg-primary">  {/* h-12 = 48px → rounded-full = 24px */}
+  <Text>Action</Text>
+</Pressable>
+
+// DOBRE — fixed badge
+<View className="w-2 h-2 rounded-sm bg-error" />  {/* fixed 6px independent */}
+
+// ZŁE — same radius wewnętrznie i zewnętrznie (pochłania padding)
 <View className="rounded-2xl p-2">
-  <View className="rounded-2xl">  {/* wygląda "off" — inner pochłania padding */}
+  <View className="rounded-2xl">  {/* wygląda "off" — łamie concentric */}
+    <Content />
+  </View>
+</View>
+
+// ZŁE — fixed radius w miejscu gdzie powinien być concentric
+<View className="rounded-3xl p-4 bg-surface">  {/* 24px outer */}
+  <View className="rounded-md bg-card">         {/* 6px — wizualny dysonans */}
     <Content />
   </View>
 </View>
 ```
 
-Patrz [[resources/visual-polish-mobile.md]] dla pełnej reguły concentric.
+**Praktyczna konsekwencja dla design systemu:** zamiast hardcodować radiusy, **definiuj kształty per rola** (np. `card`, `button`, `chip`, `badge`) i niech każdy automatycznie wybiera typ (capsule dla buttonów, concentric dla zagnieżdżeń, fixed dla badges).
+
+→ Patrz [[resources/platform-conventions.md]] dla iOS 26 Liquid Glass design language jako kontekstu.
 
 ---
 
@@ -369,9 +421,10 @@ Patrz [[resources/visual-polish-mobile.md]] dla pełnej reguły concentric.
 - [ ] Touch targets minimum 44pt iOS / 48dp Android (recommended 48-56)
 - [ ] `hitSlop` na małych ikonach (< 44pt visible)
 - [ ] Dynamic Island i notch traktowane jako część designu (nie black bar)
-- [ ] Concentric radius przy zagnieżdżonych elementach
+- [ ] Concentric radius przy zagnieżdżonych elementach (lub świadomy fixed/capsule per rola)
 - [ ] Brak nakładających się hit areas na sąsiadujących interaktywnych elementach
 - [ ] Optical alignment używany świadomie (Play, italic, asymetryczne ikony)
+- [ ] **Główne CTA w środkowej części ekranu** (NIE u góry, NIE tylko u dołu — Hoober myth busted)
 
 ---
 
@@ -382,4 +435,4 @@ Patrz [[resources/visual-polish-mobile.md]] dla pełnej reguły concentric.
 - [[resources/visual-polish-mobile.md]] — concentric radius, optical alignment
 - [[resources/ai-pitfalls.md]] — niespójny spacing jako AI signature
 
-*Źródła: Apple HIG Layout (developer.apple.com/design/human-interface-guidelines/layout), Material 3 Layout (m3.material.io/foundations/layout), react-native-safe-area-context (github.com/th3rdwave/react-native-safe-area-context), wiki/typografia-i-spacing. Ostatni update: 2026-05-10.*
+*Źródła: Apple HIG Layout (developer.apple.com/design/human-interface-guidelines/layout), Apple WWDC25 "Get to know the new design system" (concentric shapes 3 typy — primary source), Material 3 Layout (m3.material.io/foundations/layout), Steven Hoober — autor oryginalnych badań thumb zone (4ourth.com/Touch.html, primary research correction), react-native-safe-area-context (github.com/th3rdwave/react-native-safe-area-context), wiki/typografia-i-spacing. Ostatni update: 2026-05-15.*

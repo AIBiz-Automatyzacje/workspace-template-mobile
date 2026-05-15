@@ -89,6 +89,31 @@ iOS 18 wprowadziło 3 warianty wymagane dla premium feel:
 
 **Tinted:** najtrudniejszy. Test: zrender ikonę w 100% white na transparentnym tle. Działa? OK. Nie działa? Tinted wariant będzie rozmazany.
 
+### iOS 26 Liquid Glass — obowiązkowe nowe zasady ikon
+
+Apple na WWDC25 (sesja "Design app icons for Liquid Glass", 312K views, plus oficjalna dokumentacja) opublikował **zaktualizowane zasady ikonowe wymagane dla iOS 26**. Templates do pobrania na developer.apple.com (Figma + Sketch).
+
+**Reguły (oficjalne, nie sugestie):**
+
+| Reguła | Co robić | Co usunąć |
+|--------|----------|-----------|
+| **Layering** | Minimum tło + 1 front layer. Więcej warstw = bogatszy efekt material | Płaskie pojedyncze warstwy |
+| **Statyczne efekty** | Pozwól materiałowi LG je dodać dynamicznie | **Drop shadows, bevele, perspektywa 3D** — Apple ostrzega: dublują efekt material |
+| **Tło** | **Soft gradient light-to-dark** | Czyste białe lub czyste czarne tło |
+| **Krawędzie** | Zaokrąglone — lepiej przewodzą światło | Cienkie linie i ostre krawędzie |
+| **Forma** | Uproszczone kształty | Skomplikowane ilustracje, dużo małych detali |
+
+**Dlaczego te reguły:** material Liquid Glass sam dodaje dynamiczne efekty (refrakcja światła, shadow, podświetlenie od dotyku, paralax od ruchu urządzenia). Statyczne efekty na ikonie **dublują się z dynamicznymi systemowymi** — wynik wygląda przeładowane i "off". To dokładnie odwrotny problem do iOS 7 flat era.
+
+**Praktyczne workflow:**
+
+1. Pobierz oficjalny template Apple z developer.apple.com (Figma lub Sketch)
+2. Zaprojektuj **bez statycznych efektów** — material doda je przy renderowaniu
+3. Test w Apple's Liquid Glass simulator (część Xcode 26 + dostępny w preview Figma plugin)
+4. Audyt: ikona wygląda OK statycznie? Material doda właściwą głębię. Wygląda już "głęboko" statycznie? **Usuń efekty** — będzie podwójnie głęboka po renderze
+
+**Wpływ na istniejące apki:** po rekompilacji z Xcode 26 stare ikony **nadal działają**, ale **nie zyskują pełnego efektu LG**. Jeśli adoptujesz Liquid Glass jako design language (patrz [[platform-conventions.md]] sekcja iOS 26), ikona wymaga redesignu pod nowe templates.
+
 ### iOS tools
 
 - **`expo-app-icon`** config plugin — wszystko z source 1024
@@ -379,6 +404,8 @@ Dla complex animation (Headspace flowing shapes). `lottie-react-native` package.
 - [ ] Test 60px home screen — czysty focal point?
 - [ ] iOS dark variant — manualnie zaprojektowany (nie auto-invert)
 - [ ] iOS tinted variant — działa w monochrome
+- [ ] **iOS 26 Liquid Glass — minimum 2 warstwy, BEZ drop shadow / bevel / 3D perspektywy** (jeśli adoptujesz LG)
+- [ ] **iOS 26 Liquid Glass — soft gradient tło, zaokrąglone krawędzie, uproszczona forma**
 - [ ] Android adaptive: foreground + background warstwy
 - [ ] Android safe zone: ważny content w 66dp central
 - [ ] Android monochrome variant
@@ -417,3 +444,4 @@ Dla complex animation (Headspace flowing shapes). `lottie-react-native` package.
 - expo-splash-screen (docs.expo.dev/versions/latest/sdk/splash-screen)
 - expo-app-icon (docs.expo.dev/versions/latest/config/app)
 - iOS 18 icon variants — Apple WWDC24 sessions
+- iOS 26 Liquid Glass icon rules — Apple WWDC25 "Design app icons for Liquid Glass" (312K views) + oficjalne templates Figma/Sketch na developer.apple.com

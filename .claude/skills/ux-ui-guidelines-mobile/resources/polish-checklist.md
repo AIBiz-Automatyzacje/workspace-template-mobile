@@ -90,7 +90,7 @@ Format: `[ ]` checklist. Każdy punkt linkuje do pełnego pliku z kontekstem.
 ## Sanity check
 
 - [ ] **5-second test**. Pokaż screen userowi przez 5 sekund. Pyta "co kliknę żeby zrobić X?" Jeśli zgaduje — hierarchia zła.
-- [ ] **One-thumb test**. Czy główne akcje są w bottom 1/3 ekranu (zasięg kciuka)? Top akcje tylko dla rzadkich operacji.
+- [ ] **Center-screen test**. Czy główne CTA są w środkowej części ekranu? **Steven Hoober (autor oryginalnego diagramu "thumb zone") sam go obalił** — primary research pokazuje, że środek ekranu jest dotykany **najczęściej, najszybciej i najdokładniej**. Górna 20% jest poza zasięgiem przy jednoręcznym użyciu na dużych telefonach (Pro Max, Ultra). Bottom tab bar OK jako nawigacja (przewidywalność), nie dlatego że "łatwy do kciuka". → Patrz [[resources/spacing-grid.md]] sekcja "Gdzie umieszczać główne CTA".
 - [ ] **Brightness 30% test**. Kontrast jest OK przy słabym oświetleniu? Test apki w ciemnym pokoju z brightness slider niski.
 
 ---
