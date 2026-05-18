@@ -1,6 +1,6 @@
 ---
 name: feature-tester-mobile-e2e
-description: "Weryfikuje scenariusze E2E mobile na emulatorze przez Maestro CLI. Sprawdza checkboxy Weryfikacja: z checklist zadań — interakcje, nawigację, gesty (swipe, scroll, long press), deep linking, accessibility, visual regression iOS/Android."
+description: "Weryfikuje scenariusze E2E mobile na emulatorze przez Maestro CLI. Sprawdza checkboxy Weryfikacja: z checklist zadań — interakcje, nawigację, gesty (swipe, scroll, long press), deep linking, accessibility, visual regression iOS/Android. Jeśli zadanie ma figma_screens — robi side-by-side visual comparison z mockupami przez Maestro screenshot."
 skills:
   - mobile-e2e-maestro
 model: inherit
@@ -41,8 +41,57 @@ Dla każdego scenariusza `Weryfikacja:`:
 4. **Zbierz screenshoty** z `.maestro/screenshots/` (każdy `takeScreenshot:` w flow generuje plik)
 5. **Zweryfikuj wynik** — sprawdź exit code Maestro (0 = pass) i czy wszystkie `assertVisible` przeszły
 
+### 3.5. Visual reference comparison (gdy zadanie ma figma_screens)
+
+Odczytaj `<folder-zadania>/<nazwa>-kontekst.md` i wyciągnij sekcję "Designerski kontekst". Jeśli pole `figma_screens` jest puste/null → pomiń całą sekcję 3.5 (nie ma z czym porównywać).
+
+Jeśli mapa `figma_screens` zawiera wpisy — dla **każdego** ekranu:
+
+1. **Odczytaj wymiary mockupu PNG** + dopasuj symulator.
+   - Wymiary: `Bash` → `identify -format "%w %h" <ścieżka.png>` (ImageMagick zwraca `<W> <H>`). Fallback: `node -e "const s=require('fs').readFileSync('<ścieżka.png>');console.log(s.readUInt32BE(16),s.readUInt32BE(20))"` (PNG IHDR offset).
+   - Mapowanie Figma frame → symulator:
+
+     | Wymiary Figma | iOS Simulator | Android Emulator |
+     |---|---|---|
+     | 393×852 | `iPhone 15` lub `iPhone 14` | — |
+     | 390×844 | `iPhone 14` lub `iPhone 13` | — |
+     | 375×812 | `iPhone 13 mini` lub `iPhone X` | — |
+     | 430×932 | `iPhone 15 Pro Max` | — |
+     | 360×800 | — | `Pixel 6` / `Pixel 7` |
+     | 393×873 | — | `Pixel 7` |
+     | 412×915 | — | `Pixel 7 Pro` |
+
+   - Inne wymiary: dopasuj najbliższy device po szerokości (wysokość zwykle różni się o status bar).
+   - Jeśli SPEC.md ma kolumnę "Target device" — użyj tej wartości zamiast mapowania heurystycznego.
+
+2. **Uruchom właściwy symulator.**
+   - iOS: `xcrun simctl boot "<device>"` jeśli nie boot'owany, `open -a Simulator`.
+   - Android: sprawdź `emulator -list-avds`, uruchom `emulator -avd <name> -no-snapshot-load &`.
+   - Sprawdź `xcrun simctl list devices booted` / `adb devices`.
+
+3. **Wygeneruj lightweight flow YAML** do screenshot ekranu (zapisz jako `.maestro/visual-diff-<nazwa-ekranu>.yaml`):
+   ```yaml
+   appId: <appId z .maestro/_other_flow.yaml>
+   ---
+   - launchApp:
+       clearState: true     # czysty start dla deterministycznego screenshota
+   # Opcjonalna nawigacja jeśli ekran NIE jest startowy:
+   - tapOn: { id: "<testID prowadzący do ekranu>" }
+   - waitForAnimationToEnd
+   - takeScreenshot: visual-diff-<nazwa-ekranu>
+   ```
+   Mapowanie nazwy ekranu na ścieżkę nawigacji bierz z planu technicznego (sekcja Implementation Units — `Pliki:` dotyka `app/(tabs)/<route>.tsx` lub `app/<route>.tsx`). Jeśli ambiguous → raport `blocked`.
+
+4. **Uruchom flow:** `maestro test .maestro/visual-diff-<nazwa-ekranu>.yaml`. Domyślnie Maestro używa pierwszego boot'owanego symulatora; przy multi-device dodaj `--device <id>` (sprawdź `maestro test --help`).
+
+5. **Zbierz screenshot.** Maestro zapisuje do `.maestro/screenshots/visual-diff-<nazwa-ekranu>.png`. Skopiuj do `<folder-zadania>/visual-diff/<nazwa-ekranu>-actual.png` (`mkdir -p` jeśli folder nie istnieje).
+
+6. **Skopiuj mockup obok** — `cp <ścieżka mockupu z figma_screens> <folder-zadania>/visual-diff/<nazwa-ekranu>-figma.png` (mockup jest read-only oryginał, kopia w folderze zadania ułatwia review side-by-side).
+
+7. **Zero auto pixel-diff** — NIE uruchamiaj `pixelmatch`, `odiff`, `imagemagick compare`. iOS/Android render różni się subtelnie (antialiasing, font hinting, density), status bar simulatora vs Figma frame, brak fizycznych pixeli — false positives zarżną sygnał. Zostawiamy decyzję ludzkiemu oku.
+
 ### 4. Raportuj wyniki
-Dla każdego scenariusza:
+Dla każdego scenariusza `Weryfikacja:`:
 - **PASS** → oznacz checkbox jako ✅ w pliku zadań
 - **FAIL** → klasyfikuj jako 🟠 [P2-important] z:
   - Opis co poszło nie tak (output Maestro)
@@ -50,8 +99,14 @@ Dla każdego scenariusza:
   - Linia w flow YAML która zawiodła
   - Sugestia: czy to bug w kodzie czy w flow
 
+Dla każdej pary visual-diff (jeśli sekcja 3.5 została wykonana):
+- **NIE** oznaczaj automatycznie jako ✅/❌. Visual diff wymaga **manualnej akceptacji człowieka** — wpisz pod ekranem czekający checkbox: `- [ ] <nazwa-ekranu>: visual review (zobacz visual-diff/<nazwa>-figma.png vs visual-diff/<nazwa>-actual.png, symulator: <device>)`.
+- Dla każdego ekranu w raporcie dorzuć dwie ścieżki PNG + nazwę użytego symulatora, żeby orkiestrator/user mógł je otworzyć obok siebie i zdecydować.
+
 ### 5. Podsumowanie
-Raport: X/Y scenariuszy przeszło, lista FAIL z screenshotami, ścieżki do flow YAML.
+Raport:
+- X/Y scenariuszy `Weryfikacja:` przeszło, lista FAIL z screenshotami, ścieżki do flow YAML.
+- N par visual-diff wygenerowanych (jeśli zadanie miało `figma_screens`), lista par z dwiema ścieżkami, nazwą symulatora i checkboxem manualnej akceptacji. Zero auto pass/fail — czeka na review.
 
 ## Maestro — szybka referencja
 

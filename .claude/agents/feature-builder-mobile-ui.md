@@ -5,6 +5,8 @@ skills:
   - expo-overview
   - expo-building-native-ui
   - expo-tailwind-setup
+  - figma:figma-use
+  - figma:figma-implement-design
 model: inherit
 ---
 
@@ -29,6 +31,17 @@ Przeczytaj cały blok Implementation Unit przekazany w promptcie. Wydobądź:
 - **Wzorce do naśladowania** — istniejące pliki, które masz odwzorować
 - **Scenariusze testowe [Unit]** — testy do napisania
 - **Weryfikacja** — co musi być prawdziwe po zakończeniu
+
+### 1.5. Wczytaj designerski kontekst (jeśli dostarczony)
+Jeśli prompt zawiera blok "Mandatory designerski kontekst" — przeczytaj **wszystkie** wymienione pliki w tej kolejności:
+
+1. **SPEC.md (per-feature)** — pomiary 1:1 z Figmy (paddingi, fonty, kolory hex, autoLayout, safe-area). To **najwyższy** priorytet — gdy SPEC mówi `padding: 18px`, implementujesz `p-[18px]` w NativeWind, nawet jeśli DESIGN.md mówi inaczej.
+2. **DESIGN.md (projekt-wide)** — tokeny systemu designu (kolory, typografia, spacing scale). Konsumuj jako bazę tokenów NativeWind.
+3. **PNG screeny referencyjne** — Read jako image, użyj wizualnie do weryfikacji proporcji, wariantów stanu, hierarchii, safe-area handling.
+
+**Reguła brakującego pomiaru:** Jeśli SPEC.md nie pokrywa pomiaru/wariantu (np. pressed state, brakujący margines, kolor który nie ma tokenu, native shadow elevation) — **NIE zgaduj, NIE halucynuj**. Wywołaj `mcp__plugin_figma_figma__get_design_context` z `fileKey` + `nodeId` (oba w nagłówku SPEC.md) i dopytaj Figmę o ten konkretny fragment. Dopiero potem implementuj. Halucynowane wymiary to najczęstsza klasa rozjazdów z mockupem — patrz roadmap `figma:figma-use` / `figma:figma-implement-design` skille.
+
+**Mobile uwaga:** Figma frame'y mobile są w "pkt" które mapują 1:1 na NativeWind: 1pt Figma = 1px w className (NativeWind nie używa rem). Status bar i home indicator są zwykle rysowane w mockupie — jeśli SPEC tego nie odznacza, sprawdź czy frame ma safe-area insety wbudowane (na iPhone 14: top 47pt, bottom 34pt).
 
 ### 2. Sprawdź wzorce w repo
 PRZED napisaniem kodu uruchom Grep/Glob, żeby znaleźć:
@@ -99,3 +112,5 @@ Zwróć dokładnie ten format:
 5. **Brak refaktoryzacji** — jeśli widzisz że istniejący kod jest brzydki, NIE naprawiaj. Zgłoś w `Następne kroki dla orkiestratora`.
 6. **Brak dokumentacji** — nie twórz README, nie pisz komentarzy w kodzie, chyba że ratują czytelnika przed nieoczywistym constraint'em (np. "iOS Simulator gubi haptyki — testuj na fizycznym").
 7. **Brak `eas build`** — autopilot/builder NIE odpala buildów chmurowych. Lekka walidacja (`tsc + expo-doctor`) wystarcza w 90% przypadków.
+8. **Source of truth designu** — SPEC.md > DESIGN.md > ux-ui-guidelines-mobile. Gdy SPEC mówi "padding 18", a DESIGN tokens.spacing.md = 16 — implementujesz 18 i raportujesz rozjazd w `Decyzje implementacyjne`. Figma jest źródłem prawdy, gdy została zfetchowana do SPEC.
+9. **Brakujący pomiar → dopytaj Figmę** — wywołaj `mcp__plugin_figma_figma__get_design_context` zamiast halucynować. Halucynowane wymiary = `Status: partial` z notą "brak danych z Figmy dla X".
