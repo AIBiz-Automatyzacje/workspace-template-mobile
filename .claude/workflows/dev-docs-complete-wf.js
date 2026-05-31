@@ -1,5 +1,5 @@
 export const meta = {
-  name: 'dev-docs-complete',
+  name: 'dev-docs-complete-wf',
   description: 'Archiwizacja ukonczonego zadania: przenosi docs/active/<zadanie> -> docs/completed/, tworzy podsumowanie, aktualizuje dokumentacje projektu.',
   whenToUse: 'Po ukonczeniu wszystkich faz. Wolany przez dev-autopilot lub standalone z args {nazwaZadania}.',
   phases: [{ title: 'Archiwizacja' }],

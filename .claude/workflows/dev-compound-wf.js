@@ -1,5 +1,5 @@
 export const meta = {
-  name: 'dev-compound',
+  name: 'dev-compound-wf',
   description: 'Dokumentuje rozwiazane problemy z sesji do docs/solutions/ (tryb compact) i ocenia rule-worthy do .claude/rules/learned-patterns.md.',
   whenToUse: 'Po ukonczeniu zadania, gdy kontekst napraw jest swiezy. Wolany przez dev-autopilot lub standalone.',
   phases: [{ title: 'Compound' }],

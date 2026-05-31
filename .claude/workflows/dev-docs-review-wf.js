@@ -1,5 +1,5 @@
 export const meta = {
-  name: 'dev-docs-review',
+  name: 'dev-docs-review-wf',
   description: 'Code review fazy: 5 reviewerow rownolegle (security/perf/architektura/test/E2E) -> dedup -> adversarial verify kazdego P1/P2 (sceptycy obalaja) -> scribe zapisuje raport + bookkeeping checkboxow Weryfikacja: -> severity gate.',
   whenToUse: 'Review jednej fazy. Wolany przez dev-autopilot lub standalone z args {sciezka, faza}.',
   phases: [

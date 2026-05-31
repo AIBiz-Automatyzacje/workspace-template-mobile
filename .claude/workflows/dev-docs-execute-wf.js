@@ -1,5 +1,5 @@
 export const meta = {
-  name: 'dev-docs-execute',
+  name: 'dev-docs-execute-wf',
   description: 'Wykonanie JEDNEJ fazy zadania: planner czyta IU z docs/plans/, buildery (feature-builder-mobile-*) implementuja je przez agentType, potem walidacja + commit + aktualizacja dokumentacji.',
   whenToUse: 'Pojedyncza faza implementacji. Wolany przez dev-autopilot lub standalone z args {sciezka, faza}.',
   phases: [

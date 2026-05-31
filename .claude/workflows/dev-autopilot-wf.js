@@ -1,5 +1,5 @@
 export const meta = {
-  name: 'dev-autopilot',
+  name: 'dev-autopilot-wf',
   description: 'Autonomiczny pipeline: bootstrap -> per faza (execute -> review -> adversarial verify -> fix) -> complete -> compound. Orkiestrator trzyma plan w kodzie; buildery i reviewerzy to leaf-agenci.',
   whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch).',
   phases: [
@@ -201,7 +201,7 @@ for (const numerFazy of stan.kolejka) {
   const rozpocznijOdFix = faza.ukonczona && faza.reviewIstnieje && faza.maNierozwiazaneP1P2
 
   if (!rozpocznijOdFix && !faza.ukonczona) {
-    const exec = await workflow('dev-docs-execute', { sciezka, faza: numerFazy })
+    const exec = await workflow('dev-docs-execute-wf', { sciezka, faza: numerFazy })
     if (!exec || exec.status !== 'completed') {
       return { status: 'STOP', powod: `execute fazy ${numerFazy} zwrocil "${exec ? exec.status : 'null'}"`, faza: numerFazy, exec, raporty }
     }
@@ -212,7 +212,7 @@ for (const numerFazy of stan.kolejka) {
   let fixCykl = 0
   let lastReview = null
   while (true) {
-    const review = await workflow('dev-docs-review', { sciezka, faza: numerFazy })
+    const review = await workflow('dev-docs-review-wf', { sciezka, faza: numerFazy })
     lastReview = review
     const { p1, p2 } = review.liczniki
     log(`Review fazy ${numerFazy}: P1=${p1} P2=${p2} P3=${review.liczniki.p3} (gate: ${review.severityGate})`)
@@ -250,8 +250,8 @@ if (walidacja.wynik === 'FAIL') {
   return { status: 'STOP', powod: 'walidacja koncowa FAIL', walidacja, historia, raporty }
 }
 
-const complete = await workflow('dev-docs-complete', { nazwaZadania: stan.nazwaZadania })
-const compound = await workflow('dev-compound', { sciezka })
+const complete = await workflow('dev-docs-complete-wf', { nazwaZadania: stan.nazwaZadania })
+const compound = await workflow('dev-compound-wf', { sciezka })
 
 return {
   status: 'OK',
