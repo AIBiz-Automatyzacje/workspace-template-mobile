@@ -9,7 +9,9 @@ export const meta = {
 }
 
 // ── Konfiguracja ──────────────────────────────────────────────────────────
-const MAX_FIX_CYKLI = 2
+// Poprawka 2: 1 cykl. Dane z runu wf_3c9d3864 pokazaly ze 2. cykl fix naprawial 0
+// we wszystkich 3 fazach, a kosztowal pelny re-review. Po 1 nieudanym fixie -> graceful/STOP.
+const MAX_FIX_CYKLI = 1
 
 // ── Schematy (tylko te, ktorych orkiestrator uzywa bezposrednio) ──────────
 // ExecuteResult / ReviewResult sa walidowane wewnatrz pod-workflowow i wracaja
@@ -144,14 +146,17 @@ function gracefulP2Prompt(sciezka, numerFazy, review) {
   return `Wyczerpano ${MAX_FIX_CYKLI} cykli napraw fazy ${numerFazy}, zostaja same P2 (zero P1).
 Severity gate dla samych P2 = "KONTYNUUJ Z ZASTRZEZENIAMI".
 
-Utworz lub zaktualizuj ${sciezka}/known-issues.md — dopisz sekcje:
+Zaktualizuj ${sciezka}/known-issues.md. WAZNE (Poprawka 6): jesli sekcja "## Faza ${numerFazy}"
+juz istnieje w pliku — ZASTAP jej calа tresc (od naglowka "## Faza ${numerFazy}" do nastepnego "## " lub konca pliku),
+NIE dopisuj duplikatu naglowka. Jesli nie istnieje — dodaj na koncu. Docelowa tresc sekcji:
 
 ## Faza ${numerFazy}
-Wyczerpano ${MAX_FIX_CYKLI} cykli napraw. Pozostaje ${review.liczniki.p2} problemow P2.
+Wyczerpano ${MAX_FIX_CYKLI} cykl(e) napraw. Pozostaje ${review.liczniki.p2} problemow P2.
 Review: review-faza-${numerFazy}.md
 
 ${lista}
 
+Po zapisie zweryfikuj ze w pliku jest DOKLADNIE jeden naglowek "## Faza ${numerFazy}".
 Nie ruszaj kodu — tylko zapisz known-issues. Zwroc sciezke do pliku.`
 }
 
@@ -172,7 +177,10 @@ Zwroc obiekt zgodny ze schematem ValidationResult.`
 
 // ── Orkiestracja ──────────────────────────────────────────────────────────
 
-const sciezka = typeof args === 'string' ? args : args && args.sciezka
+// Poprawka 3: sanityzacja — UI wstrzykuje prefix '@' (mention) i czesto trailing '/'.
+// Bez tego prompty buduja sciezki typu "@docs/active/x//" (kruche, agent musi zgadywac).
+const sciezkaRaw = typeof args === 'string' ? args : args && args.sciezka
+const sciezka = sciezkaRaw && sciezkaRaw.replace(/^@/, '').replace(/\/+$/, '')
 if (!sciezka) {
   return { status: 'STOP', powod: 'brak sciezki zadania (podaj args: "docs/active/<zadanie>")' }
 }
@@ -211,13 +219,15 @@ for (const numerFazy of stan.kolejka) {
   // Petla Review -> (adversarial verify w pod-workflowie) -> Fix
   let fixCykl = 0
   let lastReview = null
+  let poprzednieFindingi = null // null = swiezy review; lista = re-review (Poprawka 1)
   while (true) {
-    const review = await workflow('dev-docs-review-wf', { sciezka, faza: numerFazy })
+    const review = await workflow('dev-docs-review-wf', { sciezka, faza: numerFazy, poprzednieFindingi })
     lastReview = review
     const { p1, p2 } = review.liczniki
-    log(`Review fazy ${numerFazy}: P1=${p1} P2=${p2} P3=${review.liczniki.p3} (gate: ${review.severityGate})`)
+    const operator = review.liczniki.operator || 0
+    log(`Review fazy ${numerFazy}: P1=${p1} P2=${p2} P3=${review.liczniki.p3} OPERATOR=${operator} (gate: ${review.severityGate})`)
 
-    if (p1 === 0 && p2 === 0) break // czyste lub same P3
+    if (p1 === 0 && p2 === 0) break // czyste / same P3 / same OPERATOR (te nie blokuja — ida do operator-checklist)
 
     if (fixCykl >= MAX_FIX_CYKLI) {
       if (p1 > 0) {
@@ -235,6 +245,8 @@ for (const numerFazy of stan.kolejka) {
       label: `fix:faza-${numerFazy}-cykl-${fixCykl + 1}`,
     })
     fixCykl++
+    // Re-review weryfikuje TYLKO te findingi (P1/P2 typu KOD/TEST/E2E), nie skanuje fazy od zera.
+    poprzednieFindingi = review.findings.filter((f) => (f.severity === 'P1' || f.severity === 'P2') && f.typ !== 'OPERATOR')
     log(`Fix fazy ${numerFazy} cykl ${fixCykl}: naprawiono ${fix.naprawione}, pozostaje ${fix.pozostaje}, walidacja ${fix.walidacja}`)
   }
 

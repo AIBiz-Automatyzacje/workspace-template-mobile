@@ -22,7 +22,7 @@ const FINDINGS = {
         additionalProperties: false,
         properties: {
           severity: { type: 'string', enum: ['P1', 'P2', 'P3'] },
-          typ: { type: 'string', enum: ['KOD', 'TEST', 'E2E'] },
+          typ: { type: 'string', enum: ['KOD', 'TEST', 'E2E', 'OPERATOR'], description: 'OPERATOR = weryfikacja niewykonalna headless (wymaga emulatora/eas build/deploy) — nie defekt kodu, nie idzie do fix' },
           plik: { type: 'string', description: 'plik:linia lub "?"' },
           opis: { type: 'string' },
         },
@@ -56,7 +56,7 @@ const REVIEW_RESULT = {
         additionalProperties: false,
         properties: {
           severity: { type: 'string', enum: ['P1', 'P2', 'P3'] },
-          typ: { type: 'string', enum: ['KOD', 'TEST', 'E2E'] },
+          typ: { type: 'string', enum: ['KOD', 'TEST', 'E2E', 'OPERATOR'] },
           plik: { type: 'string' },
           opis: { type: 'string' },
         },
@@ -66,7 +66,7 @@ const REVIEW_RESULT = {
     liczniki: {
       type: 'object',
       additionalProperties: false,
-      properties: { p1: { type: 'integer' }, p2: { type: 'integer' }, p3: { type: 'integer' } },
+      properties: { p1: { type: 'integer' }, p2: { type: 'integer' }, p3: { type: 'integer' }, operator: { type: 'integer', description: 'findingi OPERATOR — poza fix, do operator-checklist' } },
       required: ['p1', 'p2', 'p3'],
     },
     severityGate: { type: 'string', enum: ['BLOKUJE', 'ZASTRZEZENIA', 'CZYSTE'] },
@@ -90,29 +90,54 @@ const REVIEWERZY = [
   { key: 'typescript', agentType: 'kieran-typescript-reviewer', fokus: 'type safety, brak any/as/!, discriminated unions, explicit return types' },
 ]
 
-function reviewerPrompt(sciezka, faza, fokus) {
+// Blok doklejany w trybie re-review (po cyklu fix) — targetowana weryfikacja zamiast pelnego re-skanu.
+function rereviewBlok(poprzednie) {
+  if (!poprzednie || !poprzednie.length) return ''
+  return `
+
+=== TRYB RE-REVIEW (po cyklu fix) ===
+To NIE jest swiezy review. Ponizej findingi z poprzedniego review tej fazy:
+${JSON.stringify(poprzednie, null, 2)}
+
+Twoje zadanie:
+1. Dla KAZDEGO powyzszego findingu sprawdz w kodzie czy zostal naprawiony. Jesli NADAL otwarty -> zglos go ponownie (ten sam severity/typ).
+2. Zglaszaj NOWY finding WYLACZNIE jesli to REGRESJA wprowadzona przez commit fix (cos co fix zepsul). NIE rob pelnego re-skanu calej fazy, NIE zglaszaj pre-existing problemow ktorych poprzedni review nie wykryl.
+Cel: zweryfikowac skutecznosc napraw, nie wygenerowac nowa liste.`
+}
+
+function reviewerPrompt(sciezka, faza, fokus, poprzednie) {
   return `Jestes reviewerem fazy ${faza} w folderze ${sciezka}.
 Przeczytaj zmiany git tej fazy + plan techniczny w docs/plans/ (Files:, Test scenarios:, Patterns to follow:).
 Skup sie na: ${fokus}.
-Sklasyfikuj kazdy finding: P1 (blocking), P2 (important), P3 (nit) oraz typ: KOD / TEST / E2E.
-Zwroc obiekt {findings:[...]} zgodny ze schematem. Sam nie zapisuj plikow.`
+Sklasyfikuj kazdy finding: P1 (blocking), P2 (important), P3 (nit) oraz typ: KOD / TEST / E2E / OPERATOR.
+Zwroc obiekt {findings:[...]} zgodny ze schematem. Sam nie zapisuj plikow.${rereviewBlok(poprzednie)}`
 }
 
-function testCoveragePrompt(sciezka, faza) {
+function testCoveragePrompt(sciezka, faza, poprzednie) {
   return `Jestes testerem scenariuszy/coverage dla fazy ${faza} w ${sciezka}.
 Sprawdz: happy path, invalid inputs, boundary conditions, concurrent operations, scale.
 Test coverage: czy plan techniczny (docs/plans/) definiowal scenariusze testowe dla tej fazy i czy pliki testowe
 istnieja oraz maja asercje? Brakujace testy = P2 (typ TEST).
-Zwroc {findings:[...]} (severity P1/P2/P3, typ KOD/TEST/E2E). Nie zapisuj plikow.`
+Zwroc {findings:[...]} (severity P1/P2/P3, typ KOD/TEST/E2E/OPERATOR). Nie zapisuj plikow.${rereviewBlok(poprzednie)}`
 }
 
-function e2ePrompt(sciezka, faza) {
+function e2ePrompt(sciezka, faza, poprzednie) {
   return `Jestes testerem E2E mobile (Maestro) dla fazy ${faza} w ${sciezka}.
 Zbierz niezaznaczone checkboxy "Weryfikacja:" tej fazy dotyczace scenariuszy mobile
 (launchApp, tapOn, assertVisible, takeScreenshot, deep linking, oznaczenie 📱). Pomin CLI i Manual.
-Zweryfikuj kazdy na emulatorze przez Maestro CLI (skill mobile-e2e-maestro).
-Kazdy nieudany lub niezweryfikowany scenariusz = finding P2 typ E2E (z trescia checkboxa i statusem passed/failed/skipped w opisie).
-Zwroc {findings:[...]}. Nie zapisuj plikow (scribe zrobi bookkeeping).`
+
+NAJPIERW preflight srodowiska (Bash): czy jest booted emulator (xcrun simctl booted / adb devices)
+i czy Metro UP (curl localhost:8081/status). Potem proba Maestro przez skill mobile-e2e-maestro.
+
+KLASYFIKACJA per scenariusz (to jest krytyczne — nie wszystko jest P2):
+- Scenariusz WYKONANY i FAILED z powodu defektu w kodzie/UI/stylu -> finding P2 typ E2E.
+- Scenariusz NIEWYKONALNY headless (brak booted emulatora, Metro down, dev-client wymaga 'eas build',
+  migracja/RPC niewdrozona na remote, brak seeded sesji) -> finding typ OPERATOR (severity P3).
+  To NIE jest defekt kodu — to brakujacy warunek srodowiskowy. NIE klasyfikuj jako P2.
+  W opisie podaj: tresc checkboxa + dokladny blocker + Operator action (kroki do odblokowania).
+- Scenariusz WYKONANY i PASSED -> nie zglaszaj (scribe odznaczy w bookkeepingu).
+
+Zwroc {findings:[...]}. Nie zapisuj plikow (scribe zrobi bookkeeping).${rereviewBlok(poprzednie)}`
 }
 
 function scribePrompt(sciezka, faza, potwierdzone) {
@@ -125,32 +150,42 @@ Referencja procedury: .claude/skills/dev-docs-review/SKILL.md sekcje 4, 4.5, 4.7
 
 1. Zapisz ${sciezka}/review-faza-${faza}.md — pelny raport (findings posortowane P1->P2->P3, statystyki).
 2. Zaktualizuj ${sciezka}/*-zadania.md: dodaj/uzupelnij sekcje "## Do poprawy po review fazy ${faza}"
-   — wylistuj kazdy P1 i P2 jako checkbox: "- [ ] 🔴/🟠 [severity] **plik:linia** — opis". P3 opcjonalnie.
+   — wylistuj TYLKO findingi typu KOD/TEST/E2E o severity P1 i P2 jako checkbox: "- [ ] 🔴/🟠 [severity] **plik:linia** — opis". P3 opcjonalnie.
+   Findingi typu OPERATOR (niewykonalne headless) NIE ida tutaj — trafiaja do osobnej sekcji "## Operator checklist faza ${faza}"
+   z trescia + krokami Operator action. To nie sa zadania do fix, tylko warunki srodowiskowe dla operatora.
 3. Bookkeeping checkboxow "Weryfikacja:" (sekcja 4.7): re-parsuj niezaznaczone "Weryfikacja:" fazy ${faza},
-   sklasyfikuj (CLI->uruchom przez Bash, exit0->[x]; Grep->uruchom; E2E Maestro->wg findings E2E; Manual->zostaw z adnotacja;
-   Niejasne->P3). Odznacz/anotuj w pliku zadan. Dopisz sekcje "Bookkeeping checkboxow Weryfikacja:" do raportu.
-4. Policz liczniki P1/P2/P3 (lacznie z ewentualnymi nowymi P2 z bookkeepingu: CLI FAIL, E2E SKIP, Grep FAIL).
-5. Ustaw severityGate: BLOKUJE (sa P1) / ZASTRZEZENIA (tylko P2) / CZYSTE (tylko P3 lub brak).
+   sklasyfikuj (CLI->uruchom przez Bash, exit0->[x]; Grep->uruchom; E2E Maestro wykonany->wg findings E2E;
+   E2E niewykonalny headless->Operator checklist (typ OPERATOR, nie P2); Manual->zostaw z adnotacja; Niejasne->P3).
+   Odznacz/anotuj w pliku zadan. Dopisz sekcje "Bookkeeping checkboxow Weryfikacja:" do raportu.
+4. Policz liczniki: p1/p2/p3 (tylko KOD/TEST/E2E) oraz operator (osobno — findingi OPERATOR). P2 z bookkeepingu: CLI FAIL, Grep FAIL.
+5. Ustaw severityGate: BLOKUJE (sa P1) / ZASTRZEZENIA (tylko P2) / CZYSTE (zero P1/P2 — sam P3/OPERATOR nie blokuje gate'u).
 6. Policz e2e {passed, failed, skipped}.
 
-Zwroc obiekt zgodny ze schematem ReviewResult (findings = finalna lista po bookkeepingu).`
+Zwroc obiekt zgodny ze schematem ReviewResult (findings = finalna lista po bookkeepingu, z findingami OPERATOR wlacznie).`
 }
 
 // ── Orkiestracja ──────────────────────────────────────────────────────────
 
 const sciezka = args && args.sciezka
 const faza = args && args.faza
+// Poprawka 1: w re-review orkiestrator przekazuje findingi z poprzedniego cyklu -> targetowana weryfikacja.
+const poprzednie = (args && args.poprzednieFindingi) || []
 if (!sciezka || faza === undefined) {
-  return { fazaNumer: -1, findings: [], liczniki: { p1: 0, p2: 0, p3: 0 }, severityGate: 'BLOKUJE', raportSciezka: '', e2e: { passed: 0, failed: 0, skipped: 0 } }
+  return { fazaNumer: -1, findings: [], liczniki: { p1: 0, p2: 0, p3: 0, operator: 0 }, severityGate: 'BLOKUJE', raportSciezka: '', e2e: { passed: 0, failed: 0, skipped: 0 } }
 }
+
+// Rozdziel poprzednie findingi po obszarze odpowiedzialnego agenta (pusta lista w trybie swiezego review).
+const poprzKod = poprzednie.filter((f) => f.typ === 'KOD')
+const poprzTest = poprzednie.filter((f) => f.typ === 'TEST')
+const poprzE2e = poprzednie.filter((f) => f.typ === 'E2E' || f.typ === 'OPERATOR')
 
 // Faza 1: 5 reviewerow rownolegle (bariera — potrzebujemy kompletu do dedup)
 phase('Review')
 const thunki = REVIEWERZY.map((r) => () =>
-  agent(reviewerPrompt(sciezka, faza, r.fokus), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })
+  agent(reviewerPrompt(sciezka, faza, r.fokus, poprzKod), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })
 )
-thunki.push(() => agent(testCoveragePrompt(sciezka, faza), { schema: FINDINGS, label: 'review:test-coverage', phase: 'Review' }))
-thunki.push(() => agent(e2ePrompt(sciezka, faza), { schema: FINDINGS, agentType: 'feature-tester-mobile-e2e', label: 'review:e2e', phase: 'Review' }))
+thunki.push(() => agent(testCoveragePrompt(sciezka, faza, poprzTest), { schema: FINDINGS, label: 'review:test-coverage', phase: 'Review' }))
+thunki.push(() => agent(e2ePrompt(sciezka, faza, poprzE2e), { schema: FINDINGS, agentType: 'feature-tester-mobile-e2e', label: 'review:e2e', phase: 'Review' }))
 
 const wyniki = await parallel(thunki)
 
