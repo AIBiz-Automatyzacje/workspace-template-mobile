@@ -1,3 +1,4 @@
 compound-engineering-plugin-main/
 .DS_Store
-docs/
+# Robocze artefakty pipeline dev-* (root-level), NIE dokumentacja szablonu w .claude/docs/
+/docs/

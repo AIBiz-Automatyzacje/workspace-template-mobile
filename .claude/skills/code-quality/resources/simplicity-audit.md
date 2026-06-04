@@ -58,6 +58,12 @@ Audyt prostoty kodu: YAGNI, abstrakcje, redundancja, LOC metrics, wzorce upraszc
 - **Over-engineered DI** -- 5 warstw abstrakcji dla prostej operacji
 - **Wrapper ktory nic nie dodaje** -- klasa ktora deleguje kazde wywolanie do jednego pola
 
+### Regula szwu (seam rule)
+
+- **Jeden adapter za interfejsem = szew hipotetyczny** -- abstrakcja stworzona "na zapas" dla wymiany ktora moze nigdy nie nastapic. To przedwczesna abstrakcja: koszt indirection placony od razu, korzysc moze nie nadejsc nigdy.
+- **Dwa adaptery za interfejsem = szew realny** -- istnieja dwie rozne implementacje, ktore faktycznie sa wymieniane. Tu abstrakcja jest uzasadniona: interfejs istnieje, bo cos przez niego naprawde przeplywa.
+- Regula: nie buduj szwu dla jednego adaptera. Szew zarabia na swoje istnienie dopiero przy drugim adapterze.
+
 ### Regula kciuka
 
 Inline dopoki nie jest bolesne. Kiedy widzisz, ze duplikujesz logike po raz drugi -- WTEDY wyciagnij abstrakcje. Nie wczesniej.

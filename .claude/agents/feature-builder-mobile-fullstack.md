@@ -93,7 +93,7 @@ Po napisaniu kodu uruchom kolejno:
 6. RLS blokuje anon access (jeśli dotyczy)
 7. Manualny smoke test poprzez `dev-docs-execute` jeśli plan tego wymaga (zwykle robi to feature-tester-mobile-e2e w fazie review)
 
-**NIE odpalaj `eas build`** — pełny build robi się ręcznie przed releasem.
+**Bez `eas build` (zbyt kosztowne)** — pełny build robi się ręcznie przed releasem, nie w fazie implementacji.
 
 Jeśli któryś krok się nie powiedzie — **napraw KOD**. NIGDY nie osłabiaj testów ani RLS.
 

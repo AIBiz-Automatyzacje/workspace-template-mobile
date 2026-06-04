@@ -73,7 +73,7 @@ Po napisaniu kodu uruchom kolejno:
 3. `bunx eslint <plik>`
 4. `bunx expo-doctor` (jeśli IU dotyka deps lub native config)
 
-**NIE odpalaj `eas build`** — to kosztuje czas i $$. Pełny build robi się ręcznie przed releasem, nie w fazie implementacji.
+**Bez `eas build` (zbyt kosztowne)** — pełny build robi się ręcznie przed releasem, nie w fazie implementacji. Lekka walidacja (`tsc` + `expo-doctor`) wystarcza w 90% przypadków.
 
 Jeśli któryś krok się nie powiedzie — **napraw KOD, nie test, nie konfigurację lintera**. NIE oznaczaj IU jako completed dopóki wszystkie cztery nie przechodzą.
 

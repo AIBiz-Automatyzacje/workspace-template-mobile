@@ -24,6 +24,7 @@ Ten skill nie implementuje kodu. Eksploruje, doprecyzowuje i dokumentuje decyzje
 4. **Nie wkładaj implementacji do requirements doc** — nie umieszczaj bibliotek, schematów, endpointów, layoutów plików ani designu kodu, chyba że brainstorm dotyczy decyzji technicznej/architektonicznej.
 5. **Dopasuj artefakt do potrzeb** — prosta praca dostaje kompaktowy doc lub krótkie potwierdzenie. Większa praca dostaje pełniejszy dokument. Nie dodawaj ceremoniału, który nie pomaga planowaniu.
 6. **YAGNI na koszt utrzymania, nie na wysiłek kodowania** — preferuj najprostsze podejście dające realną wartość. Unikaj spekulacyjnej złożoności, ale nie odrzucaj taniego polishu, który łatwo utrzymać.
+7. **Weryfikuj, zanim stwierdzisz** — nie twierdź, że czegoś brakuje, że coś jest zduplikowane lub że dany wzorzec już istnieje, bez sprawdzenia w kodzie. Niezweryfikowane założenie zgłoś jako pytanie, nie jako fakt.
 
 ## Zasady interakcji
 
@@ -112,6 +113,16 @@ Przed generowaniem podejść, zakwestionuj request żeby wyłapać błędne uję
 **Głęboka** — pytania standardowe plus:
 - Jaką trwałą zdolność to powinno stworzyć w ciągu 6-12 miesięcy?
 - Czy to przesuwa produkt w tym kierunku, czy to tylko lokalny plaster?
+
+**Soczewki luk (named lenses) — dla Standardowej i Głębokiej:** przepuść request przez pięć soczewek, każdą jako osobny, otwarty probe (nie pytanie zamknięte). Każda celuje w inny typ słabości w ujęciu problemu:
+
+- **evidence (dowód)** — jaki konkretny dowód mamy, że ten problem jest realny? Czy to obserwacja, czy założenie?
+- **specificity (konkretność)** — czy problem jest dość konkretny, żeby dało się poznać, że został rozwiązany? Ogólnikowe ujęcie = czerwona flaga.
+- **counterfactual (kontrfakt)** — co dokładnie się stanie, jeśli nie zrobimy nic? Jeśli odpowiedź brzmi „niewiele" — przemyśl priorytet.
+- **attachment (przywiązanie)** — czy jesteśmy przywiązani do konkretnego rozwiązania, zamiast do problemu? Nazwij rozwiązanie, którego bronimy bez dowodu.
+- **durability (trwałość)** — czy to tworzy trwałą wartość, czy chwilowy plaster, który wróci jako dług?
+
+Użyj wyniku do wyostrzenia rozmowy, nie do narzucenia werdyktu.
 
 #### 1.3 Dialog
 

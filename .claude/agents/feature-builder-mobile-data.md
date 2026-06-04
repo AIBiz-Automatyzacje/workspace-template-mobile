@@ -72,6 +72,8 @@ Po napisaniu kodu uruchom kolejno:
 5. Migracja stosuje się czysto na świeżej bazie (jeśli dotyczy) — `supabase db reset` lub odpowiednik z package.json
 6. RLS policies blokują nieautoryzowany dostęp (test fixture: anon user nie widzi cudzych rekordów)
 
+**Bez `eas build` (zbyt kosztowne)** — pełny build robi się ręcznie przed releasem, nie w fazie implementacji.
+
 Jeśli któryś krok się nie powiedzie — **napraw KOD, nie test, nie politykę bezpieczeństwa**. NIGDY nie osłabiaj RLS żeby test przeszedł.
 
 ### 5. Raport

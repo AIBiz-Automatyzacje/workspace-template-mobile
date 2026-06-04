@@ -1,9 +1,9 @@
 export const meta = {
   name: 'dev-docs-review-wf',
-  description: 'Code review fazy: 5 reviewerow rownolegle (security/perf/architektura/test/E2E) -> dedup -> adversarial verify kazdego P1/P2 (sceptycy obalaja) -> scribe zapisuje raport + bookkeeping checkboxow Weryfikacja: -> severity gate.',
+  description: 'Code review fazy: 6 reviewerow rownolegle (security/perf/architektura/typescript/spec-compliance/test/E2E) -> dedup -> adversarial verify kazdego P1/P2 (sceptycy obalaja) -> scribe zapisuje raport + bookkeeping checkboxow Weryfikacja: -> severity gate.',
   whenToUse: 'Review jednej fazy. Wolany przez dev-autopilot lub standalone z args {sciezka, faza}.',
   phases: [
-    { title: 'Review', detail: '5 reviewerow rownolegle' },
+    { title: 'Review', detail: '6 reviewerow rownolegle (w tym spec-compliance: zgodnosc ze spec/planem)' },
     { title: 'Verify', detail: 'adversarial verify per finding P1/P2' },
     { title: 'Zapis', detail: 'raport + bookkeeping + severity gate' },
   ],
@@ -88,6 +88,7 @@ const REVIEWERZY = [
   { key: 'performance', agentType: 'performance-oracle', fokus: 'N+1 queries, bundle size, lazy loading, memoization, useEffect cleanup' },
   { key: 'architecture', agentType: 'architecture-strategist', fokus: 'SOLID, wzorce, nazewnictwo, import organization, granice warstw' },
   { key: 'typescript', agentType: 'kieran-typescript-reviewer', fokus: 'type safety, brak any/as/!, discriminated unions, explicit return types' },
+  { key: 'spec-compliance', agentType: 'spec-flow-analyzer', fokus: 'zgodnosc implementacji ze spec/planem IU: (a) wymagania ze spec/IU BRAKUJACE lub czesciowo zaimplementowane (under-implementation), (b) zachowanie w diffie o ktore nikt nie prosil (scope creep / over-implementation), (c) wymagania pozornie zaimplementowane ale BLEDNIE. Cytuj linie spec/IU (ID wymagania lub nazwa IU). Jesli brak spec ani planu — zwroc pusta liste findingow' },
 ]
 
 // Blok doklejany w trybie re-review (po cyklu fix) — targetowana weryfikacja zamiast pelnego re-skanu.
@@ -107,7 +108,7 @@ Cel: zweryfikowac skutecznosc napraw, nie wygenerowac nowa liste.`
 
 function reviewerPrompt(sciezka, faza, fokus, poprzednie) {
   return `Jestes reviewerem fazy ${faza} w folderze ${sciezka}.
-Przeczytaj zmiany git tej fazy + plan techniczny w docs/plans/ (Files:, Test scenarios:, Patterns to follow:).
+Przeczytaj zmiany git tej fazy (diff) + requirements doc (docs/dev-brainstorms/*-requirements.md jesli istnieje) + plan techniczny / Implementation Unit fazy ${faza} w docs/plans/ (Files:, Test scenarios:, Patterns to follow:).
 Skup sie na: ${fokus}.
 Sklasyfikuj kazdy finding: P1 (blocking), P2 (important), P3 (nit) oraz typ: KOD / TEST / E2E / OPERATOR.
 Zwroc obiekt {findings:[...]} zgodny ze schematem. Sam nie zapisuj plikow.${rereviewBlok(poprzednie)}`
@@ -179,7 +180,7 @@ const poprzKod = poprzednie.filter((f) => f.typ === 'KOD')
 const poprzTest = poprzednie.filter((f) => f.typ === 'TEST')
 const poprzE2e = poprzednie.filter((f) => f.typ === 'E2E' || f.typ === 'OPERATOR')
 
-// Faza 1: 5 reviewerow rownolegle (bariera — potrzebujemy kompletu do dedup)
+// Faza 1: 6 reviewerow rownolegle (bariera — potrzebujemy kompletu do dedup)
 phase('Review')
 const thunki = REVIEWERZY.map((r) => () =>
   agent(reviewerPrompt(sciezka, faza, r.fokus, poprzKod), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })

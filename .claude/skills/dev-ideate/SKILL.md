@@ -142,7 +142,7 @@ Postepuj dokladnie wedlug tego mechanizmu:
    - instrukcje generowania surowych kandydatow, nie krytyki
 8. Przypisz kazdemu sub-agentowi inny frame ideacji jako **bias startowy, nie ograniczenie**. Instruuj kazdego agenta, zeby zaczynal ze swojej perspektywy ale podazal za kazdym obiecujacym watek gdziekolwiek prowadzi — pomysly cross-cutting obejmujace wiele frame'ow sa cenne, nie poza scope'm.
 
-   **4 frame'y ideacji (dostosowane do stacku React/TypeScript/Supabase/Tailwind/Vite):**
+   **6 frame'ów ideacji** — 4 techniczne dostosowane do stacku React/TypeScript/Supabase/Tailwind/Vite + 2 kreatywne. Frame to bias startowy, nie ograniczenie; przy domyślnych 4 agentach rozdziel frame'y tak, by oba kreatywne (5-6) były reprezentowane jako biasy obok technicznych:
 
    1. **Tech Debt Scout** — szuka:
       - typy `any` w TypeScript
@@ -176,6 +176,16 @@ Postepuj dokladnie wedlug tego mechanizmu:
       - brakujace feature'y wzgledem konkurencji
       - mozliwosci automatyzacji (cron joby, triggery Supabase)
       - brak internacjonalizacji (i18n)
+
+   5. **Cross-Domain Analyst** — przenosi wzorce z niepowiązanych dziedzin:
+      - jak inne branże lub systemy rozwiązują analogiczny problem (gry, finanse, logistyka, biologia, infrastruktura)
+      - notuj analogię tylko gdy podobieństwo strukturalne się trzyma (te same ograniczenia, te same tryby awarii), nie gdy zgadza się samo słownictwo
+      - pytanie wiodące: „kto na świecie rozwiązał to lepiej i co z tego da się przenieść?"
+
+   6. **Constraint Flipper** — kwestionuje przyjęte ograniczenia:
+      - co gdyby odwrócić założenie uznawane za stałe (koszt, kolejność kroków, kto coś robi, czy w ogóle to robić)
+      - usuń ograniczenie i sprawdź, jaki lepszy projekt staje się możliwy
+      - pytanie wiodące: „które »tak musi być« jest naprawdę wyborem, nie prawem?"
 
 9. Popros kazdego sub-agenta o zwrocenie ustandaryzowanej struktury dla kazdego pomyslu:
    - title
