@@ -5,6 +5,7 @@ skills:
   - expo-overview
   - expo-building-native-ui
   - expo-tailwind-setup
+  - ux-ui-guidelines-mobile
   - expo-native-data-fetching
   - supabase-dev-guidelines
   - security
