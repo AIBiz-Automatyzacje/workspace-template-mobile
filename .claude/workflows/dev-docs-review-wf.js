@@ -1,10 +1,10 @@
 export const meta = {
   name: 'dev-docs-review-wf',
-  description: 'Code review fazy: 6 reviewerow rownolegle (security/perf/architektura/typescript/spec-compliance/test/E2E) -> dedup -> adversarial verify kazdego P1/P2 (sceptycy obalaja) -> scribe zapisuje raport + bookkeeping checkboxow Weryfikacja: -> severity gate.',
+  description: 'Code review fazy: context-packager (mapa zmian raz) -> 7 reviewerow rownolegle (security/perf/architektura/typescript/spec-compliance/test/E2E) -> dedup -> adversarial verify P1/P2 (P1=3 sceptykow, P2=1) -> scribe zapisuje raport + bookkeeping checkboxow Weryfikacja: -> severity gate.',
   whenToUse: 'Review jednej fazy. Wolany przez dev-autopilot lub standalone z args {sciezka, faza}.',
   phases: [
-    { title: 'Review', detail: '6 reviewerow rownolegle (w tym spec-compliance: zgodnosc ze spec/planem)' },
-    { title: 'Verify', detail: 'adversarial verify per finding P1/P2' },
+    { title: 'Review', detail: 'context-packager + 7 reviewerow rownolegle (w tym spec-compliance: zgodnosc ze spec/planem)' },
+    { title: 'Verify', detail: 'adversarial verify per finding (P1=3 sceptykow, P2=1)' },
     { title: 'Zapis', detail: 'raport + bookkeeping + severity gate' },
   ],
 }
@@ -81,6 +81,28 @@ const REVIEW_RESULT = {
   required: ['fazaNumer', 'findings', 'liczniki', 'severityGate', 'raportSciezka'],
 }
 
+// Poprawka 9: wspolna mapa zmian zbudowana RAZ zamiast 7x niezaleznie przez kazdego reviewera.
+const KONTEKST = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    diffStat: { type: 'string', description: 'git diff --stat fazy (lub "brak zmian")' },
+    pliki: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          plik: { type: 'string' },
+          czegoDotyczy: { type: 'string', description: 'jednolinijkowe co zmieniono w pliku' },
+        },
+        required: ['plik', 'czegoDotyczy'],
+      },
+    },
+  },
+  required: ['pliki'],
+}
+
 // ── Reviewerzy (leaf-agenci przez agentType) ───────────────────────────────
 
 const REVIEWERZY = [
@@ -106,26 +128,51 @@ Twoje zadanie:
 Cel: zweryfikowac skutecznosc napraw, nie wygenerowac nowa liste.`
 }
 
-function reviewerPrompt(sciezka, faza, fokus, poprzednie) {
+// Wspolna mapa zmian doklejana do promptu reviewera — punkt startu zamiast wlasnego "co sie zmienilo".
+function mapaBlok(kontekst) {
+  if (!kontekst || !kontekst.pliki || !kontekst.pliki.length) return ''
+  const lista = kontekst.pliki.map((p) => `- ${p.plik} — ${p.czegoDotyczy}`).join('\n')
+  return `
+
+=== MAPA ZMIAN FAZY (wspolna, zbudowana raz) ===
+${kontekst.diffStat || ''}
+${lista}
+Uzyj jej jako punktu startu. Read tylko pliki istotne dla Twojego fokusu — pelna wiernosc, NIE polegaj wylacznie na mapie.`
+}
+
+function kontekstPrompt(sciezka, faza) {
+  return `Jestes context-packagerem review fazy ${faza} (${sciezka}). Zbuduj WSPOLNA mape zmian dla reviewerow,
+zeby kazdy z nich nie musial od zera ustalac co sie zmienilo (dotad 7x ten sam git diff).
+
+1. Ustal zakres zmian fazy ${faza}: \`git diff --stat\` zmian tej fazy. Jesli faza ma osobne commity — diff od bazy fazy;
+   jak nie da sie wyodrebnic — uzyj diff vs main/origin/main.
+2. Dla kazdego zmienionego pliku podaj jednolinijkowe "czego dotyczy" (np. "nowy hook useLobbyData — fetch + realtime").
+Nie oceniaj jakosci, nie zglaszaj findingow. Zwroc obiekt {diffStat, pliki[]}.`
+}
+
+function reviewerPrompt(sciezka, faza, fokus, poprzednie, kontekst) {
   return `Jestes reviewerem fazy ${faza} w folderze ${sciezka}.
 Przeczytaj zmiany git tej fazy (diff) + requirements doc (docs/dev-brainstorms/*-requirements.md jesli istnieje) + plan techniczny / Implementation Unit fazy ${faza} w docs/plans/ (Files:, Test scenarios:, Patterns to follow:).
 Skup sie na: ${fokus}.
 Sklasyfikuj kazdy finding: P1 (blocking), P2 (important), P3 (nit) oraz typ: KOD / TEST / E2E / OPERATOR.
-Zwroc obiekt {findings:[...]} zgodny ze schematem. Sam nie zapisuj plikow.${rereviewBlok(poprzednie)}`
+Zwroc obiekt {findings:[...]} zgodny ze schematem. Sam nie zapisuj plikow.${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
 }
 
-function testCoveragePrompt(sciezka, faza, poprzednie) {
+function testCoveragePrompt(sciezka, faza, poprzednie, kontekst) {
   return `Jestes testerem scenariuszy/coverage dla fazy ${faza} w ${sciezka}.
 Sprawdz: happy path, invalid inputs, boundary conditions, concurrent operations, scale.
 Test coverage: czy plan techniczny (docs/plans/) definiowal scenariusze testowe dla tej fazy i czy pliki testowe
 istnieja oraz maja asercje? Brakujace testy = P2 (typ TEST).
-Zwroc {findings:[...]} (severity P1/P2/P3, typ KOD/TEST/E2E/OPERATOR). Nie zapisuj plikow.${rereviewBlok(poprzednie)}`
+Zwroc {findings:[...]} (severity P1/P2/P3, typ KOD/TEST/E2E/OPERATOR). Nie zapisuj plikow.${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
 }
 
 function e2ePrompt(sciezka, faza, poprzednie) {
   return `Jestes testerem E2E mobile (Maestro) dla fazy ${faza} w ${sciezka}.
 Zbierz niezaznaczone checkboxy "Weryfikacja:" tej fazy dotyczace scenariuszy mobile
 (launchApp, tapOn, assertVisible, takeScreenshot, deep linking, oznaczenie 📱). Pomin CLI i Manual.
+
+BRAMKA (Poprawka 10) — najpierw policz te mobilne checkboxy. Jesli jest ICH ZERO -> zwroc OD RAZU {findings:[]},
+POMIN preflight (simctl/adb/curl) i Maestro. Nie odpalaj srodowiska gdy nie ma czego testowac.
 
 NAJPIERW preflight srodowiska (Bash): czy jest booted emulator (xcrun simctl booted / adb devices)
 i czy Metro UP (curl localhost:8081/status). Potem proba Maestro przez skill mobile-e2e-maestro.
@@ -180,12 +227,15 @@ const poprzKod = poprzednie.filter((f) => f.typ === 'KOD')
 const poprzTest = poprzednie.filter((f) => f.typ === 'TEST')
 const poprzE2e = poprzednie.filter((f) => f.typ === 'E2E' || f.typ === 'OPERATOR')
 
-// Faza 1: 6 reviewerow rownolegle (bariera — potrzebujemy kompletu do dedup)
+// Faza 1: context-packager RAZ (mapa zmian), potem reviewerzy rownolegle (bariera — potrzebujemy kompletu do dedup)
 phase('Review')
+// Poprawka 9: zbuduj diff/mape raz; reviewerzy dostaja ja inline zamiast kazdy odkrywac zmiany od zera.
+// Null (agent skipniety/blad) -> reviewerzy robia wlasna dyskryminacje jak dotad (fallback w mapaBlok).
+const kontekst = await agent(kontekstPrompt(sciezka, faza), { schema: KONTEKST, label: 'kontekst:diff', phase: 'Review' })
 const thunki = REVIEWERZY.map((r) => () =>
-  agent(reviewerPrompt(sciezka, faza, r.fokus, poprzKod), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })
+  agent(reviewerPrompt(sciezka, faza, r.fokus, poprzKod, kontekst), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })
 )
-thunki.push(() => agent(testCoveragePrompt(sciezka, faza, poprzTest), { schema: FINDINGS, label: 'review:test-coverage', phase: 'Review' }))
+thunki.push(() => agent(testCoveragePrompt(sciezka, faza, poprzTest, kontekst), { schema: FINDINGS, label: 'review:test-coverage', phase: 'Review' }))
 thunki.push(() => agent(e2ePrompt(sciezka, faza, poprzE2e), { schema: FINDINGS, agentType: 'feature-tester-mobile-e2e', label: 'review:e2e', phase: 'Review' }))
 
 const wyniki = await parallel(thunki)
@@ -206,10 +256,14 @@ phase('Verify')
 const doWeryfikacji = dedup.filter((f) => f.severity === 'P1' || f.severity === 'P2')
 const nity = dedup.filter((f) => f.severity === 'P3')
 
+// Poprawka 8: P1 (blocking) -> 3 sceptykow (konsensus 2/3). P2 (important) -> 1 sceptyk.
+// Verify bylo 55% calego runu (dane wf_ed163076: 114/208 agentow). 3x na kazdy P2 to nadmiar —
+// P2 nie blokuje merge'a, wystarczy jeden glos czy realny.
+const liczbaSceptykow = (f) => (f.severity === 'P1' ? 3 : 1)
 const zweryfikowane = await parallel(
   doWeryfikacji.map((f) => () =>
     parallel(
-      [0, 1, 2].map((i) => () =>
+      Array.from({ length: liczbaSceptykow(f) }, (_, i) => () =>
         agent(
           `Adwersaryjnie OBAL ten finding z review fazy ${faza} (${sciezka}). Domyslnie zakladaj ze finding jest NIEREALNY, chyba ze masz twardy dowod z kodu.\nFinding [${f.severity}/${f.typ}] ${f.plik}: ${f.opis}\nSprawdz kod. Czy to prawdziwy problem czy false positive? Zwroc werdykt.`,
           { schema: VERDICT, label: `verify:${f.plik}:${i}`, phase: 'Verify' }

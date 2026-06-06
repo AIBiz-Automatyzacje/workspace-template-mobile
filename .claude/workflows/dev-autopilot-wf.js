@@ -1,6 +1,6 @@
 export const meta = {
   name: 'dev-autopilot-wf',
-  description: 'Autonomiczny pipeline: bootstrap -> per faza (execute -> review -> adversarial verify -> fix) -> complete -> compound. Orkiestrator trzyma plan w kodzie; buildery i reviewerzy to leaf-agenci.',
+  description: 'Autonomiczny pipeline: bootstrap -> per faza (execute -> review+verify -> fix, bez re-review) -> complete -> compound. Orkiestrator trzyma plan w kodzie; buildery i reviewerzy to leaf-agenci.',
   whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch).',
   phases: [
     { title: 'Bootstrap', detail: 'parse plan + zadania -> PlanState, resume z checkboxow' },
@@ -9,9 +9,9 @@ export const meta = {
 }
 
 // ── Konfiguracja ──────────────────────────────────────────────────────────
-// Poprawka 2: 1 cykl. Dane z runu wf_3c9d3864 pokazaly ze 2. cykl fix naprawial 0
-// we wszystkich 3 fazach, a kosztowal pelny re-review. Po 1 nieudanym fixie -> graceful/STOP.
-const MAX_FIX_CYKLI = 1
+// Poprawka 11: re-review po fixie USUNIETY (decyzja usera). Flow: execute -> review -> fix -> koniec.
+// Jeden przebieg fix, bez ponownego review. Gate liczony z self-reportu fixa (nierozwiazaneP1/P2 + walidacja).
+// Dane z wf_3c9d3864: nawet 2. cykl fix naprawial 0 -> re-review tym bardziej byl czystym pomiarem.
 
 // ── Schematy (tylko te, ktorych orkiestrator uzywa bezposrednio) ──────────
 // ExecuteResult / ReviewResult sa walidowane wewnatrz pod-workflowow i wracaja
@@ -69,8 +69,11 @@ const FIX_RESULT = {
     walidacja: { type: 'string', enum: ['PASS', 'FAIL'] },
     commity: { type: 'array', items: { type: 'string' } },
     nienaprawione: { type: 'array', items: { type: 'string' } },
+    // Bez re-review: orkiestrator gate'uje z tych pol. nierozwiazaneP1>0 lub walidacja FAIL -> STOP.
+    nierozwiazaneP1: { type: 'integer', description: 'P1 ktorych fix NIE zamknal (krytyczne -> STOP)' },
+    nierozwiazaneP2: { type: 'integer', description: 'P2 przeniesione do known-issues (graceful)' },
   },
-  required: ['naprawione', 'pozostaje', 'walidacja'],
+  required: ['naprawione', 'pozostaje', 'walidacja', 'nierozwiazaneP1', 'nierozwiazaneP2'],
 }
 
 const VALIDATION_RESULT = {
@@ -112,12 +115,13 @@ nazwaZadania = ostatni segment sciezki ${sciezka}.
 Zwroc obiekt zgodny ze schematem. Nie modyfikuj zadnych plikow — to read-only bootstrap.`
 }
 
-function fixPrompt(sciezka, numerFazy, cykl, maxCykli) {
-  return `Jestes czescia pipeline'u dev-autopilot. Naprawiasz problemy z review.
+function fixPrompt(sciezka, numerFazy) {
+  return `Jestes czescia pipeline'u dev-autopilot. Naprawiasz problemy z review fazy ${numerFazy}.
+WAZNE: to JEDYNY przebieg fix tej fazy — po nim NIE ma ponownego review. Twoj raport jest
+OSTATECZNYM zrodlem prawdy o stanie findingow, wiec klasyfikuj uczciwie czego nie zamknales.
 
 Folder zadania: ${sciezka}
 Numer fazy: ${numerFazy}
-Cykl naprawy: ${cykl} z ${maxCykli}
 
 Przeczytaj ${sciezka}/*-zadania.md sekcje "Do poprawy po review fazy ${numerFazy}"
 oraz ${sciezka}/review-faza-${numerFazy}.md dla pelnego kontekstu kazdego findingu.
@@ -133,31 +137,17 @@ KLASYFIKUJ kazdy finding przed naprawa:
 
 Kolejnosc: A (kod) -> B (testy) -> C (E2E). Po naprawach: pelna walidacja
 (typecheck, test, expo-doctor — komendy z package.json; NIE eas build), commit
-\`fix([nazwa]): poprawki po review fazy ${numerFazy} (cykl ${cykl})\`, staguj tylko zmienione pliki.
+\`fix([nazwa]): poprawki po review fazy ${numerFazy}\`, staguj tylko zmienione pliki.
 
-Dzialaj autonomicznie, nie pytaj usera. Zwroc obiekt zgodny ze schematem FixResult.`
-}
+KNOWN-ISSUES (graceful — bez osobnego agenta): jesli ZOSTAJA P2 ktorych NIE udalo sie naprawic
+(a zero nierozwiazanych P1), zapisz je do ${sciezka}/known-issues.md. Dedup: jesli sekcja
+"## Faza ${numerFazy}" juz istnieje — ZASTAP jej cala tresc (od naglowka do nastepnego "## " lub konca pliku),
+NIE dopisuj duplikatu. Format: "## Faza ${numerFazy}\\nPozostaje N problemow P2 po fixie. Review: review-faza-${numerFazy}.md\\n- 🟠 [P2] plik — opis".
+Po zapisie upewnij sie ze jest DOKLADNIE jeden naglowek "## Faza ${numerFazy}".
 
-function gracefulP2Prompt(sciezka, numerFazy, review) {
-  const lista = review.findings
-    .filter((f) => f.severity === 'P2')
-    .map((f) => `- 🟠 [P2] ${f.plik || '?'} — ${f.opis}`)
-    .join('\n')
-  return `Wyczerpano ${MAX_FIX_CYKLI} cykli napraw fazy ${numerFazy}, zostaja same P2 (zero P1).
-Severity gate dla samych P2 = "KONTYNUUJ Z ZASTRZEZENIAMI".
-
-Zaktualizuj ${sciezka}/known-issues.md. WAZNE (Poprawka 6): jesli sekcja "## Faza ${numerFazy}"
-juz istnieje w pliku — ZASTAP jej calа tresc (od naglowka "## Faza ${numerFazy}" do nastepnego "## " lub konca pliku),
-NIE dopisuj duplikatu naglowka. Jesli nie istnieje — dodaj na koncu. Docelowa tresc sekcji:
-
-## Faza ${numerFazy}
-Wyczerpano ${MAX_FIX_CYKLI} cykl(e) napraw. Pozostaje ${review.liczniki.p2} problemow P2.
-Review: review-faza-${numerFazy}.md
-
-${lista}
-
-Po zapisie zweryfikuj ze w pliku jest DOKLADNIE jeden naglowek "## Faza ${numerFazy}".
-Nie ruszaj kodu — tylko zapisz known-issues. Zwroc sciezke do pliku.`
+Dzialaj autonomicznie, nie pytaj usera. Zwroc obiekt FixResult — KRYTYCZNE pola (orkiestrator gate'uje z nich,
+bez re-review): nierozwiazaneP1 (P1 ktorych NIE zamknales -> orkiestrator zrobi STOP),
+nierozwiazaneP2 (P2 przeniesione do known-issues), walidacja (PASS/FAIL pelnej walidacji).`
 }
 
 function finalValidationPrompt(sciezka) {
@@ -185,6 +175,10 @@ if (!sciezka) {
   return { status: 'STOP', powod: 'brak sciezki zadania (podaj args: "docs/active/<zadanie>")' }
 }
 
+// Pomiar kosztu per faza -> log, zeby nastepny run byl mierzalny (transkrypty agentow nie przezywaja,
+// zostaje tylko TUI/log). budget.spent() = tokeny wyjsciowe runu; guard na konteksty bez budgetu.
+const tokSpent = () => (typeof budget !== 'undefined' && budget && budget.spent ? budget.spent() : 0)
+
 phase('Bootstrap')
 const stan = await agent(bootstrapPrompt(sciezka), { schema: PLAN_STATE, label: 'bootstrap' })
 
@@ -200,10 +194,12 @@ log(`Autopilot: ${stan.nazwaZadania} — fazy do wykonania: ${stan.kolejka.join(
 
 const historia = {}
 const raporty = []
+const tokRunStart = tokSpent()
 
 for (const numerFazy of stan.kolejka) {
   const faza = stan.fazy.find((f) => f.numer === numerFazy)
   phase(`Faza ${numerFazy}`)
+  const tokFazaStart = tokSpent()
 
   // Resume: faza ukonczona z nierozwiazanymi P1/P2 -> zacznij od fix, pomijajac execute (naprawia Bug 1).
   const rozpocznijOdFix = faza.ukonczona && faza.reviewIstnieje && faza.maNierozwiazaneP1P2
@@ -216,42 +212,46 @@ for (const numerFazy of stan.kolejka) {
     log(`Faza ${numerFazy}: Execute OK (${exec.iu.length} IU)`)
   }
 
-  // Petla Review -> (adversarial verify w pod-workflowie) -> Fix
-  let fixCykl = 0
-  let lastReview = null
-  let poprzednieFindingi = null // null = swiezy review; lista = re-review (Poprawka 1)
-  while (true) {
-    const review = await workflow('dev-docs-review-wf', { sciezka, faza: numerFazy, poprzednieFindingi })
-    lastReview = review
-    const { p1, p2 } = review.liczniki
-    const operator = review.liczniki.operator || 0
-    log(`Review fazy ${numerFazy}: P1=${p1} P2=${p2} P3=${review.liczniki.p3} OPERATOR=${operator} (gate: ${review.severityGate})`)
+  // Liniowo: review (pelny pod-workflow: packager + 7 reviewerow + verify) -> fix -> koniec fazy.
+  // Re-review po fixie USUNIETY (Poprawka 11). Gate liczony z self-reportu fixa.
+  // KOSZT/RYZYKO: zamkniecie findingow nie jest niezaleznie weryfikowane — ufamy raportowi fixa.
+  // Mitygacja: walidacja koncowa na Zakonczeniu nadal lapie regresje typecheck/test/lint/expo-doctor.
+  const review = await workflow('dev-docs-review-wf', { sciezka, faza: numerFazy, poprzednieFindingi: null })
+  const { p1, p2 } = review.liczniki
+  const operator = review.liczniki.operator || 0
+  log(`Review fazy ${numerFazy}: P1=${p1} P2=${p2} P3=${review.liczniki.p3} OPERATOR=${operator} (gate: ${review.severityGate})`)
 
-    if (p1 === 0 && p2 === 0) break // czyste / same P3 / same OPERATOR (te nie blokuja — ida do operator-checklist)
+  let gateFazy = review.severityGate
+  let cykle = 0
 
-    if (fixCykl >= MAX_FIX_CYKLI) {
-      if (p1 > 0) {
-        return { status: 'STOP', powod: `Faza ${numerFazy}: ${p1}x P1 po ${MAX_FIX_CYKLI} cyklach — wymagana reczna interwencja`, faza: numerFazy, review, raporty }
+  if (p1 > 0 || p2 > 0) {
+    const fix = await agent(fixPrompt(sciezka, numerFazy), { schema: FIX_RESULT, label: `fix:faza-${numerFazy}` })
+    cykle = 1
+    log(`Fix fazy ${numerFazy}: naprawiono ${fix.naprawione}, nierozwiazane P1=${fix.nierozwiazaneP1} P2=${fix.nierozwiazaneP2}, walidacja ${fix.walidacja}`)
+
+    if (fix.walidacja === 'FAIL' || fix.nierozwiazaneP1 > 0) {
+      return {
+        status: 'STOP',
+        powod: fix.nierozwiazaneP1 > 0
+          ? `Faza ${numerFazy}: ${fix.nierozwiazaneP1}x P1 nierozwiazane po fixie (brak re-review) — wymagana reczna interwencja`
+          : `Faza ${numerFazy}: walidacja fixa FAIL — wymagana reczna interwencja`,
+        faza: numerFazy, review, fix, raporty,
       }
-      // Same P2 -> graceful continuation
-      await agent(gracefulP2Prompt(sciezka, numerFazy, review), { label: `graceful-p2:faza-${numerFazy}` })
-      historia[numerFazy] = `${MAX_FIX_CYKLI} (graceful P2)`
-      log(`Faza ${numerFazy}: GRACEFUL — ${p2}x P2 do known-issues, kontynuuje`)
-      break
     }
 
-    const fix = await agent(fixPrompt(sciezka, numerFazy, fixCykl + 1, MAX_FIX_CYKLI), {
-      schema: FIX_RESULT,
-      label: `fix:faza-${numerFazy}-cykl-${fixCykl + 1}`,
-    })
-    fixCykl++
-    // Re-review weryfikuje TYLKO te findingi (P1/P2 typu KOD/TEST/E2E), nie skanuje fazy od zera.
-    poprzednieFindingi = review.findings.filter((f) => (f.severity === 'P1' || f.severity === 'P2') && f.typ !== 'OPERATOR')
-    log(`Fix fazy ${numerFazy} cykl ${fixCykl}: naprawiono ${fix.naprawione}, pozostaje ${fix.pozostaje}, walidacja ${fix.walidacja}`)
+    if (fix.nierozwiazaneP2 > 0) {
+      gateFazy = 'ZASTRZEZENIA'
+      cykle = '1 (graceful P2)'
+      log(`Faza ${numerFazy}: GRACEFUL — ${fix.nierozwiazaneP2}x P2 do known-issues, kontynuuje`)
+    } else {
+      gateFazy = 'CZYSTE'
+    }
   }
 
-  if (!(numerFazy in historia)) historia[numerFazy] = fixCykl
-  raporty.push({ faza: numerFazy, gate: lastReview && lastReview.severityGate, cykle: historia[numerFazy] })
+  historia[numerFazy] = cykle
+  const tokFazy = Math.round((tokSpent() - tokFazaStart) / 1000)
+  log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}, ~${tokFazy}k tokenow`)
+  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: `${tokFazy}k` })
 }
 
 // ── Zakonczenie ──────────────────────────────────────────────────────────
@@ -265,10 +265,14 @@ if (walidacja.wynik === 'FAIL') {
 const complete = await workflow('dev-docs-complete-wf', { nazwaZadania: stan.nazwaZadania })
 const compound = await workflow('dev-compound-wf', { sciezka })
 
+const tokRazem = Math.round((tokSpent() - tokRunStart) / 1000)
+log(`Autopilot koniec: ${stan.kolejka.length} faz, ~${tokRazem}k tokenow lacznie`)
+
 return {
   status: 'OK',
   nazwaZadania: stan.nazwaZadania,
   fazyUkonczone: stan.kolejka.length,
+  tokeny: `${tokRazem}k`,
   historia,
   raporty,
   walidacja,
