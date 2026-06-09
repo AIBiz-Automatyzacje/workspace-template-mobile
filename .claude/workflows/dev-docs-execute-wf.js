@@ -9,6 +9,31 @@ export const meta = {
   ],
 }
 
+// Kopia stalej z dev-autopilot-wf.js (workflowy sa self-contained — przy zmianie synchronizuj recznie).
+// Doklejana W JS do prompta KAZDEGO buildera i domkniecia — nie polegamy na tym, ze planner ja przekopiuje.
+const BLOK_DLUGIE_KOMENDY = `
+=== DLUGIE KOMENDY (przeczytaj ZANIM uruchomisz testy/buildy — prawa srodowiska, nie sugestie) ===
+(1) Runtime zabija subagenta po ~180s bez zadnego outputu ("agent stalled"); po 6 killach pada CALY run.
+(2) Pojedyncze foreground Bash ma limit 600s (domyslnie 120s) — dluzszej komendy NIE dokonczysz.
+(3) Zimny vitest na komponentach RN (cache node_modules/.vite po inwalidacji) trwa do ~16 min i przez
+    caly czas MILCZY — cisza to faza transform PRZED pierwszym outputem reportera; zaden reporter nie pomaga.
+REGULY:
+- Komenda mogaca trwac >100s (vitest po zmianie zaleznosci/configu, pelny suite, build): uruchom przez
+  Bash z run_in_background i przekierowaniem do pliku logu, potem POLLUJ krotkim Bash co ~45-60s
+  (tail loga / sprawdzenie procesu) az do zakonczenia. Kazda sonda = znak zycia dla watchdoga.
+- NIGDY nie podnos timeoutu foreground zamiast isc w tlo — 180s ciszy zabija CIEBIE, nie komende.
+- Po zmianie package.json / lockfile / vitest.config przez kogokolwiek w tym runie: pierwszy vitest
+  traktuj jako ZIMNY (pelna procedura tla powyzej).
+- vitest uruchamiaj z --reporter=dot: strumieniowany stdout W TRAKCIE foreground Bash resetuje watchdog
+  (zweryfikowane empirycznie probe 2026-06-09), wiec chroni WARM suite'y w oknie 180-600s.
+  NIE chroni: zimnego cache (transform milczy do konca) ani komend >600s (twardy limit Bash).
+- FLAKE INFRA: gdy pelny suite zglosi na pliku blad infrastruktury workera ([vitest-worker]: Timeout
+  calling "fetch", "Timeout calling", worker terminated, ENOMEM, heap out of memory) — re-runuj TEN plik
+  w izolacji (procedura OSOBNO dla kazdego takiego pliku). PASS w izolacji = flake infra, NIE defekt:
+  odnotuj "flake-infra: <plik> (PASS w izolacji)" i NIE traktuj jako FAIL. FAIL w izolacji = realny defekt.
+  Po obsludze flake'ow DOKONCZ przerwany lancuch walidacji (kolejne kroki, np. expo-doctor).
+=== KONIEC BLOKU DLUGICH KOMEND ===`
+
 // ── Schematy ──────────────────────────────────────────────────────────────
 
 const IU_PLAN = {
@@ -96,8 +121,13 @@ Referencja metodologii: przeczytaj .claude/skills/dev-docs-execute/SKILL.md sekc
 1. Przeczytaj ${sciezka}/*-plan.md, ${sciezka}/*-zadania.md, ${sciezka}/*-kontekst.md.
 2. Otworz plan techniczny w docs/plans/ (referencja "Plan techniczny:"/"origin:" w pliku planu zadania).
    Zlokalizuj Implementation Units odpowiadajace fazie ${faza}.
-3. Jesli faza ${faza} jest juz ukonczona albo nie ma niezaznaczonych checkboxow (poza Weryfikacja:) -> ustaw poza=true, iu=[].
+3. Jesli faza ${faza} jest juz ukonczona albo nie ma niezaznaczonych checkboxow IMPLEMENTACYJNYCH -> ustaw poza=true, iu=[].
+   Do ukonczenia NIE licza sie (pomijaj calkowicie): checkboxy z prefiksem "Weryfikacja:", "Operator:",
+   oznaczone "[E2E]"/"[Manual]", oraz wszystkie checkboxy w sekcjach "## Do poprawy po review fazy N"
+   i "## Operator checklist faza N" (obsluguje je review/fix, nie buildery).
 4. Wybierz strategie: serial (IU zalezne / wspolne pliki) lub parallel (IU niezalezne).
+   Jesli ktorykolwiek IU dodaje nowa zaleznosc (biblioteka, config vite/vitest) — preferuj serial:
+   rownolegle zimne vitesty po inwalidacji cache duplikuja ~16-min prace i ryzykuja watchdog-kill.
 5. Dla kazdego IU zbuduj KOMPLETNY prompt builderowi:
    - caly blok IU doslownie (Cel, Wymagania, Pliki, Podejscie, Wzorce, Scenariusze testowe, Weryfikacja)
    - sciezka zadania ${sciezka} + numer IU
@@ -105,10 +135,11 @@ Referencja metodologii: przeczytaj .claude/skills/dev-docs-execute/SKILL.md sekc
      w ${sciezka}/*-kontekst.md (DESIGN.md, SPEC.md, screeny). Dla -data pomijaj.
    - NIE kopiuj "Skills in play:" — skille sa wstrzykiwane z frontmatter subagenta.
    - agentType = wartosc pola "Delegate to:" z IU.
-   Wymagania wykonania dla buildera: zaimplementuj kod dla checkboxow (oprocz "Weryfikacja:"),
-   napisz testy dla checkboxow "Test:" RAZEM z kodem, NIE wykonuj "Weryfikacja:" (to dla review).
-   Gdy builder uruchamia vitest — niech doda \`--reporter=dot\` (output strumieniowy: cold-cache
-   component-vitest milczy kilkanascie minut na stdout, a watchdog runtime zabija subagenta po ~180s ciszy).
+   DOPISZ DOSLOWNIE na koncu promptu KAZDEGO IU blok "Wymagania wykonania":
+   "Wymagania wykonania: zaimplementuj kod dla checkboxow implementacyjnych (POMIJAJ: Weryfikacja:,
+   Operator:, [E2E], [Manual] — to dla review/operatora). Testy dla checkboxow Test: pisz RAZEM z kodem.
+   Jesli dodajesz zaleznosc (bun add / expo install) — odnotuj to w odchyleniach."
+   (Regul srodowiska dot. dlugich komend NIE kopiuj — orkiestrator dokleja je automatycznie.)
 
 Zwroc obiekt zgodny ze schematem IUPlan. Sam nie implementuj kodu.`
 }
@@ -128,7 +159,8 @@ ${podsumowanieIU}
 1. System-Wide Test Check (.claude/skills/dev-docs-execute/SKILL.md sekcja 4.5): typecheck bez nowych bledow,
    istniejace testy przechodza, nowe testy pokrywaja happy path + error case, checkboxy "Test:" napisane i przechodza,
    importy nie lamia modulow, build/expo-doctor przechodzi. Komendy z package.json (NIE eas build).
-   Vitest uruchamiaj z \`--reporter=dot\` (output strumieniowy — chroni przed watchdogiem ~180s ciszy).
+   UWAGA: jesli ktorykolwiek builder raportowal dodanie zaleznosci — pierwszy vitest jest ZIMNY (procedura tla z bloku).
+${BLOK_DLUGIE_KOMENDY}
 2. Aktualizuj ${sciezka}/*-zadania.md: oznacz ukonczone checkboxy [x] (NIE ruszaj "Weryfikacja:" — to dla review).
 3. Aktualizuj ${sciezka}/*-kontekst.md: zmiany, decyzje, "Ostatnia aktualizacja".
 4. Aktualizuj plan techniczny w docs/plans/ (odznacz test scenarios / verification dla tej fazy).
@@ -154,25 +186,29 @@ if (plan.poza || plan.iu.length === 0) {
 }
 
 phase('Build')
+// BLOK doklejany deterministycznie w JS — kazdy builder dostaje prawa srodowiska niezaleznie od plannera.
+const promptIU = (iu) => `${iu.prompt}\n${BLOK_DLUGIE_KOMENDY}`
 let builds
 if (plan.strategia === 'parallel') {
   // IU niezalezne — wszystkie buildery rownolegle (bariera, czekamy na komplet)
   builds = await parallel(
     plan.iu.map((iu) => () =>
-      agent(iu.prompt, { schema: BUILD_RESULT, agentType: iu.agentType, label: `build:${iu.id}`, phase: 'Build' })
+      agent(promptIU(iu), { schema: BUILD_RESULT, agentType: iu.agentType, label: `build:${iu.id}`, phase: 'Build' })
     )
   )
 } else {
   // serial — IU zalezne / wspolne pliki, kolejnosc ma znaczenie
   builds = []
   for (const iu of plan.iu) {
-    const r = await agent(iu.prompt, { schema: BUILD_RESULT, agentType: iu.agentType, label: `build:${iu.id}`, phase: 'Build' })
+    const r = await agent(promptIU(iu), { schema: BUILD_RESULT, agentType: iu.agentType, label: `build:${iu.id}`, phase: 'Build' })
     builds.push(r)
-    if (r && r.status === 'blocked') break // STOP serii — kolejne IU moga zalezec od tego
+    // null (builder zabity/blad) traktuj jak blocked — kolejne IU moga zalezec od tego
+    if (!r || r.status === 'blocked') break
   }
 }
 
 const buildResults = builds.filter(Boolean)
+// Najpierw blocked (niesie pytanie blokera), potem guard kompletnosci.
 const zablokowany = buildResults.find((b) => b.status === 'blocked')
 if (zablokowany) {
   return {
@@ -183,6 +219,20 @@ if (zablokowany) {
     testy: 'n/a',
     odchylenia: [],
     problem: zablokowany.pytanie || `IU ${zablokowany.id} zablokowany`,
+  }
+}
+// Guard: builder zabity przez runtime znika jako null — IU nie moze zniknac bezslednie.
+if (buildResults.length !== plan.iu.length) {
+  const zwrocone = new Set(buildResults.map((b) => b.id))
+  const brakujace = plan.iu.filter((iu) => !zwrocone.has(iu.id)).map((iu) => iu.id)
+  return {
+    fazaNumer: faza,
+    status: 'partial',
+    iu: plan.iu.map((iu) => ({ id: iu.id, nazwa: iu.nazwa, status: zwrocone.has(iu.id) ? 'completed' : 'brak wyniku (kill/blad)' })),
+    commity: [],
+    testy: 'n/a',
+    odchylenia: [],
+    problem: `builder(y) bez wyniku: ${brakujace.join(', ')} — IU niewykonane lub niezweryfikowane`,
   }
 }
 

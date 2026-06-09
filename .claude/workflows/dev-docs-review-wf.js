@@ -9,6 +9,31 @@ export const meta = {
   ],
 }
 
+// Kopia stalej z dev-autopilot-wf.js (workflowy sa self-contained — przy zmianie synchronizuj recznie).
+// Doklejana do promptow agentow, ktorzy URUCHAMIAJA komendy (test-coverage, e2e) — reviewerzy read-only jej nie potrzebuja.
+const BLOK_DLUGIE_KOMENDY = `
+=== DLUGIE KOMENDY (przeczytaj ZANIM uruchomisz testy/buildy — prawa srodowiska, nie sugestie) ===
+(1) Runtime zabija subagenta po ~180s bez zadnego outputu ("agent stalled"); po 6 killach pada CALY run.
+(2) Pojedyncze foreground Bash ma limit 600s (domyslnie 120s) — dluzszej komendy NIE dokonczysz.
+(3) Zimny vitest na komponentach RN (cache node_modules/.vite po inwalidacji) trwa do ~16 min i przez
+    caly czas MILCZY — cisza to faza transform PRZED pierwszym outputem reportera; zaden reporter nie pomaga.
+REGULY:
+- Komenda mogaca trwac >100s (vitest po zmianie zaleznosci/configu, pelny suite, build): uruchom przez
+  Bash z run_in_background i przekierowaniem do pliku logu, potem POLLUJ krotkim Bash co ~45-60s
+  (tail loga / sprawdzenie procesu) az do zakonczenia. Kazda sonda = znak zycia dla watchdoga.
+- NIGDY nie podnos timeoutu foreground zamiast isc w tlo — 180s ciszy zabija CIEBIE, nie komende.
+- Po zmianie package.json / lockfile / vitest.config przez kogokolwiek w tym runie: pierwszy vitest
+  traktuj jako ZIMNY (pelna procedura tla powyzej).
+- vitest uruchamiaj z --reporter=dot: strumieniowany stdout W TRAKCIE foreground Bash resetuje watchdog
+  (zweryfikowane empirycznie probe 2026-06-09), wiec chroni WARM suite'y w oknie 180-600s.
+  NIE chroni: zimnego cache (transform milczy do konca) ani komend >600s (twardy limit Bash).
+- FLAKE INFRA: gdy pelny suite zglosi na pliku blad infrastruktury workera ([vitest-worker]: Timeout
+  calling "fetch", "Timeout calling", worker terminated, ENOMEM, heap out of memory) — re-runuj TEN plik
+  w izolacji (procedura OSOBNO dla kazdego takiego pliku). PASS w izolacji = flake infra, NIE defekt:
+  odnotuj "flake-infra: <plik> (PASS w izolacji)" i NIE traktuj jako FAIL. FAIL w izolacji = realny defekt.
+  Po obsludze flake'ow DOKONCZ przerwany lancuch walidacji (kolejne kroki, np. expo-doctor).
+=== KONIEC BLOKU DLUGICH KOMEND ===`
+
 // ── Schematy ──────────────────────────────────────────────────────────────
 
 const FINDINGS = {
@@ -163,7 +188,8 @@ function testCoveragePrompt(sciezka, faza, poprzednie, kontekst) {
 Sprawdz: happy path, invalid inputs, boundary conditions, concurrent operations, scale.
 Test coverage: czy plan techniczny (docs/plans/) definiowal scenariusze testowe dla tej fazy i czy pliki testowe
 istnieja oraz maja asercje? Brakujace testy = P2 (typ TEST).
-Zwroc {findings:[...]} (severity P1/P2/P3, typ KOD/TEST/E2E/OPERATOR). Nie zapisuj plikow.${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
+Zwroc {findings:[...]} (severity P1/P2/P3, typ KOD/TEST/E2E/OPERATOR). Nie zapisuj plikow.
+${BLOK_DLUGIE_KOMENDY}${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
 }
 
 function e2ePrompt(sciezka, faza, poprzednie) {
@@ -185,7 +211,8 @@ KLASYFIKACJA per scenariusz (to jest krytyczne — nie wszystko jest P2):
   W opisie podaj: tresc checkboxa + dokladny blocker + Operator action (kroki do odblokowania).
 - Scenariusz WYKONANY i PASSED -> nie zglaszaj (scribe odznaczy w bookkeepingu).
 
-Zwroc {findings:[...]}. Nie zapisuj plikow (scribe zrobi bookkeeping).${rereviewBlok(poprzednie)}`
+Zwroc {findings:[...]}. Nie zapisuj plikow (scribe zrobi bookkeeping).
+${BLOK_DLUGIE_KOMENDY}${rereviewBlok(poprzednie)}`
 }
 
 function scribePrompt(sciezka, faza, potwierdzone) {
@@ -199,8 +226,10 @@ Referencja procedury: .claude/skills/dev-docs-review/SKILL.md sekcje 4, 4.5, 4.7
 1. Zapisz ${sciezka}/review-faza-${faza}.md — pelny raport (findings posortowane P1->P2->P3, statystyki).
 2. Zaktualizuj ${sciezka}/*-zadania.md: dodaj/uzupelnij sekcje "## Do poprawy po review fazy ${faza}"
    — wylistuj TYLKO findingi typu KOD/TEST/E2E o severity P1 i P2 jako checkbox: "- [ ] 🔴/🟠 [severity] **plik:linia** — opis". P3 opcjonalnie.
-   Findingi typu OPERATOR (niewykonalne headless) NIE ida tutaj — trafiaja do osobnej sekcji "## Operator checklist faza ${faza}"
-   z trescia + krokami Operator action. To nie sa zadania do fix, tylko warunki srodowiskowe dla operatora.
+   Findingi typu OPERATOR (niewykonalne headless) NIE ida tutaj — trafiaja do osobnej sekcji "## Operator checklist faza ${faza}".
+   KAZDA pozycja tej sekcji MA format: "- [ ] Operator: <tresc> — Operator action: <kroki>" (prefiks "Operator:"
+   jest OBOWIAZKOWY — bootstrap/planner po nim wykluczaja te checkboxy z liczenia ukonczenia fazy).
+   To nie sa zadania do fix, tylko warunki srodowiskowe dla operatora.
 3. Bookkeeping checkboxow "Weryfikacja:" (sekcja 4.7): re-parsuj niezaznaczone "Weryfikacja:" fazy ${faza},
    sklasyfikuj (CLI->uruchom przez Bash, exit0->[x]; Grep->uruchom; E2E Maestro wykonany->wg findings E2E;
    E2E niewykonalny headless->Operator checklist (typ OPERATOR, nie P2); Manual->zostaw z adnotacja; Niejasne->P3).
@@ -240,16 +269,17 @@ thunki.push(() => agent(e2ePrompt(sciezka, faza, poprzE2e), { schema: FINDINGS, 
 
 const wyniki = await parallel(thunki)
 
-// Dedup w JS (po pliku + poczatku opisu) — bariera byla potrzebna wlasnie tu
+// Dedup w JS (po pliku + poczatku opisu) — bariera byla potrzebna wlasnie tu.
+// Przy kolizji klucza wygrywa WYZSZE severity (P1<P2<P3), nie kolejnosc reviewerow.
 const wszystkie = wyniki.filter(Boolean).flatMap((w) => w.findings)
-const widziane = new Set()
-const dedup = []
+const RANGA = { P1: 0, P2: 1, P3: 2 }
+const poKluczu = new Map()
 for (const f of wszystkie) {
   const klucz = `${f.plik}|${f.opis.slice(0, 60).toLowerCase()}`
-  if (widziane.has(klucz)) continue
-  widziane.add(klucz)
-  dedup.push(f)
+  const obecny = poKluczu.get(klucz)
+  if (!obecny || RANGA[f.severity] < RANGA[obecny.severity]) poKluczu.set(klucz, f)
 }
+const dedup = [...poKluczu.values()]
 
 // Faza 2: adversarial verify — tylko P1/P2 (P3/nity przechodza bez weryfikacji)
 phase('Verify')
@@ -271,11 +301,21 @@ const zweryfikowane = await parallel(
       )
     ).then((werdykty) => {
       const glosy = werdykty.filter(Boolean)
+      // 0 glosow (wszyscy sceptycy padli) != konsensus — przepusc bez kill, ale oznacz w opisie.
+      if (glosy.length === 0) {
+        return { ...f, potwierdzony: true, opis: `[NIEZWERYFIKOWANY — 0 glosow sceptykow] ${f.opis}` }
+      }
       const realne = glosy.filter((v) => v.realny).length
       // potwierdzony gdy wiekszosc sceptykow NIE zdolala obalic
       const potwierdzony = realne >= Math.ceil(glosy.length / 2)
-      const korekta = glosy.map((v) => v.severityKorekta).filter(Boolean)
-      return { ...f, potwierdzony, severity: korekta[0] || f.severity }
+      // Korekta severity tylko gdy zgodna WIEKSZOSC glosujacych ja proponuje — pojedynczy glos
+      // nie moze zdegradowac P1 (ominalby twardy STOP) ani awansowac P2.
+      const korekty = glosy.map((v) => v.severityKorekta).filter(Boolean)
+      const zliczone = {}
+      for (const k of korekty) zliczone[k] = (zliczone[k] || 0) + 1
+      const [najczestsza, ileGlosow] = Object.entries(zliczone).sort((a, b) => b[1] - a[1])[0] || [null, 0]
+      const severity = ileGlosow > glosy.length / 2 ? najczestsza : f.severity
+      return { ...f, potwierdzony, severity }
     })
   )
 )
@@ -289,4 +329,15 @@ log(`Verify: z ${doWeryfikacji.length} findingow P1/P2 potwierdzono ${potwierdzo
 // Faza 3: scribe zapisuje raport + bookkeeping + liczy severity gate
 phase('Zapis')
 const wynik = await agent(scribePrompt(sciezka, faza, potwierdzone), { schema: REVIEW_RESULT, label: `scribe:faza-${faza}` })
+if (!wynik) {
+  // Scribe padl — zwroc zweryfikowane findingi zamiast null (orkiestrator i tak liczy gate w JS z findings[]).
+  return {
+    fazaNumer: faza,
+    findings: potwierdzone,
+    liczniki: { p1: 0, p2: 0, p3: 0, operator: 0 },
+    severityGate: 'BLOKUJE',
+    raportSciezka: '',
+    e2e: { passed: 0, failed: 0, skipped: 0 },
+  }
+}
 return wynik

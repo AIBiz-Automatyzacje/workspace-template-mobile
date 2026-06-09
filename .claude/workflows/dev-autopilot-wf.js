@@ -1,21 +1,60 @@
 export const meta = {
   name: 'dev-autopilot-wf',
-  description: 'Autonomiczny pipeline: bootstrap -> per faza (execute -> review+verify -> fix, bez re-review) -> complete -> compound. Orkiestrator trzyma plan w kodzie; buildery i reviewerzy to leaf-agenci.',
-  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). RESUME po przerwanym runie: uzyj Workflow({scriptPath, resumeFromRunId}) i ZAWSZE przekaz args ponownie (te sama sciezke zadania) — args NIE przezywa miedzy wywolaniami, bez niego run robi natychmiastowy STOP.',
+  description: 'Autonomiczny pipeline: bootstrap (stan z .autopilot-state.json) -> per faza (execute -> review+verify -> fix, bez re-review) -> complete -> compound. Orkiestrator trzyma stan w JSON i liczy gate\'y w JS; buildery i reviewerzy to leaf-agenci.',
+  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). RESUME po przerwanym runie: uzyj Workflow({scriptPath, resumeFromRunId}) i ZAWSZE przekaz args ponownie (te sama sciezke zadania) — args NIE przezywa miedzy wywolaniami. Stan wznowienia czyta z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy), checkboxy md sa tylko widokiem dla czlowieka.',
   phases: [
-    { title: 'Bootstrap', detail: 'parse plan + zadania -> PlanState, resume z checkboxow' },
+    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + rozgrzewka cache testow' },
     { title: 'Zakonczenie', detail: 'walidacja koncowa -> complete -> compound' },
   ],
 }
 
-// ── Konfiguracja ──────────────────────────────────────────────────────────
-// Poprawka 11: re-review po fixie USUNIETY (decyzja usera). Flow: execute -> review -> fix -> koniec.
-// Jeden przebieg fix, bez ponownego review. Gate liczony z self-reportu fixa (nierozwiazaneP1/P2 + walidacja).
-// Dane z wf_3c9d3864: nawet 2. cykl fix naprawial 0 -> re-review tym bardziej byl czystym pomiarem.
+// ── Architektura (audyt 2026-06-09) ──────────────────────────────────────
+// Filar 1: BLOK_DLUGIE_KOMENDY — prawa srodowiska (watchdog ~180s, Bash max 600s) doklejane do
+//          KAZDEGO prompta mogacego uruchamiac testy. Kopia tej stalej zyje tez w execute-wf
+//          i review-wf (workflowy sa self-contained — przy zmianie synchronizuj recznie).
+// Filar 2: stan maszynowy w docs/active/<zadanie>/.autopilot-state.json — resume czyta JSON,
+//          nie liczy checkboxow. Orkiestrator liczy kolejke i przejscia w JS.
+// Filar 3: trust-but-verify — gate'y liczone w JS z review.findings[], null-guardy po kazdym
+//          await, warmup wymaga dowodu (kontrolny warm-run w sekundach).
+// Re-review po fixie USUNIETY (decyzja usera, dane wf_3c9d3864): gate z self-reportu fixa.
+// Mitygacja test-weakeningu: zakaz modyfikacji asercji w fixPrompt + git diff testow w walidacji.
 
-// ── Schematy (tylko te, ktorych orkiestrator uzywa bezposrednio) ──────────
-// ExecuteResult / ReviewResult sa walidowane wewnatrz pod-workflowow i wracaja
-// tu jako gotowe obiekty przez workflow().
+const BLOK_DLUGIE_KOMENDY = `
+=== DLUGIE KOMENDY (przeczytaj ZANIM uruchomisz testy/buildy — prawa srodowiska, nie sugestie) ===
+(1) Runtime zabija subagenta po ~180s bez zadnego outputu ("agent stalled"); po 6 killach pada CALY run.
+(2) Pojedyncze foreground Bash ma limit 600s (domyslnie 120s) — dluzszej komendy NIE dokonczysz.
+(3) Zimny vitest na komponentach RN (cache node_modules/.vite po inwalidacji) trwa do ~16 min i przez
+    caly czas MILCZY — cisza to faza transform PRZED pierwszym outputem reportera; zaden reporter nie pomaga.
+REGULY:
+- Komenda mogaca trwac >100s (vitest po zmianie zaleznosci/configu, pelny suite, build): uruchom przez
+  Bash z run_in_background i przekierowaniem do pliku logu, potem POLLUJ krotkim Bash co ~45-60s
+  (tail loga / sprawdzenie procesu) az do zakonczenia. Kazda sonda = znak zycia dla watchdoga.
+- NIGDY nie podnos timeoutu foreground zamiast isc w tlo — 180s ciszy zabija CIEBIE, nie komende.
+- Po zmianie package.json / lockfile / vitest.config przez kogokolwiek w tym runie: pierwszy vitest
+  traktuj jako ZIMNY (pelna procedura tla powyzej).
+- vitest uruchamiaj z --reporter=dot: strumieniowany stdout W TRAKCIE foreground Bash resetuje watchdog
+  (zweryfikowane empirycznie probe 2026-06-09), wiec chroni WARM suite'y w oknie 180-600s.
+  NIE chroni: zimnego cache (transform milczy do konca) ani komend >600s (twardy limit Bash).
+- FLAKE INFRA: gdy pelny suite zglosi na pliku blad infrastruktury workera ([vitest-worker]: Timeout
+  calling "fetch", "Timeout calling", worker terminated, ENOMEM, heap out of memory) — re-runuj TEN plik
+  w izolacji (procedura OSOBNO dla kazdego takiego pliku). PASS w izolacji = flake infra, NIE defekt:
+  odnotuj "flake-infra: <plik> (PASS w izolacji)" i NIE traktuj jako FAIL. FAIL w izolacji = realny defekt.
+  Po obsludze flake'ow DOKONCZ przerwany lancuch walidacji (kolejne kroki, np. expo-doctor).
+=== KONIEC BLOKU DLUGICH KOMEND ===`
+
+// ── Schematy ──────────────────────────────────────────────────────────────
+
+const FINDING_OTWARTY = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    severity: { type: 'string', enum: ['P1', 'P2'] },
+    typ: { type: 'string', enum: ['KOD', 'TEST', 'E2E'] },
+    plik: { type: 'string' },
+    opis: { type: 'string' },
+  },
+  required: ['severity', 'typ', 'plik', 'opis'],
+}
 
 const PLAN_STATE = {
   type: 'object',
@@ -33,6 +72,7 @@ const PLAN_STATE = {
       },
       required: ['aktualny', 'wymagany', 'zgodny', 'czysty'],
     },
+    zrodloStanu: { type: 'string', enum: ['state-json', 'pierwszy-parse-md'] },
     fazy: {
       type: 'array',
       items: {
@@ -41,16 +81,46 @@ const PLAN_STATE = {
         properties: {
           numer: { type: 'integer' },
           nazwa: { type: 'string' },
-          ukonczona: { type: 'boolean', description: 'wszystkie checkboxy [x] (poza Weryfikacja:/Operator:/[E2E]/[Manual] — te liczy review/operator, nie execute)' },
-          reviewIstnieje: { type: 'boolean' },
-          maNierozwiazaneP1P2: { type: 'boolean', description: 'sekcja "Do poprawy po review fazy N" ma niezaznaczone P1/P2' },
+          execute: { type: 'string', enum: ['done', 'pending'] },
+          review: { type: 'string', enum: ['done', 'pending'] },
+          fix: { type: 'string', enum: ['done', 'pending', 'none'], description: 'none = review nie zostawil otwartych P1/P2' },
+          otwarteFindingi: { type: 'array', items: FINDING_OTWARTY },
         },
-        required: ['numer', 'nazwa', 'ukonczona', 'reviewIstnieje', 'maNierozwiazaneP1P2'],
+        required: ['numer', 'nazwa', 'execute', 'review', 'fix', 'otwarteFindingi'],
       },
     },
-    kolejka: { type: 'array', items: { type: 'integer' }, description: 'numery faz do wykonania, w kolejnosci' },
+    zakonczenie: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        walidacja: { type: 'string', enum: ['done', 'pending'] },
+        complete: { type: 'string', enum: ['done', 'pending'] },
+        compound: { type: 'string', enum: ['done', 'pending'] },
+      },
+      required: ['walidacja', 'complete', 'compound'],
+    },
+    rozbieznosci: { type: 'array', items: { type: 'string' }, description: 'informacyjne: stan vs pliki md (np. review-faza-N.md istnieje a stan mowi pending)' },
   },
-  required: ['nazwaZadania', 'branch', 'fazy', 'kolejka'],
+  required: ['nazwaZadania', 'branch', 'zrodloStanu', 'fazy', 'zakonczenie', 'rozbieznosci'],
+}
+
+const ZAPIS_STANU = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { zapisano: { type: 'boolean' } },
+  required: ['zapisano'],
+}
+
+const WARMUP_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string', enum: ['zbudowano', 'zbedne', 'niepowodzenie'] },
+    detal: { type: 'string', description: 'co odpalono + czasy, lub powod pominiecia/niepowodzenia' },
+    czasZimnySek: { type: ['integer', 'null'], description: 'czas pierwszego (zimnego) biegu w sekundach' },
+    czasKontrolnySek: { type: ['integer', 'null'], description: 'czas kontrolnego warm-runu w sekundach — DOWOD zbudowania cache' },
+  },
+  required: ['status', 'detal'],
 }
 
 const FIX_RESULT = {
@@ -69,7 +139,6 @@ const FIX_RESULT = {
     walidacja: { type: 'string', enum: ['PASS', 'FAIL'] },
     commity: { type: 'array', items: { type: 'string' } },
     nienaprawione: { type: 'array', items: { type: 'string' } },
-    // Bez re-review: orkiestrator gate'uje z tych pol. nierozwiazaneP1>0 lub walidacja FAIL -> STOP.
     nierozwiazaneP1: { type: 'integer', description: 'P1 ktorych fix NIE zamknal (krytyczne -> STOP)' },
     nierozwiazaneP2: { type: 'integer', description: 'P2 przeniesione do known-issues (graceful)' },
   },
@@ -83,30 +152,16 @@ const VALIDATION_RESULT = {
     wykryteKomendy: { type: 'array', items: { type: 'string' } },
     typecheck: { type: 'string', enum: ['PASS', 'FAIL', 'SKIPPED'] },
     lint: { type: 'string', enum: ['PASS', 'FAIL', 'SKIPPED'] },
-    testy: { type: 'string', description: 'PASS/FAIL z liczbami X/Y' },
+    testy: { type: 'string', description: 'PASS/FAIL z liczbami X/Y (+ adnotacje flake-infra)' },
     expoDoctor: { type: 'string', enum: ['PASS', 'FAIL', 'n/a'] },
+    testyZmodyfikowane: { type: 'array', items: { type: 'string' }, description: 'pliki *.test.* ze ZMIENIONYMI istniejacymi asercjami w commitach fix(...) — sygnal test-weakeningu' },
     wynik: { type: 'string', enum: ['PASS', 'FAIL'] },
     bledy: { type: 'array', items: { type: 'string' } },
   },
   required: ['wynik'],
 }
 
-// P1: rozgrzewka — runtime ma twardy watchdog (~180s ciszy subagenta -> kill, 6 retry -> FAILED run).
-// Cold-cache vitest na komponentach RN (react-native-web transform + optimizeDeps) potrafi milczec ~16 min
-// na stdout -> watchdog zabija builder na KAZDEJ fazie UI. Rozgrzanie node_modules/.vite RAZ tu sprawia,
-// ze kazdy kolejny vitest agenta jest warm (<kilka s). Cache zyje na dysku repo i przezywa miedzy agentami
-// (agenci dziela working dir — brak isolation:worktree). Self-skip gdy projekt nie ma vitest.
-const WARMUP_RESULT = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    wykonano: { type: 'boolean', description: 'true gdy odpalono test rozgrzewajacy; false gdy projekt nie ma vitest/component-testow' },
-    detal: { type: 'string', description: 'co odpalono + czas, lub powod pominiecia' },
-  },
-  required: ['wykonano'],
-}
-
-// ── Buildery promptow (leaf-agenci) ───────────────────────────────────────
+// ── Prompty leaf-agentow ──────────────────────────────────────────────────
 
 function bootstrapPrompt(sciezka) {
   return `Jestes bootstrapem pipeline'u dev-autopilot. Zbuduj jawny stan orkiestratora.
@@ -117,22 +172,80 @@ Folder zadania: ${sciezka}
    Przeczytaj wymagany branch z dokumentacji w ${sciezka}/ (szukaj "Branch:").
    Ustaw branch.zgodny (aktualny == wymagany lub wymagany == null) oraz branch.czysty (pusty status).
 
-2. PLAN: przeczytaj ${sciezka}/*-plan.md -> lista faz [(numer, nazwa)].
-3. ZADANIA: przeczytaj ${sciezka}/*-zadania.md -> per faza:
-   - faza UKONCZONA = wszystkie checkboxy oznaczone [x] z WYJATKIEM checkboxow, ktorych NIE robi execute:
-     "Weryfikacja:", "Operator:", oraz oznaczone "[E2E]" / "[Manual]" (te zamyka review/operator, nie builder).
-   - niezaznaczone "Weryfikacja:"/"Operator:"/"[E2E]"/"[Manual]" NIE czynia fazy "do wykonania" — POMIN je w liczeniu.
-   - dowolny INNY [ ] = faza DO WYKONANIA.
-4. REVIEW: dla kazdej fazy sprawdz czy istnieje ${sciezka}/review-faza-{numer}.md (reviewIstnieje).
-   Sprawdz sekcje "Do poprawy po review fazy {numer}" w zadaniach — niezaznaczone P1/P2 => maNierozwiazaneP1P2=true.
-5. KOLEJKA: numery faz do wykonania w kolejnosci. Pomin fazy ukonczone BEZ nierozwiazanych P1/P2.
-   Faza ukonczona ALE z nierozwiazanymi P1/P2 NALEZY do kolejki (zacznie sie od fix, nie execute).
+2. STAN — najpierw sprawdz czy istnieje ${sciezka}/.autopilot-state.json:
 
-nazwaZadania = ostatni segment sciezki ${sciezka}.
+   A) PLIK ISTNIEJE (resume): przeczytaj go i zwroc jego fazy/zakonczenie BEZ reinterpretacji
+      checkboxow md — plik stanu jest ZRODLEM PRAWDY, checkboxy to tylko widok dla czlowieka.
+      zrodloStanu = "state-json". Dodatkowo porownaj informacyjnie z plikami (np. istnieje
+      ${sciezka}/review-faza-N.md a stan mowi review=pending) i wpisz różnice do rozbieznosci[]
+      (NIE koryguj stanu samodzielnie).
+
+   B) PLIKU NIE MA (pierwszy run): zbuduj stan z plikow, zrodloStanu = "pierwszy-parse-md":
+      - ${sciezka}/*-plan.md -> lista faz [(numer, nazwa)].
+      - ${sciezka}/*-zadania.md -> per faza execute:
+        execute = "done" gdy wszystkie checkboxy fazy sa [x], LICZAC WYLACZNIE checkboxy
+        implementacyjne. POMIN CALKOWICIE: checkboxy z prefiksem "Weryfikacja:", "Operator:",
+        oznaczone "[E2E]" lub "[Manual]", ORAZ wszystkie checkboxy w sekcjach
+        "## Do poprawy po review fazy N" i "## Operator checklist faza N" (te sekcje obsluguje
+        review/fix, nie execute). Dowolny INNY [ ] => execute = "pending".
+      - review = "done" gdy istnieje ${sciezka}/review-faza-{numer}.md, inaczej "pending".
+        UWAGA: faza z execute="done" i review="pending" to NORMALNY stan po awarii — taka faza
+        MUSI miec review (nie pomijaj jej).
+      - sekcja "## Do poprawy po review fazy {numer}" w zadaniach: niezaznaczone checkboxy P1/P2
+        -> sparsuj kazdy do otwarteFindingi (severity z [P1]/[P2], typ KOD/TEST/E2E z kontekstu,
+        plik i opis z tresci linii) i ustaw fix = "pending". Wszystkie zaznaczone lub sekcji brak
+        przy review="done" -> fix = "done" lub "none" (none gdy sekcji nigdy nie bylo).
+        Gdy review="pending" -> fix = "pending" tylko jesli sa otwarte findingi, inaczej "none"
+        (review je ustali).
+
+3. zakonczenie: przy pierwszym parse ustaw walidacja/complete/compound = "pending"
+   (chyba ze zadanie jest juz w docs/completed/ — wtedy "done").
+4. nazwaZadania = ostatni segment sciezki ${sciezka}.
+
 Zwroc obiekt zgodny ze schematem. Nie modyfikuj zadnych plikow — to read-only bootstrap.`
 }
 
-function fixPrompt(sciezka, numerFazy) {
+function zapiszStanPrompt(sciezka, trescJson) {
+  return `Zapisz plik stanu pipeline'u dev-autopilot. Uzyj narzedzia Write (pelne nadpisanie pliku).
+
+Sciezka: ${sciezka}/.autopilot-state.json
+Tresc — zapisz DOKLADNIE ponizszy JSON, bez zadnych zmian, dopiskow ani komentarzy:
+
+${trescJson}
+
+Nie modyfikuj ZADNYCH innych plikow. Zwroc {zapisano:true}.`
+}
+
+function warmupPrompt(sciezka) {
+  return `Jestes rozgrzewka cache testowego pipeline'u dev-autopilot (folder zadania: ${sciezka}).
+CEL: zbudowac cache transformacji vitest (node_modules/.vite / optimizeDeps) PRZED fazami implementacji,
+zeby zaden pozniejszy agent nie trafil na zimny ~16-minutowy bieg.
+${BLOK_DLUGIE_KOMENDY}
+
+1. Wykryj runner: przeczytaj package.json. Rozgrzewka dotyczy WYLACZNIE vitest. Brak vitest
+   (inny runner lub brak testow) -> zwroc {status:"zbedne", detal:"<powod>"} i ZAKONCZ.
+2. Wybierz JEDEN test komponentu z najciezszym setupem: szukaj *.test.tsx importujacego
+   komponenty React Native (components/, app/, features/, src/ — transform react-native ->
+   react-native-web jest najdrozszy). Jesli W CALYM repo nie ma zadnego testu komponentu
+   (projekt greenfield): utworz TYMCZASOWY plik .autopilot-warmup.test.tsx w katalogu testowym
+   projektu z trywialnym renderem <View><Text>warmup</Text></View> i 1 asercja — to JEDYNY
+   wyjatek od zakazu modyfikacji plikow; USUN go w kroku 5.
+3. BIEG ZIMNY — OBOWIAZKOWO przez tlo (komenda moze trwac ~16 min, foreground NIE dokonczy):
+   uruchom \`<pm> vitest run <plik> --reporter=dot > /tmp/autopilot-warmup.log 2>&1\` przez Bash
+   z run_in_background (pm z lockfile: bun.lockb->bunx, pnpm->pnpm, yarn->yarn, npm->npx).
+   POLLUJ co ~45-60s: \`tail -5 /tmp/autopilot-warmup.log\` + sprawdzenie czy proces zyje.
+   Czekaj do zakonczenia (budzet ~25 min). Zanotuj laczny czas jako czasZimnySek.
+   WYNIK testu (pass/fail asercji) jest NIEISTOTNY — liczy sie ukonczenie procesu (= zapis cache).
+4. DOWOD — bieg kontrolny foreground: uruchom TEN SAM test zwyklym Bash (timeout 120s wystarczy).
+   Zanotuj czas jako czasKontrolnySek. Cache zbudowany = czas rzedu SEKUND.
+   czasKontrolnySek < 60 -> status "zbudowano". Wiecej lub timeout -> status "niepowodzenie"
+   (cache NIE dziala — nie raportuj sukcesu ktorego nie ma).
+5. Sprzatanie: usun /tmp/autopilot-warmup.log i ewentualny tymczasowy test z kroku 2.
+
+Poza wyjatkiem z kroku 2 NIE modyfikuj zadnych plikow. Zwroc {status, detal, czasZimnySek, czasKontrolnySek}.`
+}
+
+function fixPrompt(sciezka, numerFazy, otwarteFindingi) {
   return `Jestes czescia pipeline'u dev-autopilot. Naprawiasz problemy z review fazy ${numerFazy}.
 WAZNE: to JEDYNY przebieg fix tej fazy — po nim NIE ma ponownego review. Twoj raport jest
 OSTATECZNYM zrodlem prawdy o stanie findingow, wiec klasyfikuj uczciwie czego nie zamknales.
@@ -140,22 +253,30 @@ OSTATECZNYM zrodlem prawdy o stanie findingow, wiec klasyfikuj uczciwie czego ni
 Folder zadania: ${sciezka}
 Numer fazy: ${numerFazy}
 
-Przeczytaj ${sciezka}/*-zadania.md sekcje "Do poprawy po review fazy ${numerFazy}"
-oraz ${sciezka}/review-faza-${numerFazy}.md dla pelnego kontekstu kazdego findingu.
+OTWARTE FINDINGI DO NAPRAWY (lista autorytatywna — przekazana przez orkiestratora):
+${JSON.stringify(otwarteFindingi, null, 2)}
 
-Napraw WSZYSTKIE P1 (blocking) i P2 (important). Pomin P3 (nit).
+Pelny kontekst kazdego findingu: ${sciezka}/review-faza-${numerFazy}.md.
+Checkboxy w sekcji "Do poprawy po review fazy ${numerFazy}" w ${sciezka}/*-zadania.md odznaczaj
+w miare napraw (to widok dla czlowieka).
+
+Napraw WSZYSTKIE z listy (sa to P1 blocking i P2 important; P3 nie ma na liscie).
 
 KLASYFIKUJ kazdy finding przed naprawa:
-- Typ A KOD (blad implementacji/security/perf/architektury): napraw kod -> uruchom unit testy -> odznacz checkbox.
-- Typ B BRAKUJACY TEST (Test:): NIE ruszaj kodu produkcyjnego, napisz test (min 1 asercja, nie assertion-free)
+- Typ KOD (blad implementacji/security/perf/architektury): napraw kod -> uruchom unit testy -> odznacz checkbox.
+- Typ TEST (brakujacy test): NIE ruszaj kodu produkcyjnego, napisz test (min 1 asercja, nie assertion-free)
   zgodnie z planem w docs/plans/ -> uruchom -> odznacz.
-- Typ C WERYFIKACJA E2E (Weryfikacja:/oznaczenie 🌐 lub 📱): napraw przyczyne -> re-uruchom Maestro
-  na emulatorze (.maestro/<flow>.yaml, exit 0 + assertVisible) -> odznacz DOPIERO po PASS (nie na "naprawilem kod").
+- Typ E2E (weryfikacja E2E): napraw przyczyne -> re-uruchom Maestro na emulatorze
+  (.maestro/<flow>.yaml, exit 0 + assertVisible) -> odznacz DOPIERO po PASS (nie na "naprawilem kod").
 
-Kolejnosc: A (kod) -> B (testy) -> C (E2E). Vitest uruchamiaj z \`--reporter=dot\`
-(output strumieniowy — chroni dlugie testy przed watchdogiem ~180s ciszy). Po naprawach: pelna walidacja
-(typecheck, test, expo-doctor — komendy z package.json; NIE eas build), commit
-\`fix([nazwa]): poprawki po review fazy ${numerFazy}\`, staguj tylko zmienione pliki.
+ZAKAZ TEST-WEAKENINGU (twardy): NIE modyfikuj istniejacych testow ani asercji zeby przeszly —
+napraw IMPLEMENTACJE. Mozesz testy DODAWAC. Oslabienie/usuniecie asercji = niedopuszczalne;
+walidacja koncowa audytuje git diff testow w commitach fix i zglosi kazda taka zmiane.
+
+Kolejnosc: KOD -> TEST -> E2E. Po naprawach: pelna walidacja (typecheck, test, expo-doctor —
+komendy z package.json; NIE eas build), commit \`fix([nazwa]): poprawki po review fazy ${numerFazy}\`,
+staguj tylko zmienione pliki.
+${BLOK_DLUGIE_KOMENDY}
 
 KNOWN-ISSUES (graceful — bez osobnego agenta): jesli ZOSTAJA P2 ktorych NIE udalo sie naprawic
 (a zero nierozwiazanych P1), zapisz je do ${sciezka}/known-issues.md. Dedup: jesli sekcja
@@ -163,143 +284,191 @@ KNOWN-ISSUES (graceful — bez osobnego agenta): jesli ZOSTAJA P2 ktorych NIE ud
 NIE dopisuj duplikatu. Format: "## Faza ${numerFazy}\\nPozostaje N problemow P2 po fixie. Review: review-faza-${numerFazy}.md\\n- 🟠 [P2] plik — opis".
 Po zapisie upewnij sie ze jest DOKLADNIE jeden naglowek "## Faza ${numerFazy}".
 
-Dzialaj autonomicznie, nie pytaj usera. Zwroc obiekt FixResult — KRYTYCZNE pola (orkiestrator gate'uje z nich,
-bez re-review): nierozwiazaneP1 (P1 ktorych NIE zamknales -> orkiestrator zrobi STOP),
+Dzialaj autonomicznie, nie pytaj usera. Zwroc obiekt FixResult — KRYTYCZNE pola (orkiestrator gate'uje
+z nich, bez re-review): nierozwiazaneP1 (P1 ktorych NIE zamknales -> orkiestrator zrobi STOP),
 nierozwiazaneP2 (P2 przeniesione do known-issues), walidacja (PASS/FAIL pelnej walidacji).`
-}
-
-function warmupPrompt(sciezka) {
-  return `Jestes rozgrzewka cache testowego pipeline'u dev-autopilot (folder zadania: ${sciezka}).
-CEL: zbudowac cache transformacji testow PRZED fazami implementacji, zeby pierwszy "zimny" vitest
-nie milczal kilkanascie minut na stdout (watchdog runtime zabija subagenta po ~180s ciszy).
-
-1. Wykryj test runner: przeczytaj package.json. Jesli NIE ma vitest (ani jest/innego z ciezkim setupem)
-   -> zwroc {wykonano:false, detal:"brak vitest — rozgrzewka zbedna"}. Nie kombinuj.
-2. Jesli jest vitest: znajdz JEDEN test komponentu z najciezszym setupem — preferuj *.test.tsx
-   w components/ (transform react-native -> react-native-web jest najdrozszy). Brak component-testu
-   -> wez dowolny istniejacy plik testowy.
-3. Uruchom GO RAZ przez wlasciwy package manager (bun.lockb->bunx, pnpm->pnpm, npm->npx), np.
-   \`bunx vitest run <plik> --reporter=dot\`. To buduje node_modules/.vite/optimizeDeps.
-   WYNIK testu (pass/fail) jest NIEISTOTNY — liczy sie zbudowanie cache. Nie naprawiaj asercji.
-4. NIE modyfikuj zadnych plikow zrodlowych. To tylko rozgrzewka.
-
-Zwroc {wykonano, detal} (detal: co odpalono + ile trwalo, lub powod pominiecia).`
 }
 
 function finalValidationPrompt(sciezka) {
   return `Wykonaj pelna walidacje calego projektu po autopilocie (folder zadania: ${sciezka}).
+${BLOK_DLUGIE_KOMENDY}
 
 KROK 1 — odkryj komendy (NIE zgaduj): przeczytaj package.json scripts (typecheck/lint/test/check),
 wykryj package manager (bun.lockb->bun, pnpm-lock->pnpm, yarn.lock->yarn, package-lock->npm).
 Brak skryptu typecheck -> sprobuj tsc --noEmit jesli jest tsconfig.json. Stack Expo: zamiast build uzyj
 \`bunx expo-doctor\` (NIE eas build). Makefile/pyproject/Cargo — uzyj wlasciwych narzedzi.
 
-KROK 2 — uruchom w kolejnosci, zatrzymaj przy pierwszym FAIL: typecheck -> lint (jesli jest) -> test -> expo-doctor.
-   Dla vitest dodaj \`--reporter=dot\` (output strumieniowy — dlugie testy emituja progress, nie cisza).
-KROK 2.5 (P4 — flake infra, nie defekt): jesli pelny suite vitest zglosi na pliku bled INFRA workera,
-   nie asercje — sygnatury: "[vitest-worker]: Timeout calling \\"fetch\\"", "Timeout calling", worker terminated,
-   ENOMEM, heap out of memory -> RE-URUCHOM TEN JEDEN plik w izolacji (\`vitest run <plik> --reporter=dot\`).
-   PASS w izolacji => to flake pod obciazeniem, NIE blokuj (testy=PASS, dopisz plik do bledy[] jako "flake-infra: <plik> (PASS w izolacji)").
-   FAIL tez w izolacji => realny defekt, wynik=FAIL. Dotyczy WYLACZNIE bledow infra workera, nie failujacych asercji.
-KROK 3 — jesli FAIL (realny) i potrafisz naprawic prosty problem (import, typ) — napraw, commituj, uruchom ponownie.
-   Jak nie potrafisz — zwroc liste bledow z lokalizacjami i wynik=FAIL.
+KROK 2 — uruchom w kolejnosci: typecheck -> lint (jesli jest) -> test (pelny suite, wg BLOKU
+DLUGICH KOMEND: tlo + polling; flake infra obsluz wg procedury z bloku i DOKONCZ lancuch) -> expo-doctor.
+Zatrzymaj sie dopiero na REALNYM FAIL (flake infra PASS-w-izolacji nie jest FAIL).
+
+KROK 3 — AUDYT TESTOW PO FIXACH: \`git log --oneline --grep="^fix(" \` dla commitow fix tego zadania,
+potem \`git diff <zakres>\` zawezony do plikow *.test.* — szukaj ZMIAN W ISTNIEJACYCH asercjach/testach
+(usuniecie testu, oslabienie expect, zmiana oczekiwanej wartosci). Nowe testy sa OK. Kazda modyfikacje
+istniejacego testu wpisz do testyZmodyfikowane[] (to sygnal test-weakeningu do raportu, nie auto-FAIL).
+
+KROK 4 — jesli REALNY FAIL i potrafisz naprawic prosty problem (import, typ) — napraw, commituj,
+uruchom ponownie. Jak nie potrafisz — zwroc liste bledow z lokalizacjami i wynik=FAIL.
 
 Zwroc obiekt zgodny ze schematem ValidationResult.`
 }
 
+// ── Helpery orkiestratora (deterministycznie, w JS) ───────────────────────
+
+// Filar 3: liczniki i gate liczone z findings[], nie z self-reportu scribe'a.
+function policzFindingi(findings) {
+  const istotne = (findings || []).filter((f) => f.typ !== 'OPERATOR')
+  return {
+    p1: istotne.filter((f) => f.severity === 'P1').length,
+    p2: istotne.filter((f) => f.severity === 'P2').length,
+    p3: istotne.filter((f) => f.severity === 'P3').length,
+    operator: (findings || []).length - istotne.length,
+  }
+}
+
+function otwartePoReview(findings) {
+  return (findings || [])
+    .filter((f) => f.typ !== 'OPERATOR' && (f.severity === 'P1' || f.severity === 'P2'))
+    .map((f) => ({ severity: f.severity, typ: f.typ, plik: f.plik, opis: f.opis }))
+}
+
 // ── Orkiestracja ──────────────────────────────────────────────────────────
 
-// Poprawka 3: sanityzacja — UI wstrzykuje prefix '@' (mention) i czesto trailing '/'.
-// Bez tego prompty buduja sciezki typu "@docs/active/x//" (kruche, agent musi zgadywac).
+// Sanityzacja args — UI wstrzykuje prefix '@' (mention) i czesto trailing '/'.
 const sciezkaRaw = typeof args === 'string' ? args : args && args.sciezka
 const sciezka = sciezkaRaw && sciezkaRaw.replace(/^@/, '').replace(/\/+$/, '')
 if (!sciezka) {
-  // P3: najczestsza przyczyna tu = resume przez scriptPath BEZ ponownego przekazania args.
-  // args nie przezywa miedzy wywolaniami workflow — trzeba je podac przy KAZDYM (re)starcie.
   return {
     status: 'STOP',
     powod: 'brak sciezki zadania. Przy starcie: args:"docs/active/<zadanie>". Przy RESUME (scriptPath+resumeFromRunId): przekaz args PONOWNIE — nie przenosi sie z poprzedniego runu.',
   }
 }
 
-// Pomiar kosztu per faza -> log, zeby nastepny run byl mierzalny (transkrypty agentow nie przezywaja,
-// zostaje tylko TUI/log). budget.spent() = tokeny wyjsciowe runu; guard na konteksty bez budgetu.
 const tokSpent = () => (typeof budget !== 'undefined' && budget && budget.spent ? budget.spent() : 0)
 
 phase('Bootstrap')
 const stan = await agent(bootstrapPrompt(sciezka), { schema: PLAN_STATE, label: 'bootstrap' })
+if (!stan) {
+  return { status: 'STOP', powod: 'bootstrap nie zwrocil stanu (agent null)' }
+}
 
 // Decyzja A: git zwalidowany w sesji przed odpaleniem; tu tylko bezpiecznik.
 if (!stan.branch.zgodny) {
   return { status: 'STOP', powod: `branch mismatch: jestes na "${stan.branch.aktualny}", wymagany "${stan.branch.wymagany}"`, stan }
 }
 if (!stan.branch.czysty) {
-  return { status: 'STOP', powod: 'niezacommitowane zmiany z poprzedniej sesji — zacommituj/stash przed autopilotem', stan }
+  return { status: 'STOP', powod: 'niezacommitowane zmiany — zacommituj/stash przed autopilotem (po awarii runu: NAJPIERW git status, kod faz zwykle JEST na dysku)', stan }
+}
+for (const r of stan.rozbieznosci || []) log(`Bootstrap rozbieznosc (informacyjna): ${r}`)
+
+// Filar 2: kolejka liczona w JS ze stanu — zero interpretacji LLM.
+const kolejka = stan.fazy
+  .filter((f) => f.execute === 'pending' || f.review === 'pending' || f.fix === 'pending')
+  .map((f) => f.numer)
+
+log(`Autopilot: ${stan.nazwaZadania} (stan: ${stan.zrodloStanu}) — fazy do wykonania: ${kolejka.join(', ') || 'brak'}`)
+
+// Utrwalanie stanu: tresc liczona w JS, zapis przez tani leaf-agent (haiku). Best-effort z ostrzezeniem.
+async function zapiszStan() {
+  const tresc = JSON.stringify(
+    { wersja: 1, zadanie: stan.nazwaZadania, fazy: stan.fazy, zakonczenie: stan.zakonczenie },
+    null,
+    2
+  )
+  const w = await agent(zapiszStanPrompt(sciezka, tresc), { schema: ZAPIS_STANU, label: 'stan:zapis', model: 'haiku' })
+  if (!w || !w.zapisano) log('OSTRZEZENIE: zapis .autopilot-state.json nie powiodl sie — resume bedzie polegac na parse md')
 }
 
-log(`Autopilot: ${stan.nazwaZadania} — fazy do wykonania: ${stan.kolejka.join(', ') || 'brak'}`)
-
-// P1: rozgrzej cache vitest RAZ przed pierwsza faza (chroni przed watchdog-killem na cold component-vitest).
-// Tylko gdy faktycznie cos wykonujemy — pusta kolejka nie potrzebuje rozgrzewki.
-if (stan.kolejka.length > 0) {
-  const warmup = await agent(warmupPrompt(sciezka), { schema: WARMUP_RESULT, label: 'warmup:vitest', phase: 'Bootstrap' })
-  log(`Rozgrzewka cache: ${warmup.wykonano ? 'OK' : 'pominieta'} — ${warmup.detal || ''}`)
+// Filar 1: rozgrzewka cache vitest — zawsze (self-skip gdy brak vitest; warm = sekundy).
+// Chroni tez walidacje koncowa przy pustej kolejce (np. resume po ukonczonych fazach na zimnej maszynie).
+const warmup = await agent(warmupPrompt(sciezka), { schema: WARMUP_RESULT, label: 'warmup:vitest', phase: 'Bootstrap' })
+if (!warmup) {
+  return { status: 'STOP', powod: 'rozgrzewka nie zwrocila wyniku (agent null)', stan }
+}
+log(`Rozgrzewka: ${warmup.status} — ${warmup.detal} (zimny: ${warmup.czasZimnySek ?? 'n/a'}s, kontrolny: ${warmup.czasKontrolnySek ?? 'n/a'}s)`)
+if (warmup.status === 'niepowodzenie') {
+  return { status: 'STOP', powod: `rozgrzewka cache nie powiodla sie: ${warmup.detal} — fazy UI zginelyby na watchdogu, taniej zatrzymac tu`, stan }
 }
 
 const historia = {}
 const raporty = []
 const tokRunStart = tokSpent()
 
-for (const numerFazy of stan.kolejka) {
+for (const numerFazy of kolejka) {
   const faza = stan.fazy.find((f) => f.numer === numerFazy)
+  if (!faza) {
+    return { status: 'STOP', powod: `kolejka zawiera faze ${numerFazy} nieobecna w fazy[] — niespojny stan bootstrapu`, raporty }
+  }
   phase(`Faza ${numerFazy}`)
   const tokFazaStart = tokSpent()
+  let gateFazy = 'CZYSTE'
+  let cykle = 0
 
-  // Resume: faza ukonczona z nierozwiazanymi P1/P2 -> zacznij od fix, pomijajac execute (naprawia Bug 1).
-  const rozpocznijOdFix = faza.ukonczona && faza.reviewIstnieje && faza.maNierozwiazaneP1P2
-
-  if (!rozpocznijOdFix && !faza.ukonczona) {
+  // 1) EXECUTE — tylko gdy pending (resume nigdy nie powtarza ukonczonego execute, w tym migracji).
+  if (faza.execute === 'pending') {
     const exec = await workflow('dev-docs-execute-wf', { sciezka, faza: numerFazy })
     if (!exec || exec.status !== 'completed') {
-      return { status: 'STOP', powod: `execute fazy ${numerFazy} zwrocil "${exec ? exec.status : 'null'}"`, faza: numerFazy, exec, raporty }
+      return { status: 'STOP', powod: `execute fazy ${numerFazy} zwrocil "${exec ? exec.status : 'null'}"${exec && exec.problem ? `: ${exec.problem}` : ''}`, faza: numerFazy, exec, raporty }
     }
+    faza.execute = 'done'
+    await zapiszStan()
     log(`Faza ${numerFazy}: Execute OK (${exec.iu.length} IU)`)
   }
 
-  // Liniowo: review (pelny pod-workflow: packager + 7 reviewerow + verify) -> fix -> koniec fazy.
-  // Re-review po fixie USUNIETY (Poprawka 11). Gate liczony z self-reportu fixa.
-  // KOSZT/RYZYKO: zamkniecie findingow nie jest niezaleznie weryfikowane — ufamy raportowi fixa.
-  // Mitygacja: walidacja koncowa na Zakonczeniu nadal lapie regresje typecheck/test/lint/expo-doctor.
-  const review = await workflow('dev-docs-review-wf', { sciezka, faza: numerFazy, poprzednieFindingi: null })
-  const { p1, p2 } = review.liczniki
-  const operator = review.liczniki.operator || 0
-  log(`Review fazy ${numerFazy}: P1=${p1} P2=${p2} P3=${review.liczniki.p3} OPERATOR=${operator} (gate: ${review.severityGate})`)
+  // 2) REVIEW — tylko gdy pending. Faza ukonczona z otwartymi findingami idzie PROSTO do fix (Bug 1).
+  if (faza.review === 'pending') {
+    const review = await workflow('dev-docs-review-wf', {
+      sciezka,
+      faza: numerFazy,
+      poprzednieFindingi: faza.otwarteFindingi.length ? faza.otwarteFindingi : null,
+    })
+    if (!review) {
+      return { status: 'STOP', powod: `review fazy ${numerFazy} zwrocil null`, faza: numerFazy, raporty }
+    }
+    // Filar 3: liczniki/gate w JS z findings[]; liczniki scribe'a tylko do porownania w logu.
+    const liczniki = policzFindingi(review.findings)
+    const scribeL = review.liczniki || {}
+    if (scribeL.p1 !== liczniki.p1 || scribeL.p2 !== liczniki.p2) {
+      log(`Faza ${numerFazy}: NIESPOJNOSC licznikow scribe (p1=${scribeL.p1},p2=${scribeL.p2}) vs JS (p1=${liczniki.p1},p2=${liczniki.p2}) — uzywam JS`)
+    }
+    log(`Review fazy ${numerFazy}: P1=${liczniki.p1} P2=${liczniki.p2} P3=${liczniki.p3} OPERATOR=${liczniki.operator}`)
+    faza.review = 'done'
+    faza.otwarteFindingi = otwartePoReview(review.findings)
+    faza.fix = faza.otwarteFindingi.length ? 'pending' : 'none'
+    await zapiszStan()
+  }
 
-  let gateFazy = review.severityGate
-  let cykle = 0
-
-  if (p1 > 0 || p2 > 0) {
-    const fix = await agent(fixPrompt(sciezka, numerFazy), { schema: FIX_RESULT, label: `fix:faza-${numerFazy}` })
+  // 3) FIX — bez re-review; gate z self-reportu + lista findingow przekazana wprost (md tylko jako widok).
+  if (faza.fix === 'pending') {
+    const fix = await agent(fixPrompt(sciezka, numerFazy, faza.otwarteFindingi), { schema: FIX_RESULT, label: `fix:faza-${numerFazy}` })
+    if (!fix) {
+      return { status: 'STOP', powod: `fix fazy ${numerFazy} zwrocil null`, faza: numerFazy, raporty }
+    }
     cykle = 1
     log(`Fix fazy ${numerFazy}: naprawiono ${fix.naprawione}, nierozwiazane P1=${fix.nierozwiazaneP1} P2=${fix.nierozwiazaneP2}, walidacja ${fix.walidacja}`)
 
     if (fix.walidacja === 'FAIL' || fix.nierozwiazaneP1 > 0) {
+      // Stan NIE oznacza fix=done — resume wroci wprost do fixa z ta sama lista.
+      await zapiszStan()
       return {
         status: 'STOP',
         powod: fix.nierozwiazaneP1 > 0
           ? `Faza ${numerFazy}: ${fix.nierozwiazaneP1}x P1 nierozwiazane po fixie (brak re-review) — wymagana reczna interwencja`
           : `Faza ${numerFazy}: walidacja fixa FAIL — wymagana reczna interwencja`,
-        faza: numerFazy, review, fix, raporty,
+        faza: numerFazy, fix, raporty,
       }
     }
 
+    gateFazy = fix.nierozwiazaneP2 > 0 ? 'ZASTRZEZENIA' : 'CZYSTE'
     if (fix.nierozwiazaneP2 > 0) {
-      gateFazy = 'ZASTRZEZENIA'
       cykle = '1 (graceful P2)'
       log(`Faza ${numerFazy}: GRACEFUL — ${fix.nierozwiazaneP2}x P2 do known-issues, kontynuuje`)
-    } else {
-      gateFazy = 'CZYSTE'
     }
+    faza.fix = 'done'
+    faza.otwarteFindingi = []
+    await zapiszStan()
+  } else if (faza.fix === 'none') {
+    gateFazy = 'CZYSTE'
   }
 
   historia[numerFazy] = cykle
@@ -311,25 +480,48 @@ for (const numerFazy of stan.kolejka) {
 // ── Zakonczenie ──────────────────────────────────────────────────────────
 phase('Zakonczenie')
 
-const walidacja = await agent(finalValidationPrompt(sciezka), { schema: VALIDATION_RESULT, label: 'walidacja-koncowa' })
-if (walidacja.wynik === 'FAIL') {
-  return { status: 'STOP', powod: 'walidacja koncowa FAIL', walidacja, historia, raporty }
+if (stan.zakonczenie.walidacja === 'pending') {
+  const walidacja = await agent(finalValidationPrompt(sciezka), { schema: VALIDATION_RESULT, label: 'walidacja-koncowa' })
+  if (!walidacja) {
+    return { status: 'STOP', powod: 'walidacja koncowa zwrocila null', historia, raporty }
+  }
+  if (walidacja.testyZmodyfikowane && walidacja.testyZmodyfikowane.length) {
+    log(`UWAGA test-weakening: fix zmodyfikowal istniejace testy: ${walidacja.testyZmodyfikowane.join(', ')}`)
+  }
+  if (walidacja.wynik === 'FAIL') {
+    return { status: 'STOP', powod: 'walidacja koncowa FAIL', walidacja, historia, raporty }
+  }
+  stan.zakonczenie.walidacja = 'done'
+  stan.walidacjaWynik = walidacja
+  await zapiszStan()
 }
 
-const complete = await workflow('dev-docs-complete-wf', { nazwaZadania: stan.nazwaZadania })
-const compound = await workflow('dev-compound-wf', { sciezka })
+// Compound PRZED complete: dokumentuje solutions gdy sciezki w docs/active/ jeszcze zyja.
+// Complete (archiwizacja, przenosi folder) jest OSTATNI — po nim juz NIE zapisujemy stanu
+// (plik wedruje do archiwum razem z folderem; zapis wskrzesilby pusty katalog w active/).
+let compound = null
+if (stan.zakonczenie.compound === 'pending') {
+  compound = await workflow('dev-compound-wf', { sciezka })
+  stan.zakonczenie.compound = 'done'
+  await zapiszStan()
+}
+
+let complete = null
+if (stan.zakonczenie.complete === 'pending') {
+  complete = await workflow('dev-docs-complete-wf', { nazwaZadania: stan.nazwaZadania })
+}
 
 const tokRazem = Math.round((tokSpent() - tokRunStart) / 1000)
-log(`Autopilot koniec: ${stan.kolejka.length} faz, ~${tokRazem}k tokenow lacznie`)
+log(`Autopilot koniec: ${kolejka.length} faz, ~${tokRazem}k tokenow lacznie`)
 
 return {
   status: 'OK',
   nazwaZadania: stan.nazwaZadania,
-  fazyUkonczone: stan.kolejka.length,
+  fazyUkonczone: kolejka.length,
   tokeny: `${tokRazem}k`,
   historia,
   raporty,
-  walidacja,
+  walidacja: stan.walidacjaWynik || 'done w poprzednim runie',
   archiwum: complete && complete.archiwum,
   solution: compound && compound.plik,
   regula: compound && compound.regula,
