@@ -1,7 +1,7 @@
 export const meta = {
   name: 'dev-autopilot-wf',
   description: 'Autonomiczny pipeline: bootstrap -> per faza (execute -> review+verify -> fix, bez re-review) -> complete -> compound. Orkiestrator trzyma plan w kodzie; buildery i reviewerzy to leaf-agenci.',
-  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch).',
+  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). RESUME po przerwanym runie: uzyj Workflow({scriptPath, resumeFromRunId}) i ZAWSZE przekaz args ponownie (te sama sciezke zadania) — args NIE przezywa miedzy wywolaniami, bez niego run robi natychmiastowy STOP.',
   phases: [
     { title: 'Bootstrap', detail: 'parse plan + zadania -> PlanState, resume z checkboxow' },
     { title: 'Zakonczenie', detail: 'walidacja koncowa -> complete -> compound' },
@@ -41,7 +41,7 @@ const PLAN_STATE = {
         properties: {
           numer: { type: 'integer' },
           nazwa: { type: 'string' },
-          ukonczona: { type: 'boolean', description: 'wszystkie checkboxy [x] (poza Weryfikacja:)' },
+          ukonczona: { type: 'boolean', description: 'wszystkie checkboxy [x] (poza Weryfikacja:/Operator:/[E2E]/[Manual] — te liczy review/operator, nie execute)' },
           reviewIstnieje: { type: 'boolean' },
           maNierozwiazaneP1P2: { type: 'boolean', description: 'sekcja "Do poprawy po review fazy N" ma niezaznaczone P1/P2' },
         },
@@ -91,6 +91,21 @@ const VALIDATION_RESULT = {
   required: ['wynik'],
 }
 
+// P1: rozgrzewka — runtime ma twardy watchdog (~180s ciszy subagenta -> kill, 6 retry -> FAILED run).
+// Cold-cache vitest na komponentach RN (react-native-web transform + optimizeDeps) potrafi milczec ~16 min
+// na stdout -> watchdog zabija builder na KAZDEJ fazie UI. Rozgrzanie node_modules/.vite RAZ tu sprawia,
+// ze kazdy kolejny vitest agenta jest warm (<kilka s). Cache zyje na dysku repo i przezywa miedzy agentami
+// (agenci dziela working dir — brak isolation:worktree). Self-skip gdy projekt nie ma vitest.
+const WARMUP_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    wykonano: { type: 'boolean', description: 'true gdy odpalono test rozgrzewajacy; false gdy projekt nie ma vitest/component-testow' },
+    detal: { type: 'string', description: 'co odpalono + czas, lub powod pominiecia' },
+  },
+  required: ['wykonano'],
+}
+
 // ── Buildery promptow (leaf-agenci) ───────────────────────────────────────
 
 function bootstrapPrompt(sciezka) {
@@ -104,8 +119,10 @@ Folder zadania: ${sciezka}
 
 2. PLAN: przeczytaj ${sciezka}/*-plan.md -> lista faz [(numer, nazwa)].
 3. ZADANIA: przeczytaj ${sciezka}/*-zadania.md -> per faza:
-   - faza UKONCZONA = wszystkie checkboxy oznaczone [x] (z WYJATKIEM checkboxow "Weryfikacja:")
-   - dowolny [ ] (poza Weryfikacja:) = faza DO WYKONANIA
+   - faza UKONCZONA = wszystkie checkboxy oznaczone [x] z WYJATKIEM checkboxow, ktorych NIE robi execute:
+     "Weryfikacja:", "Operator:", oraz oznaczone "[E2E]" / "[Manual]" (te zamyka review/operator, nie builder).
+   - niezaznaczone "Weryfikacja:"/"Operator:"/"[E2E]"/"[Manual]" NIE czynia fazy "do wykonania" — POMIN je w liczeniu.
+   - dowolny INNY [ ] = faza DO WYKONANIA.
 4. REVIEW: dla kazdej fazy sprawdz czy istnieje ${sciezka}/review-faza-{numer}.md (reviewIstnieje).
    Sprawdz sekcje "Do poprawy po review fazy {numer}" w zadaniach — niezaznaczone P1/P2 => maNierozwiazaneP1P2=true.
 5. KOLEJKA: numery faz do wykonania w kolejnosci. Pomin fazy ukonczone BEZ nierozwiazanych P1/P2.
@@ -135,7 +152,8 @@ KLASYFIKUJ kazdy finding przed naprawa:
 - Typ C WERYFIKACJA E2E (Weryfikacja:/oznaczenie 🌐 lub 📱): napraw przyczyne -> re-uruchom Maestro
   na emulatorze (.maestro/<flow>.yaml, exit 0 + assertVisible) -> odznacz DOPIERO po PASS (nie na "naprawilem kod").
 
-Kolejnosc: A (kod) -> B (testy) -> C (E2E). Po naprawach: pelna walidacja
+Kolejnosc: A (kod) -> B (testy) -> C (E2E). Vitest uruchamiaj z \`--reporter=dot\`
+(output strumieniowy — chroni dlugie testy przed watchdogiem ~180s ciszy). Po naprawach: pelna walidacja
 (typecheck, test, expo-doctor — komendy z package.json; NIE eas build), commit
 \`fix([nazwa]): poprawki po review fazy ${numerFazy}\`, staguj tylko zmienione pliki.
 
@@ -150,6 +168,24 @@ bez re-review): nierozwiazaneP1 (P1 ktorych NIE zamknales -> orkiestrator zrobi 
 nierozwiazaneP2 (P2 przeniesione do known-issues), walidacja (PASS/FAIL pelnej walidacji).`
 }
 
+function warmupPrompt(sciezka) {
+  return `Jestes rozgrzewka cache testowego pipeline'u dev-autopilot (folder zadania: ${sciezka}).
+CEL: zbudowac cache transformacji testow PRZED fazami implementacji, zeby pierwszy "zimny" vitest
+nie milczal kilkanascie minut na stdout (watchdog runtime zabija subagenta po ~180s ciszy).
+
+1. Wykryj test runner: przeczytaj package.json. Jesli NIE ma vitest (ani jest/innego z ciezkim setupem)
+   -> zwroc {wykonano:false, detal:"brak vitest — rozgrzewka zbedna"}. Nie kombinuj.
+2. Jesli jest vitest: znajdz JEDEN test komponentu z najciezszym setupem — preferuj *.test.tsx
+   w components/ (transform react-native -> react-native-web jest najdrozszy). Brak component-testu
+   -> wez dowolny istniejacy plik testowy.
+3. Uruchom GO RAZ przez wlasciwy package manager (bun.lockb->bunx, pnpm->pnpm, npm->npx), np.
+   \`bunx vitest run <plik> --reporter=dot\`. To buduje node_modules/.vite/optimizeDeps.
+   WYNIK testu (pass/fail) jest NIEISTOTNY — liczy sie zbudowanie cache. Nie naprawiaj asercji.
+4. NIE modyfikuj zadnych plikow zrodlowych. To tylko rozgrzewka.
+
+Zwroc {wykonano, detal} (detal: co odpalono + ile trwalo, lub powod pominiecia).`
+}
+
 function finalValidationPrompt(sciezka) {
   return `Wykonaj pelna walidacje calego projektu po autopilocie (folder zadania: ${sciezka}).
 
@@ -159,7 +195,13 @@ Brak skryptu typecheck -> sprobuj tsc --noEmit jesli jest tsconfig.json. Stack E
 \`bunx expo-doctor\` (NIE eas build). Makefile/pyproject/Cargo — uzyj wlasciwych narzedzi.
 
 KROK 2 — uruchom w kolejnosci, zatrzymaj przy pierwszym FAIL: typecheck -> lint (jesli jest) -> test -> expo-doctor.
-KROK 3 — jesli FAIL i potrafisz naprawic prosty problem (import, typ) — napraw, commituj, uruchom ponownie.
+   Dla vitest dodaj \`--reporter=dot\` (output strumieniowy — dlugie testy emituja progress, nie cisza).
+KROK 2.5 (P4 — flake infra, nie defekt): jesli pelny suite vitest zglosi na pliku bled INFRA workera,
+   nie asercje — sygnatury: "[vitest-worker]: Timeout calling \\"fetch\\"", "Timeout calling", worker terminated,
+   ENOMEM, heap out of memory -> RE-URUCHOM TEN JEDEN plik w izolacji (\`vitest run <plik> --reporter=dot\`).
+   PASS w izolacji => to flake pod obciazeniem, NIE blokuj (testy=PASS, dopisz plik do bledy[] jako "flake-infra: <plik> (PASS w izolacji)").
+   FAIL tez w izolacji => realny defekt, wynik=FAIL. Dotyczy WYLACZNIE bledow infra workera, nie failujacych asercji.
+KROK 3 — jesli FAIL (realny) i potrafisz naprawic prosty problem (import, typ) — napraw, commituj, uruchom ponownie.
    Jak nie potrafisz — zwroc liste bledow z lokalizacjami i wynik=FAIL.
 
 Zwroc obiekt zgodny ze schematem ValidationResult.`
@@ -172,7 +214,12 @@ Zwroc obiekt zgodny ze schematem ValidationResult.`
 const sciezkaRaw = typeof args === 'string' ? args : args && args.sciezka
 const sciezka = sciezkaRaw && sciezkaRaw.replace(/^@/, '').replace(/\/+$/, '')
 if (!sciezka) {
-  return { status: 'STOP', powod: 'brak sciezki zadania (podaj args: "docs/active/<zadanie>")' }
+  // P3: najczestsza przyczyna tu = resume przez scriptPath BEZ ponownego przekazania args.
+  // args nie przezywa miedzy wywolaniami workflow — trzeba je podac przy KAZDYM (re)starcie.
+  return {
+    status: 'STOP',
+    powod: 'brak sciezki zadania. Przy starcie: args:"docs/active/<zadanie>". Przy RESUME (scriptPath+resumeFromRunId): przekaz args PONOWNIE — nie przenosi sie z poprzedniego runu.',
+  }
 }
 
 // Pomiar kosztu per faza -> log, zeby nastepny run byl mierzalny (transkrypty agentow nie przezywaja,
@@ -191,6 +238,13 @@ if (!stan.branch.czysty) {
 }
 
 log(`Autopilot: ${stan.nazwaZadania} — fazy do wykonania: ${stan.kolejka.join(', ') || 'brak'}`)
+
+// P1: rozgrzej cache vitest RAZ przed pierwsza faza (chroni przed watchdog-killem na cold component-vitest).
+// Tylko gdy faktycznie cos wykonujemy — pusta kolejka nie potrzebuje rozgrzewki.
+if (stan.kolejka.length > 0) {
+  const warmup = await agent(warmupPrompt(sciezka), { schema: WARMUP_RESULT, label: 'warmup:vitest', phase: 'Bootstrap' })
+  log(`Rozgrzewka cache: ${warmup.wykonano ? 'OK' : 'pominieta'} — ${warmup.detal || ''}`)
+}
 
 const historia = {}
 const raporty = []

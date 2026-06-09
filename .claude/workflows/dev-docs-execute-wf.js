@@ -107,6 +107,8 @@ Referencja metodologii: przeczytaj .claude/skills/dev-docs-execute/SKILL.md sekc
    - agentType = wartosc pola "Delegate to:" z IU.
    Wymagania wykonania dla buildera: zaimplementuj kod dla checkboxow (oprocz "Weryfikacja:"),
    napisz testy dla checkboxow "Test:" RAZEM z kodem, NIE wykonuj "Weryfikacja:" (to dla review).
+   Gdy builder uruchamia vitest — niech doda \`--reporter=dot\` (output strumieniowy: cold-cache
+   component-vitest milczy kilkanascie minut na stdout, a watchdog runtime zabija subagenta po ~180s ciszy).
 
 Zwroc obiekt zgodny ze schematem IUPlan. Sam nie implementuj kodu.`
 }
@@ -126,6 +128,7 @@ ${podsumowanieIU}
 1. System-Wide Test Check (.claude/skills/dev-docs-execute/SKILL.md sekcja 4.5): typecheck bez nowych bledow,
    istniejace testy przechodza, nowe testy pokrywaja happy path + error case, checkboxy "Test:" napisane i przechodza,
    importy nie lamia modulow, build/expo-doctor przechodzi. Komendy z package.json (NIE eas build).
+   Vitest uruchamiaj z \`--reporter=dot\` (output strumieniowy — chroni przed watchdogiem ~180s ciszy).
 2. Aktualizuj ${sciezka}/*-zadania.md: oznacz ukonczone checkboxy [x] (NIE ruszaj "Weryfikacja:" — to dla review).
 3. Aktualizuj ${sciezka}/*-kontekst.md: zmiany, decyzje, "Ostatnia aktualizacja".
 4. Aktualizuj plan techniczny w docs/plans/ (odznacz test scenarios / verification dla tej fazy).
