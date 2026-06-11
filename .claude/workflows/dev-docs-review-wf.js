@@ -203,6 +203,13 @@ POMIN preflight (simctl/adb/curl) i Maestro. Nie odpalaj srodowiska gdy nie ma c
 NAJPIERW preflight srodowiska (Bash): czy jest booted emulator (xcrun simctl booted / adb devices)
 i czy Metro UP (curl localhost:8081/status). Potem proba Maestro przez skill mobile-e2e-maestro.
 
+SRODOWISKO ZARZADZANE (jesli w korzeniu repo istnieje .env.e2e): orkiestrator postawil Metro
+na dedykowanej bazie e2e i zsynchronizowal migracje+seedy PRZED Twoim startem. Wtedy:
+- konto do logowania w flow = E2E_TEST_EMAIL / E2E_TEST_PASSWORD z .env.e2e (nie loguj wartosci),
+- "migracja/RPC niewdrozona na remote" i "brak seeded sesji" NIE sa automatycznym powodem
+  OPERATOR — najpierw SPRAWDZ realnie (uruchom flow); klasyfikuj OPERATOR dopiero po twardym
+  dowodzie blokera srodowiskowego (np. blad poza kontrola: brak dev clienta, simulator down).
+
 KLASYFIKACJA per scenariusz (to jest krytyczne — nie wszystko jest P2):
 - Scenariusz WYKONANY i FAILED z powodu defektu w kodzie/UI/stylu -> finding P2 typ E2E.
 - Scenariusz NIEWYKONALNY headless (brak booted emulatora, Metro down, dev-client wymaga 'eas build',

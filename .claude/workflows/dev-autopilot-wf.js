@@ -3,7 +3,7 @@ export const meta = {
   description: 'Autonomiczny pipeline: bootstrap (stan z .autopilot-state.json) -> per faza (execute -> review+verify -> fix, bez re-review) -> compound -> complete. Orkiestrator trzyma stan w JSON i liczy gate\'y w JS; buildery i reviewerzy to leaf-agenci.',
   whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). RESUME po przerwanym runie: uzyj Workflow({scriptPath, resumeFromRunId}) i ZAWSZE przekaz args ponownie (te sama sciezke zadania) — args NIE przezywa miedzy wywolaniami. Stan wznowienia czyta z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy), checkboxy md sa tylko widokiem dla czlowieka.',
   phases: [
-    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + rozgrzewka cache testow' },
+    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + rozgrzewka cache testow + srodowisko E2E (opcjonalne, wymaga .env.e2e)' },
     { title: 'Zakonczenie', detail: 'walidacja koncowa -> compound -> complete (compound pierwszy: sciezki w docs/active/ jeszcze zyja)' },
   ],
 }
@@ -121,6 +121,38 @@ const WARMUP_RESULT = {
     czasKontrolnySek: { type: ['integer', 'null'], description: 'czas kontrolnego warm-runu w sekundach — DOWOD zbudowania cache' },
   },
   required: ['status', 'detal'],
+}
+
+const E2E_ENV_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string', enum: ['gotowe', 'pominieto', 'niepowodzenie'] },
+    detal: { type: 'string', description: 'co postawiono / powod pominiecia lub niepowodzenia (BEZ wartosci sekretow)' },
+    metro: { type: 'string', enum: ['uruchomione', 'zastane', 'brak'] },
+    simulator: { type: 'string', enum: ['gotowy', 'brak'] },
+  },
+  required: ['status', 'detal', 'metro', 'simulator'],
+}
+
+const E2E_DB_SYNC_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    status: { type: 'string', enum: ['zsynchronizowano', 'aktualna', 'niepowodzenie'] },
+    detal: { type: 'string', description: 'co zaaplikowano (migracje/seedy/konto) lub tresc bledu — blad SQL migracji to potencjalny DEFEKT KODU' },
+  },
+  required: ['status', 'detal'],
+}
+
+const E2E_DOWN_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    posprzatano: { type: 'boolean' },
+    detal: { type: 'string' },
+  },
+  required: ['posprzatano', 'detal'],
 }
 
 const FIX_RESULT = {
@@ -243,6 +275,73 @@ ${BLOK_DLUGIE_KOMENDY}
 5. Sprzatanie: usun /tmp/autopilot-warmup.log i ewentualny tymczasowy test z kroku 2.
 
 Poza wyjatkiem z kroku 2 NIE modyfikuj zadnych plikow. Zwroc {status, detal, czasZimnySek, czasKontrolnySek}.`
+}
+
+function e2eEnvUpPrompt() {
+  return `Jestes agentem srodowiska E2E pipeline'u dev-autopilot. Postaw srodowisko testow Maestro
+(Metro + simulator z dev clientem), zeby reviewer E2E i fix mogly REALNIE wykonac flow zamiast
+klasyfikowac je jako OPERATOR. Baza = DEDYKOWANY projekt Supabase e2e z .env.e2e (nigdy dev/prod).
+${BLOK_DLUGIE_KOMENDY}
+
+0. SELF-SKIP: jesli w korzeniu repo NIE ma pliku .env.e2e -> zwroc
+   {status:"pominieto", detal:"brak .env.e2e — E2E w trybie OPERATOR (setup: .claude/templates/e2e-env/README.md)", metro:"brak", simulator:"brak"}
+   i ZAKONCZ.
+
+1. BEZPIECZENSTWO (twarde):
+   a) \`git check-ignore -q .env.e2e\` — exit != 0 (plik NIE jest gitignorowany) -> {status:"niepowodzenie",
+      detal:"dopisz .env.e2e do .gitignore — plik zawiera sekrety"}. NIGDY nie loguj wartosci z tego pliku.
+   b) Wymagane klucze: EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_E2E_DB_URL,
+      SUPABASE_E2E_SERVICE_ROLE_KEY, E2E_TEST_EMAIL, E2E_TEST_PASSWORD. Brak -> niepowodzenie z LISTA NAZW brakow.
+   c) GUARD TOZSAMOSCI: EXPO_PUBLIC_SUPABASE_URL z .env.e2e musi byc ROZNY od wartosci w .env / .env.local
+      (jesli istnieja). Identyczny = to nie jest dedykowany projekt e2e -> niepowodzenie (ochrona bazy dev/prod).
+
+2. METRO: \`curl -s localhost:8081/status\`.
+   - Odpowiada -> metro:"zastane"; w detal ostrzezenie: istniejacy Metro bundluje env swojego procesu,
+     wiec moze wskazywac na baze dev — flow E2E zweryfikuja to posrednio (login kontem e2e).
+   - Nie odpowiada -> uruchom DETACHED (musi przezyc Twoje zakonczenie; pm z lockfile):
+     \`set -a; source .env.e2e; set +a; nohup <pm> start > /tmp/autopilot-metro.log 2>&1 & echo $! > /tmp/autopilot-metro.pid\`
+     Polluj \`curl -s localhost:8081/status\` co ~10s (max ~120s). Sukces -> metro:"uruchomione",
+     timeout -> niepowodzenie (dolacz tail -20 /tmp/autopilot-metro.log do detal).
+
+3. SIMULATOR (iOS): \`xcrun simctl list devices booted\` — pusto -> boot najnowszego dostepnego iPhone'a
+   (\`xcrun simctl list devices available\` + \`xcrun simctl boot <udid>\`; boot trwa chwile, odpytuj status).
+   Dev client: bundle id z app.json / app.config.* -> \`xcrun simctl listapps booted | grep <bundleId>\`.
+   Brak dev clienta -> {status:"niepowodzenie", simulator:"brak", detal:"zainstaluj dev client (one-time):
+   bunx expo run:ios LUB eas build --profile development --platform ios + xcrun simctl install booted <.app>"}.
+
+4. status "gotowe" TYLKO gdy: Metro odpowiada ORAZ simulator booted z dev clientem. Nie modyfikuj plikow repo.`
+}
+
+function e2eDbSyncPrompt(sciezka, numerFazy) {
+  return `Jestes agentem synchronizacji bazy e2e pipeline'u dev-autopilot (zadanie: ${sciezka}, faza ${numerFazy}).
+Cel: dedykowany projekt Supabase e2e ma miec migracje i seedy tej fazy PRZED testami Maestro.
+Ten projekt WOLNO modyfikowac autonomicznie — to nie jest baza dev/prod (guard tozsamosci zrobil env-up).
+NIGDY nie loguj wartosci sekretow z .env.e2e.
+${BLOK_DLUGIE_KOMENDY}
+
+1. Wczytaj SUPABASE_E2E_DB_URL i SUPABASE_E2E_SERVICE_ROLE_KEY z .env.e2e (do uzycia, nie do logu).
+2. MIGRACJE — realny apply: \`supabase db push --db-url "$SUPABASE_E2E_DB_URL" --include-all\`
+   (non-interactive: dodaj --yes jesli CLI wspiera, inaczej \`echo Y |\`). To pierwsza PRAWDZIWA
+   weryfikacja SQL migracji w pipeline (testy migracji w repo to regex na pliku). Blad SQL ->
+   status "niepowodzenie" z pelna trescia bledu w detal — to moze byc DEFEKT KODU migracji, nie infra.
+3. SEED: znajdz seedy powiazane z flow tej fazy — pliki *-seed.sql w .maestro/ (powiazanie po nazwie
+   flow z checkboxow "Weryfikacja:" fazy ${numerFazy} w ${sciezka}/*-zadania.md). Aplikuj kazdy:
+   \`psql "$SUPABASE_E2E_DB_URL" -f <plik>\` (brak psql -> sprobuj \`supabase db query\` lub odnotuj
+   w detal). Bledy duplikatow przy nieidempotentnym seedzie odnotuj, nie failuj.
+4. KONTO TESTOWE: sprawdz czy user E2E_TEST_EMAIL istnieje (GET /auth/v1/admin/users przez
+   service_role). Brak -> utworz (POST /auth/v1/admin/users, email_confirm:true, haslo E2E_TEST_PASSWORD).
+
+Zwroc {status, detal}: "zsynchronizowano" (cos zaaplikowano), "aktualna" (nic do zrobienia),
+"niepowodzenie" (+ co dokladnie padlo).`
+}
+
+function e2eEnvDownPrompt() {
+  return `Sprzatanie srodowiska E2E dev-autopilot. Zabij WYLACZNIE procesy uruchomione przez pipeline:
+1. Jesli istnieje /tmp/autopilot-metro.pid: \`kill $(cat /tmp/autopilot-metro.pid)\` (ignoruj blad gdy
+   proces juz nie zyje), potem usun /tmp/autopilot-metro.pid i /tmp/autopilot-metro.log.
+   Metro "zastane" (brak naszego .pid) zostaw w spokoju — nie nalezy do nas.
+2. Simulatora NIE wylaczaj (tani w utrzymaniu, drogi w boot).
+Zwroc {posprzatano, detal}.`
 }
 
 function fixPrompt(sciezka, numerFazy, otwarteFindingi) {
@@ -390,6 +489,13 @@ if (warmup.status === 'niepowodzenie') {
   return { status: 'STOP', powod: `rozgrzewka cache nie powiodla sie: ${warmup.detal} — fazy UI zginelyby na watchdogu, taniej zatrzymac tu`, stan }
 }
 
+// Srodowisko E2E: raz per run (Metro hot-reloaduje working tree, restart per faza zbedny).
+// Niepowodzenie NIE zatrzymuje runu — E2E to rozszerzenie weryfikacji, nie gate: bez srodowiska
+// reviewer E2E klasyfikuje flow jako OPERATOR (status quo sprzed tej funkcji).
+const e2eEnv = await agent(e2eEnvUpPrompt(), { schema: E2E_ENV_RESULT, label: 'e2e:env-up', phase: 'Bootstrap' })
+const e2eAktywne = !!e2eEnv && e2eEnv.status === 'gotowe'
+log(`E2E env: ${e2eEnv ? `${e2eEnv.status} (metro: ${e2eEnv.metro}, simulator: ${e2eEnv.simulator}) — ${e2eEnv.detal}` : 'agent zwrocil null — pomijam E2E'}`)
+
 const historia = {}
 const raporty = []
 const tokRunStart = tokSpent()
@@ -403,6 +509,7 @@ for (const numerFazy of kolejka) {
   const tokFazaStart = tokSpent()
   let gateFazy = 'CZYSTE'
   let cykle = 0
+  let e2eSync = null
 
   // 1) EXECUTE — tylko gdy pending (resume nigdy nie powtarza ukonczonego execute, w tym migracji).
   if (faza.execute === 'pending') {
@@ -417,6 +524,14 @@ for (const numerFazy of kolejka) {
 
   // 2) REVIEW — tylko gdy pending. Faza ukonczona z otwartymi findingami idzie PROSTO do fix (Bug 1).
   if (faza.review === 'pending') {
+    // Sync bazy e2e per faza PO execute (migracje fazy powstaja w execute, db push jest
+    // przyrostowy — brak nowych migracji = no-op). Niepowodzenie nie blokuje review:
+    // tester E2E trafi na brak danych i sklasyfikuje OPERATOR, a detal (np. blad SQL
+    // migracji = potencjalny defekt kodu!) zostaje w logu i raporcie fazy dla operatora.
+    if (e2eAktywne) {
+      e2eSync = await agent(e2eDbSyncPrompt(sciezka, numerFazy), { schema: E2E_DB_SYNC_RESULT, label: `e2e:db-sync:faza-${numerFazy}` })
+      log(`E2E db-sync fazy ${numerFazy}: ${e2eSync ? `${e2eSync.status} — ${e2eSync.detal}` : 'agent zwrocil null'}`)
+    }
     const review = await workflow('dev-docs-review-wf', {
       sciezka,
       faza: numerFazy,
@@ -476,7 +591,7 @@ for (const numerFazy of kolejka) {
   // Delta 0 po resume = agenci fazy wrocili z journala (cache), nie "darmowa faza" — oznacz w raporcie.
   const tokFazyOpis = tokFazy === 0 ? '0k (z cache — resume)' : `${tokFazy}k`
   log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}, ~${tokFazyOpis} tokenow`)
-  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: tokFazyOpis })
+  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: tokFazyOpis, e2eSync: e2eSync ? `${e2eSync.status}: ${e2eSync.detal}` : 'n/a' })
 }
 
 // ── Zakonczenie ──────────────────────────────────────────────────────────
@@ -496,6 +611,14 @@ if (stan.zakonczenie.walidacja === 'pending') {
   stan.zakonczenie.walidacja = 'done'
   stan.walidacjaWynik = walidacja
   await zapiszStan()
+}
+
+// Teardown E2E dopiero PO walidacji i tylko na sciezce sukcesu — kazdy wczesniejszy STOP
+// celowo zostawia Metro/simulator zywe (operator debuguje na gotowym srodowisku; nasz .pid
+// pozwala nastepnemu runowi przejac lub ubic proces).
+if (e2eAktywne) {
+  const down = await agent(e2eEnvDownPrompt(), { schema: E2E_DOWN_RESULT, label: 'e2e:env-down', model: 'haiku' })
+  log(`E2E env-down: ${down ? `${down.posprzatano ? 'OK' : 'pominieto'} — ${down.detal}` : 'agent zwrocil null'}`)
 }
 
 // Compound PRZED complete: dokumentuje solutions gdy sciezki w docs/active/ jeszcze zyja.
@@ -525,6 +648,7 @@ return {
   historia,
   raporty,
   walidacja: stan.walidacjaWynik || 'done w poprzednim runie',
+  e2eSrodowisko: e2eEnv ? e2eEnv.status : 'brak',
   archiwum: complete && complete.archiwum,
   archiwumCommit: (complete && complete.commit) || '',
   solution: compound && compound.plik,
