@@ -1,10 +1,10 @@
 export const meta = {
   name: 'dev-autopilot-wf',
-  description: 'Autonomiczny pipeline: bootstrap (stan z .autopilot-state.json) -> per faza (execute -> review+verify -> fix, bez re-review) -> complete -> compound. Orkiestrator trzyma stan w JSON i liczy gate\'y w JS; buildery i reviewerzy to leaf-agenci.',
+  description: 'Autonomiczny pipeline: bootstrap (stan z .autopilot-state.json) -> per faza (execute -> review+verify -> fix, bez re-review) -> compound -> complete. Orkiestrator trzyma stan w JSON i liczy gate\'y w JS; buildery i reviewerzy to leaf-agenci.',
   whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). RESUME po przerwanym runie: uzyj Workflow({scriptPath, resumeFromRunId}) i ZAWSZE przekaz args ponownie (te sama sciezke zadania) — args NIE przezywa miedzy wywolaniami. Stan wznowienia czyta z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy), checkboxy md sa tylko widokiem dla czlowieka.',
   phases: [
     { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + rozgrzewka cache testow' },
-    { title: 'Zakonczenie', detail: 'walidacja koncowa -> complete -> compound' },
+    { title: 'Zakonczenie', detail: 'walidacja koncowa -> compound -> complete (compound pierwszy: sciezki w docs/active/ jeszcze zyja)' },
   ],
 }
 
@@ -473,8 +473,10 @@ for (const numerFazy of kolejka) {
 
   historia[numerFazy] = cykle
   const tokFazy = Math.round((tokSpent() - tokFazaStart) / 1000)
-  log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}, ~${tokFazy}k tokenow`)
-  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: `${tokFazy}k` })
+  // Delta 0 po resume = agenci fazy wrocili z journala (cache), nie "darmowa faza" — oznacz w raporcie.
+  const tokFazyOpis = tokFazy === 0 ? '0k (z cache — resume)' : `${tokFazy}k`
+  log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}, ~${tokFazyOpis} tokenow`)
+  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: tokFazyOpis })
 }
 
 // ── Zakonczenie ──────────────────────────────────────────────────────────
@@ -499,6 +501,7 @@ if (stan.zakonczenie.walidacja === 'pending') {
 // Compound PRZED complete: dokumentuje solutions gdy sciezki w docs/active/ jeszcze zyja.
 // Complete (archiwizacja, przenosi folder) jest OSTATNI — po nim juz NIE zapisujemy stanu
 // (plik wedruje do archiwum razem z folderem; zapis wskrzesilby pusty katalog w active/).
+// Stempel complete:"done" w zarchiwizowanym pliku stawia sam complete-wf (krok 5 jego prompta).
 let compound = null
 if (stan.zakonczenie.compound === 'pending') {
   compound = await workflow('dev-compound-wf', { sciezka })
@@ -523,6 +526,7 @@ return {
   raporty,
   walidacja: stan.walidacjaWynik || 'done w poprzednim runie',
   archiwum: complete && complete.archiwum,
+  archiwumCommit: (complete && complete.commit) || '',
   solution: compound && compound.plik,
   regula: compound && compound.regula,
 }
