@@ -17,6 +17,35 @@ Zakończenie:  env-down  — ubija TYLKO Metro z naszego .pid; STOP zostawia śr
                           do ręcznego debugowania.
 ```
 
+## Szybki start — gotowy prompt dla asystenta
+
+Zamiast wykonywać kroki ręcznie, wklej asystentowi w sesji projektu (zastąp `<projekt>`):
+
+```markdown
+Zrób one-time setup środowiska E2E wg .claude/templates/e2e-env/README.md:
+
+1. Utwórz dedykowany projekt Supabase "<projekt>-e2e" (przez Supabase MCP
+   jeśli dostępny, inaczej daj mi link i poprowadź przez dashboard — free tier).
+   To MUSI być NOWY projekt — nigdy ref istniejącej bazy dev/prod.
+2. Zbierz: URL, anon key, service_role key, connection string (direct).
+3. Utwórz `.env.e2e` w korzeniu repo wg .claude/templates/e2e-env/.env.e2e.example,
+   wygeneruj silne hasło dla konta testowego (e2e@<projekt>.test).
+4. Dopisz `.env.e2e` do .gitignore i ZWERYFIKUJ: `git check-ignore .env.e2e`.
+5. Sprawdź maestro CLI (`maestro --version`), zainstaluj jeśli brak.
+6. Dev client: sprawdź czy simulator ma zainstalowaną apkę (bundle id z app.json,
+   `xcrun simctl listapps booted`). Brak → `bunx expo run:ios` (długi build, w tle).
+7. Na koniec smoke: curl do URL projektu e2e + `supabase db push --db-url ...`
+   na pustą bazę (zaaplikuje WSZYSTKIE migracje od zera — to też test, czy
+   łańcuch migracji jest kompletny!) i pokaż mi raport co działa, a co wymaga
+   mojej ręki.
+
+Sekretów nie loguj i nie commituj. Po wszystkim NIE odpalaj autopilota — czekaj na mnie.
+```
+
+Krok 1 może wymagać ręcznego kliknięcia w dashboardzie (uprawnienia tokena MCP);
+resztę asystent zrobi sam. Pierwszy run autopilota z `.env.e2e` traktuj jako test
+bojowy tej fazy.
+
 ## Kroki (raz na maszynę/projekt)
 
 1. **Utwórz dedykowany projekt Supabase** (np. `<projekt>-e2e`). Nigdy nie podawaj tu
