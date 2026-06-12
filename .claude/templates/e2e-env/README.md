@@ -73,3 +73,10 @@ bojowy tej fazy.
 - **Reset danych**: db-sync nie robi `db reset` — czyszczenie zostawione seedom
   (idempotencja). Gdy baza e2e „zgnije", zresetuj ręcznie: `supabase db reset --db-url ...`.
 - Haptyki i fizyczne gesty simulator nie symuluje — to zostaje na checklistach Operatora.
+- **Connection string „direct" jest IPv6-only** — w sieci bez IPv6 psql/db push wiszą na
+  timeout. Używaj session poolera (IPv4, port 5432, wspiera migracje) — wzór w `.env.e2e.example`.
+  (Lekcja z setupu gramywpadla 2026-06-12.)
+- **Stary Supabase CLI potrafi mieć zepsute tworzenie projektu** (np. 2.67.1 — wybór regionu);
+  przy dziwnych błędach najpierw `brew upgrade supabase`.
+- **Seedy muszą wstawiać WSZYSTKO, czego flow potrzebuje** — świeża baza e2e nie ma danych
+  „oczywistych" z dev (np. słownikowych wstawianych kiedyś ręcznie). Migracje ≠ dane.
