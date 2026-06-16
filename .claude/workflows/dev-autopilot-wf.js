@@ -3,7 +3,7 @@ export const meta = {
   description: 'Autonomiczny pipeline: bootstrap (stan z .autopilot-state.json) -> per faza (execute -> review+verify -> fix, bez re-review) -> compound -> complete. Orkiestrator trzyma stan w JSON i liczy gate\'y w JS; buildery i reviewerzy to leaf-agenci.',
   whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). RESUME po przerwanym runie: uzyj Workflow({scriptPath, resumeFromRunId}) i ZAWSZE przekaz args ponownie (te sama sciezke zadania) — args NIE przezywa miedzy wywolaniami. Stan wznowienia czyta z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy), checkboxy md sa tylko widokiem dla czlowieka.',
   phases: [
-    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + rozgrzewka cache testow + srodowisko E2E (opcjonalne, wymaga .env.e2e)' },
+    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + rozgrzewka cache testow + srodowisko E2E (gdy .env.e2e istnieje: TWARDY STOP runu dopoki E2E nie gotowe — np. dev-client przez `bunx expo run:ios`)' },
     { title: 'Zakonczenie', detail: 'walidacja koncowa -> compound -> complete (compound pierwszy: sciezki w docs/active/ jeszcze zyja)' },
   ],
 }
@@ -490,11 +490,25 @@ if (warmup.status === 'niepowodzenie') {
 }
 
 // Srodowisko E2E: raz per run (Metro hot-reloaduje working tree, restart per faza zbedny).
-// Niepowodzenie NIE zatrzymuje runu — E2E to rozszerzenie weryfikacji, nie gate: bez srodowiska
-// reviewer E2E klasyfikuje flow jako OPERATOR (status quo sprzed tej funkcji).
+// BRAMKA OPT-IN (2026-06-16, regresja etap-11): status decyduje czy run leci dalej.
+//   'pominieto'     = brak .env.e2e -> projekt nie chce E2E -> cicha degradacja do OPERATOR (status quo).
+//   'niepowodzenie' = .env.e2e ISTNIEJE (projekt opt-in'owal sie w E2E), ale srodowisko nie gotowe
+//                     -> HARD STOP w bootstrapie, PRZED jakakolwiek faza. Bez tego E2E znika z runu
+//                     bez sladu (cicho do OPERATOR) — operator dowiaduje sie z checkboxow po fakcie.
+//   'gotowe'        = Metro + simulator z dev-clientem -> E2E aktywne.
+// null (agent padl) = infra hiccup, nie brak setupu -> nie blokuj (degraduj z ostrzezeniem w logu).
 const e2eEnv = await agent(e2eEnvUpPrompt(), { schema: E2E_ENV_RESULT, label: 'e2e:env-up', phase: 'Bootstrap' })
+log(`E2E env: ${e2eEnv ? `${e2eEnv.status} (metro: ${e2eEnv.metro}, simulator: ${e2eEnv.simulator}) — ${e2eEnv.detal}` : 'agent zwrocil null — pomijam E2E (infra, nie brak setupu)'}`)
+if (e2eEnv && e2eEnv.status === 'niepowodzenie') {
+  return {
+    status: 'STOP',
+    powod: `Srodowisko E2E nie gotowe, a .env.e2e istnieje (projekt wymaga E2E): ${e2eEnv.detal}`,
+    naprawa: 'Setup: .claude/templates/e2e-env/README.md. Najczestszy brak = dev-client na simulatorze -> `bunx expo run:ios` (zostaw ten simulator BOOTED przed wznowieniem: env-up przejmuje juz-booted, a swiezy bootuje czysty BEZ dev-clienta). Opt-out swiadomego runu headless: usun/zmien nazwe .env.e2e. Po setupie wznow: Workflow({scriptPath, resumeFromRunId}) + TE SAME args.',
+    e2eEnv,
+    stan,
+  }
+}
 const e2eAktywne = !!e2eEnv && e2eEnv.status === 'gotowe'
-log(`E2E env: ${e2eEnv ? `${e2eEnv.status} (metro: ${e2eEnv.metro}, simulator: ${e2eEnv.simulator}) — ${e2eEnv.detal}` : 'agent zwrocil null — pomijam E2E'}`)
 
 const historia = {}
 const raporty = []

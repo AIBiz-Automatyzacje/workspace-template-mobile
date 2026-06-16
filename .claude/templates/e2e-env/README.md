@@ -2,14 +2,21 @@
 
 Po tym setupie autopilot **autonomicznie wykonuje testy Maestro**: stawia Metro na dedykowanej
 bazie e2e, synchronizuje migracje+seedy per faza, a fail asercji wchodzi w pętlę fix jako
-finding P2 typ E2E. Bez setupu nic się nie psuje — flow E2E są klasyfikowane jako OPERATOR
-(status quo).
+finding P2 typ E2E.
+
+**Bramka opt-in (od 2026-06-16):**
+- **Brak `.env.e2e`** → projekt nie chce E2E → flow klasyfikowane jako OPERATOR, run leci dalej (status quo).
+- **`.env.e2e` istnieje, ale środowisko niegotowe** (np. brak dev-clienta na simulatorze) → autopilot
+  **TWARDO zatrzymuje run w bootstrapie** z gotową komendą naprawczą. Powód: gdy projekt opt-in'ował
+  się w E2E, ciche pominięcie = E2E znika z runu bez śladu (regresja etap-11). Świadomy run headless:
+  usuń/zmień nazwę `.env.e2e`.
 
 ## Architektura
 
 ```
 Bootstrap:    env-up    — .env.e2e? gitignore? Metro (detached, env z .env.e2e),
-                          simulator + dev client. Fail = log, run idzie dalej (nie gate).
+                          simulator + dev client. .env.e2e jest, a env niegotowe = HARD STOP
+                          (gate opt-in); brak .env.e2e = pominieto, run leci dalej.
 Per faza:     db-sync   — supabase db push na bazę e2e (PIERWSZY realny apply SQL migracji
                           w pipeline!) + seedy .maestro/*-seed.sql + konto testowe.
 Review/fix:   tester E2E i fix odpalają Maestro na gotowym środowisku.
