@@ -72,6 +72,12 @@ bojowy tej fazy.
   db-sync wiąże seed z flow po nazwie. Pisz seedy **idempotentnie**.
 - Logowanie w flow wyłącznie kontem `E2E_TEST_EMAIL`/`E2E_TEST_PASSWORD` (OAuth Google
   jest nietestowalny w Maestro).
+- **Dev sign-in czyta konto z `EXPO_PUBLIC_E2E_TEST_USER_*`** — jeśli flow loguje się przez
+  ekran dev/E2E (nie pełny formularz), te zmienne muszą wskazywać konto e2e. Przy swapie
+  `.env.local`→e2e ustaw je razem z `EXPO_PUBLIC_SUPABASE_URL` (inaczej login celuje w złe konto).
+- **Re-seed per flow** (izolacja stanu): każdy flow zaczyna od czystego, znanego stanu —
+  seed idempotentny aplikuj przed KAŻDYM flow, nie raz na całą fazę. Łap świeże `TOURNAMENT_UUID`
+  z `RAISE NOTICE` seeda i przekaż do inject przez `env:` w YAML.
 
 ## Pułapki
 

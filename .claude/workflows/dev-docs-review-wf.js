@@ -194,11 +194,17 @@ ${BLOK_DLUGIE_KOMENDY}${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
 
 function e2ePrompt(sciezka, faza, poprzednie) {
   return `Jestes testerem E2E mobile (Maestro) dla fazy ${faza} w ${sciezka}.
-Zbierz niezaznaczone checkboxy "Weryfikacja:" tej fazy dotyczace scenariuszy mobile
-(launchApp, tapOn, assertVisible, takeScreenshot, deep linking, oznaczenie 📱). Pomin CLI i Manual.
+Zbierz niezaznaczone checkboxy oznaczone \`[E2E]\` tej fazy — NIEZALEZNIE od prefiksu:
+\`Test: [E2E] ...\` ORAZ \`Weryfikacja: [E2E] ...\` (planner pisze scenariusze E2E pod \`Test:\`,
+nie tylko \`Weryfikacja:\` — MUSISZ przeszukac OBA). To scenariusze mobile do uruchomienia przez Maestro
+(launchApp, tapOn, assertVisible, takeScreenshot, deep linking, runScript inject). Pomin tylko CLI
+(\`bun test\`/\`typecheck\`/\`grep\`) i \`[Manual]\`.
 
-BRAMKA (Poprawka 10) — najpierw policz te mobilne checkboxy. Jesli jest ICH ZERO -> zwroc OD RAZU {findings:[]},
-POMIN preflight (simctl/adb/curl) i Maestro. Nie odpalaj srodowiska gdy nie ma czego testowac.
+BRAMKA (Poprawka 10) — policz checkboxy \`[E2E]\` z OBU prefiksow (Test: + Weryfikacja:). Jesli jest ICH ZERO ->
+zwroc OD RAZU {findings:[]}, POMIN preflight (simctl/adb/curl) i Maestro. Nie odpalaj srodowiska gdy nie ma
+czego testowac. UWAGA — historyczny bug (regresja etap-12b): liczenie tylko \`Weryfikacja:\` skipowalo E2E
+pisane pod \`Test: [E2E]\` i cicho degradowalo je do OPERATOR mimo gotowego srodowiska. "Zero" liczy sie
+WYLACZNIE po realnym grepie obu prefiksow (\`grep -nE '^- \\[ \\].*\\[E2E\\]'\`).
 
 NAJPIERW preflight srodowiska (Bash): czy jest booted emulator (xcrun simctl booted / adb devices)
 i czy Metro UP (curl localhost:8081/status). Potem proba Maestro przez skill mobile-e2e-maestro.

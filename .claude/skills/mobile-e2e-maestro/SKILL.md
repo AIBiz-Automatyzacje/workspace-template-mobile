@@ -188,6 +188,27 @@ W tym repo **default = local**. Cloud rozważ dopiero gdy masz CI pipeline.
 
 Naming convention: `.maestro/<feature>-<scenario>.yaml`, np. `.maestro/auth-login-success.yaml`, `.maestro/auth-login-empty-fields.yaml`.
 
+## Granica możliwości Maestro — natywne powierzchnie OS (KRYTYCZNE przy planowaniu E2E)
+
+Maestro steruje WYŁĄCZNIE elementami w accessibility tree **Twojej aplikacji**. Natywnych powierzchni systemu (renderowanych przez OS, nie przez RN) **nie dotknie** — flow oparty o nie zawiesi się na timeout i `[E2E]` cicho spadnie do Operatora. To najczęstszy błąd autora scenariusza E2E.
+
+| Natywna powierzchnia OS | Maestro steruje? | Wzorzec zamiast tego |
+|---|---|---|
+| Picker zdjęć / kamera / picker dokumentów | ❌ NIE | Dane, które wpadłyby tą drogą → **wstrzyknij przez service_role** (`runScript: .maestro/inject-*.js`, wzór `etap-12-inject-message.js`) i asertuj **RENDER** (siatka/miniatura/teaser) |
+| Natywny `Alert` / `ActionSheet` (confirm, destructive „Usuń") | ❌ NIE | Krok → `Operator checklist` jako `[Manual]` |
+| Share sheet, picker kontaktów / kalendarza | ❌ NIE | inject danych lub `[Manual]` |
+| Biometria (Face ID / Touch ID enrollment) | ❌ NIE | `[Manual]` (mock biometrii = poza harnessem) |
+| Pełnoekranowy viewer obrazów w natywnym `<Modal>` (swipe między zdjęciami, ✕, delete) | ❌ NIE | OPEN viewera + asercje (licznik, ✕ widoczny) OK; **gesty wewnątrz Modala → `[Manual]`** (etap-12b gallery-fullscreen) |
+| Permission dialogs (kamera/geo/powiadomienia) | ⚠️ częściowo | `launchApp: permissions: all: allow` |
+| Tap / scroll / swipe / input / deep link w UI apki | ✅ TAK | normalny flow Maestro |
+
+**Reguła autora E2E:** zanim napiszesz `[E2E]`, prześledź flow krok po kroku — jeśli któryś krok wymaga natywnej powierzchni z kolumny ❌, NIE pisz flow który ją tapuje. Wstrzyknij dane (service_role) i asertuj render, albo przenieś krok do `[Manual]`. **Wzór inject:** `.maestro/etap-12-inject-message.js` (REST insert kluczem service_role, omija RLS i natywne UI; trigger realtime → realny dowód toru danych).
+
+**Skrypt `runScript`/inject leci w GraalJS Maestro, NIE w Node** (regresja etap-12b — zablokowała wszystkie 4 flow):
+- **Brak dostępu do filesystemu** — `http` w GraalJS nie czyta plików z dysku. Binarkę (obraz placeholder) przekazuj **inline w body jako string/base64**, NIGDY jako `{filePath: ...}`.
+- Brak `require`, brak modułów Node — tylko czysty REST (`http`) + inline payload. Wzór 1:1: `etap-12-inject-message.js`.
+- Sekrety (service_role URL/key, TOURNAMENT_UUID) wchodzą przez `env:` w YAML flow, nigdy w repo.
+
 ## Common gotchas
 
 - **Tekst polski:** Maestro obsługuje UTF-8, nie escape'uj diakrytyków. `tapOn: "Zaloguj się"` działa.

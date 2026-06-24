@@ -187,6 +187,7 @@ const VALIDATION_RESULT = {
     testy: { type: 'string', description: 'PASS/FAIL z liczbami X/Y (+ adnotacje flake-infra)' },
     expoDoctor: { type: 'string', enum: ['PASS', 'FAIL', 'n/a'] },
     testyZmodyfikowane: { type: 'array', items: { type: 'string' }, description: 'pliki *.test.* ze ZMIENIONYMI istniejacymi asercjami w commitach fix(...) — sygnal test-weakeningu' },
+    e2eNieuruchomione: { type: 'array', items: { type: 'string' }, description: 'tresci checkboxow [E2E] wciaz NIEZAZNACZONYCH przy istniejacym .env.e2e (opt-in E2E) — wymusza wynik=FAIL (completion-gate)' },
     wynik: { type: 'string', enum: ['PASS', 'FAIL'] },
     bledy: { type: 'array', items: { type: 'string' } },
   },
@@ -292,12 +293,22 @@ ${BLOK_DLUGIE_KOMENDY}
       detal:"dopisz .env.e2e do .gitignore — plik zawiera sekrety"}. NIGDY nie loguj wartosci z tego pliku.
    b) Wymagane klucze: EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_E2E_DB_URL,
       SUPABASE_E2E_SERVICE_ROLE_KEY, E2E_TEST_EMAIL, E2E_TEST_PASSWORD. Brak -> niepowodzenie z LISTA NAZW brakow.
-   c) GUARD TOZSAMOSCI: EXPO_PUBLIC_SUPABASE_URL z .env.e2e musi byc ROZNY od wartosci w .env / .env.local
-      (jesli istnieja). Identyczny = to nie jest dedykowany projekt e2e -> niepowodzenie (ochrona bazy dev/prod).
+   c) GUARD TOZSAMOSCI: EXPO_PUBLIC_SUPABASE_URL z .env.e2e musi byc ROZNY od URL-a DEV. Zrodlo URL-a dev:
+      \`.env.local.bak\` jesli istnieje (= aktywny swap, .env.local trzyma teraz e2e), inaczej \`.env.local\`, inaczej \`.env\`.
+      Identyczny e2e==dev = to nie dedykowany projekt e2e -> niepowodzenie (ochrona bazy dev/prod).
+   d) BACKEND IDENTITY (krytyczne — czego env-up wczesniej NIE sprawdzal; falszywe "gotowe" w etap-12b):
+      dev-client inline'uje EXPO_PUBLIC_* z PLIKU \`.env.local\` przy starcie Metro; \`source .env.e2e\` tego NIE
+      repointuje. Porownaj EXPO_PUBLIC_SUPABASE_URL: \`.env.local\` vs \`.env.e2e\`.
+      - ROZNE -> apka celuje w backend != e2e (zwykle dev). status:"niepowodzenie", detal:
+        "REPOINT WYMAGANY: dev-client czyta .env.local (!= e2e), managed harness nie repointuje przez
+        shell-source. Sciezka: cp .env.local .env.local.bak -> wpisz e2e do .env.local -> restart Metro --clear
+        -> wznow run; na koncu rollback z .env.local.bak + assert dev w .env.local. (Albo wlacz wariant (a):
+        swap zarzadzany przez harness.)" NIE raportuj "gotowe" — flow trafilyby na zly backend (inject->e2e, odczyt->dev).
+      - ROWNE (.env.local juz na e2e — swap aktywny) -> OK, kontynuuj.
 
 2. METRO: \`curl -s localhost:8081/status\`.
-   - Odpowiada -> metro:"zastane"; w detal ostrzezenie: istniejacy Metro bundluje env swojego procesu,
-     wiec moze wskazywac na baze dev — flow E2E zweryfikuja to posrednio (login kontem e2e).
+   - Odpowiada -> metro:"zastane". UWAGA: zastane Metro moglo wstac PRZED swapem (stary env). Pewnosc backendu
+     tylko gdy Metro wstalo PO swapie z krok 1d — przy watpliwosci RESTART --clear (ubij PID, postaw nowe).
    - Nie odpowiada -> uruchom DETACHED (musi przezyc Twoje zakonczenie; pm z lockfile):
      \`set -a; source .env.e2e; set +a; nohup <pm> start > /tmp/autopilot-metro.log 2>&1 & echo $! > /tmp/autopilot-metro.pid\`
      Polluj \`curl -s localhost:8081/status\` co ~10s (max ~120s). Sukces -> metro:"uruchomione",
@@ -309,7 +320,10 @@ ${BLOK_DLUGIE_KOMENDY}
    Brak dev clienta -> {status:"niepowodzenie", simulator:"brak", detal:"zainstaluj dev client (one-time):
    bunx expo run:ios LUB eas build --profile development --platform ios + xcrun simctl install booted <.app>"}.
 
-4. status "gotowe" TYLKO gdy: Metro odpowiada ORAZ simulator booted z dev clientem. Nie modyfikuj plikow repo.`
+4. status "gotowe" TYLKO gdy: krok 1d przeszedl (.env.local celuje w e2e) ORAZ Metro odpowiada (najlepiej
+   wstale PO swapie) ORAZ simulator booted z dev clientem. Bez 1d "gotowe" jest ZAKAZANE — to byl bug etap-12b
+   (env-up raportowal "gotowe" na zastanym Metro celujacym w dev). Nie modyfikuj plikow repo — swap .env.local
+   robi operator (wariant b) albo dedykowany krok harnessu (wariant a), nie ten agent.`
 }
 
 function e2eDbSyncPrompt(sciezka, numerFazy) {
@@ -408,6 +422,15 @@ istniejacego testu wpisz do testyZmodyfikowane[] (to sygnal test-weakeningu do r
 
 KROK 4 — jesli REALNY FAIL i potrafisz naprawic prosty problem (import, typ) — napraw, commituj,
 uruchom ponownie. Jak nie potrafisz — zwroc liste bledow z lokalizacjami i wynik=FAIL.
+
+KROK 5 — COMPLETION-GATE E2E (krytyczny — chroni przed cichym zamknieciem sprintu z pominietym E2E):
+Sprawdz czy w korzeniu repo istnieje \`.env.e2e\` (\`test -f "$(git rev-parse --show-toplevel)/.env.e2e"\`).
+- BRAK .env.e2e -> projekt nie opt-inowal E2E, pomin ten krok.
+- ISTNIEJE .env.e2e -> grepnij zadanie: \`grep -nE '^- \\[ \\].*\\[E2E\\]' ${sciezka}/*-zadania.md\`.
+  Jesli zostaly NIEZAZNACZONE checkboxy [E2E] -> wpisz ich tresci do e2eNieuruchomione[] i ustaw wynik=FAIL,
+  bledy[] += "E2E opt-in (.env.e2e istnieje), a N scenariuszy [E2E] nieuruchomionych — sprint NIE moze sie
+  zamknac z cicho pominietym E2E (regresja etap-11/12b). Operator musi je odpalic LUB usunac .env.e2e dla
+  swiadomego runu headless." NIE probuj sam odpalac Maestro — to gate raportujacy, blokuje archiwizacje.
 
 Zwroc obiekt zgodny ze schematem ValidationResult.`
 }
