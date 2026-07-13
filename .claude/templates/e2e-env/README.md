@@ -4,24 +4,35 @@ Po tym setupie autopilot **autonomicznie wykonuje testy Maestro**: stawia Metro 
 bazie e2e, synchronizuje migracje+seedy per faza, a fail asercji wchodzi w pętlę fix jako
 finding P2 typ E2E.
 
-**Bramka opt-in (od 2026-06-16):**
+**Bramka opt-in (od 2026-06-16, wzmocniona 2026-07-13):**
 - **Brak `.env.e2e`** → projekt nie chce E2E → flow klasyfikowane jako OPERATOR, run leci dalej (status quo).
-- **`.env.e2e` istnieje, ale środowisko niegotowe** (np. brak dev-clienta na simulatorze) → autopilot
+  Sygnał opt-in czyta osobny, tani **precheck** (samo `test -f .env.e2e`), oddzielony od ciężkiego env-up.
+- **`.env.e2e` istnieje, ale środowisko niegotowe LUB canary nie przechodzi** → autopilot
   **TWARDO zatrzymuje run w bootstrapie** z gotową komendą naprawczą. Powód: gdy projekt opt-in'ował
   się w E2E, ciche pominięcie = E2E znika z runu bez śladu (regresja etap-11). Świadomy run headless:
   usuń/zmień nazwę `.env.e2e`.
+- **env-up padł (null) przy potwierdzonym opt-in** → retry raz, drugi null = **STOP** (nie cicha degradacja
+  do OPERATOR — to infra hiccup, nie brak setupu).
 
 ## Architektura
 
 ```
-Bootstrap:    env-up    — .env.e2e? gitignore? Metro (detached, env z .env.e2e),
-                          simulator + dev client. .env.e2e jest, a env niegotowe = HARD STOP
-                          (gate opt-in); brak .env.e2e = pominieto, run leci dalej.
+Bootstrap:    precheck  — test -f .env.e2e? (tani sygnał opt-in, oddzielony od env-up)
+              env-up    — gitignore + komplet kluczy + guard tożsamości (e2e ≠ dev);
+                          AUTO-SWAP .env.local → e2e (backup .env.local.bak, dev-client
+                          inline'uje env z pliku, nie z shella!); preflight Maestro+Java 17;
+                          Metro (deterministyczny restart --clear obcego/po-swapie);
+                          emulator iOS (fallback Android) + dev client;
+                          CANARY = login konta e2e (REST) + launchApp przez Maestro = DOWÓD,
+                          że flow ruszy. „gotowe" ZABRONIONE bez canary PASS. Niegotowe = HARD STOP.
+              warmup    — rozgrzewka cache vitest (PO bramce E2E — tani gate first).
 Per faza:     db-sync   — supabase db push na bazę e2e (PIERWSZY realny apply SQL migracji
                           w pipeline!) + seedy .maestro/*-seed.sql + konto testowe.
 Review/fix:   tester E2E i fix odpalają Maestro na gotowym środowisku.
-Zakończenie:  env-down  — ubija TYLKO Metro z naszego .pid; STOP zostawia środowisko
-                          do ręcznego debugowania.
+Zakończenie:  env-down  — ubija TYLKO Metro z naszego .pid + COFA SWAP (przywraca .env.local
+                          z .bak, assert że wrócił dev). STOP zostawia środowisko do debugu;
+                          swap przetrwały po STOP jest bezpieczny (następny env-up wykryje
+                          „swap zastany" i cofnie na końcu).
 ```
 
 ## Szybki start — gotowy prompt dla asystenta
@@ -59,12 +70,18 @@ bojowy tej fazy.
    refów dev/prod — env-up ma guard tożsamości (URL e2e ≠ URL z `.env`), ale nie kuś losu.
 2. **Skopiuj config**: `cp .claude/templates/e2e-env/.env.e2e.example .env.e2e` i uzupełnij
    (API keys, connection string direct, konto testowe email+hasło).
-3. **Gitignore**: dopisz `.env.e2e` do `.gitignore` (env-up odmówi startu bez tego).
-4. **Dev client na simulatorze** (najdłuższy krok, ~10+ min, potem cache):
-   `bunx expo run:ios` — buduje i instaluje na domyślnym simulatorze. Odświeżaj tylko po
-   zmianie natywnych zależności.
-5. **Maestro CLI**: `curl -Ls https://get.maestro.mobile.dev | bash` (jeśli brak).
-6. Gotowe — następny run autopilota wykryje `.env.e2e` i przejdzie w tryb zarządzany.
+3. **Gitignore**: dopisz `.env.e2e` ORAZ `.env.local.bak` do `.gitignore` (env-up odmówi startu bez
+   obu wpisów — backup swapu zawiera sekrety dev, a nieignorowany blokowałby kolejny run na bramce
+   czystości brancha). Flow canary żyje w `/tmp` — nie zostawia śladu w repo.
+4. **Dev client na emulatorze** (najdłuższy krok, ~10+ min, potem cache):
+   `bunx expo run:ios` (lub `bunx expo run:android`) — buduje i instaluje na emulatorze. Odświeżaj
+   tylko po zmianie natywnych zależności. Zostaw emulator **BOOTED** — canary env-up go użyje.
+5. **Maestro CLI + Java 17**: `curl -fsSL https://get.maestro.mobile.dev | bash` (jeśli brak);
+   Maestro 2.0+ wymaga **Java 17+** (`JAVA_HOME`). env-up sprawdza oba w preflight i STOP-uje gdy brak.
+6. **Swap `.env.local` robi env-up automatycznie** — nie musisz ręcznie podmieniać env. Wystarczy, że
+   `.env.local` (jeśli istnieje) ma env dev; env-up zrobi backup, podmieni EXPO_PUBLIC_* na e2e na czas
+   runu i cofnie na końcu. Nie odpalaj własnego Metro (env-up zrestartuje obce Metro — patrz Pułapki).
+7. Gotowe — następny run autopilota wykryje `.env.e2e` i przejdzie w tryb zarządzany.
 
 ## Konwencje dla planów zadań
 
@@ -81,8 +98,15 @@ bojowy tej fazy.
 
 ## Pułapki
 
-- **Metro „zastane"**: jeśli masz już ręcznie odpalone `bun start` (env dev!), autopilot go
-  użyje i ostrzeże w logu — flow mogą gadać z bazą dev. Ubij własny Metro przed runem.
+- **Metro „zastane"**: env-up **deterministycznie restartuje** obce Metro (bez naszego `.pid`) z
+  `--clear` i env e2e — bo nie da się zweryfikować env-u cudzego procesu, a dev-client inline'uje env
+  z momentu startu Metro. Twoje ręcznie odpalone `bun start` zostanie ubite (zwolnienie portu 8081).
+  To celowe: eliminuje klasę false-greenów „flow gada z bazą dev". Ubij własny Metro przed runem, żeby
+  nie zdziwił Cię restart.
+- **Auto-swap i canary**: pierwszy realny dowód, że flow ruszy, daje **canary** w env-up (login konta
+  e2e przez REST + `launchApp` przez Maestro) — jeśli dev-client nie startuje albo konto e2e nie loguje
+  się, run STOP-uje w bootstrapie, nie w review fazy 1. Jeśli rollback swapu zawiedzie (log ostrzega),
+  przywróć ręcznie: `mv .env.local.bak .env.local`.
 - **Reset danych**: db-sync nie robi `db reset` — czyszczenie zostawione seedom
   (idempotencja). Gdy baza e2e „zgnije", zresetuj ręcznie: `supabase db reset --db-url ...`.
 - Haptyki i fizyczne gesty simulator nie symuluje — to zostaje na checklistach Operatora.
