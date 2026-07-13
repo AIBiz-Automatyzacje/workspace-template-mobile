@@ -245,7 +245,7 @@ import { Keyboard, Pressable } from "react-native";
 
 ### Return key navigation (next/done)
 
-`returnKeyType="next"` + `onSubmitEditing={() => nextRef.current?.focus()}` + `blurOnSubmit={false}` na non-last fields. Last field: `returnKeyType="done"` + `onSubmitEditing={handleSubmit}`. Daje natywny flow: user wpisuje, klika Next na klawiaturze, fokus skacze do kolejnego pola.
+`returnKeyType="next"` + `onSubmitEditing={() => nextRef.current?.focus()}` + `submitBehavior="submit"` (zastępuje deprecated `blurOnSubmit={false}` — wysyła submit event bez blurowania inputa) na non-last fields. Last field: `returnKeyType="done"` + `onSubmitEditing={handleSubmit}`. Daje natywny flow: user wpisuje, klika Next na klawiaturze, fokus skacze do kolejnego pola.
 
 ---
 

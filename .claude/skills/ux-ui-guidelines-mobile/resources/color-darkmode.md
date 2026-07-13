@@ -256,12 +256,24 @@ import { PlatformColor } from "react-native";
 
 Android 12+ generuje paletę z TAPETY użytkownika. Twoja apka deklaruje "primary" — system mapuje na kolor harmonizujący z wallpaperem.
 
-W Expo SDK 55+:
+W Expo (`@expo/ui/jetpack-compose`):
 
 ```tsx
-import { Platform } from "react-native";
-import { useDynamicColor } from "@expo/ui/jetpack-compose";  // Android
+import { Host, useMaterialColors } from "@expo/ui/jetpack-compose"; // Android
+
+function ThemedSurface() {
+  // Wywołane wewnątrz <Host> — pobiera Material You paletę tego Hosta
+  const colors = useMaterialColors();
+  return <View style={{ backgroundColor: colors.surface }} />;
+}
+
+// Root
+<Host>
+  <ThemedSurface />
+</Host>
 ```
+
+`useMaterialColors()` można też wywołać z opcjami (`{ colorScheme: 'dark' }`, `{ seedColor: '#8E24AA' }`) poza `<Host>` — wtedy liczy paletę on-demand zamiast czytać motyw z drzewa. Poza komponentem React użyj `getMaterialColors()` (ta sama sygnatura, nie-hook).
 
 **Implikacja dla brand-strong apek:** dynamic color rezygnuje z pełnej kontroli. Akceptuj, że Twój brand purple może na czyimś urządzeniu wyrenderować się jako fiolet-różowy. Apka MUSI wyglądać dobrze niezależnie od konkretnego koloru.
 
@@ -393,7 +405,7 @@ Nigdy nie definiuj kolorów inline w komponentach.
 
 - [[resources/typography.md]] — text contrast w typography
 - [[resources/platform-conventions.md]] — iOS Dynamic Color vs Material You
-- [[resources/visual-polish-mobile.md]] — shadow vs border w light/dark
+- [[resources/polish-checklist.md]] — image outline / border zamiast drop-shadow (Component patterns polish)
 - [[resources/ai-pitfalls.md]] — chaotyczny system kolorów jako AI signature
 
 *Źródła: Apple HIG Color (developer.apple.com/design/human-interface-guidelines/color), Material 3 Color (m3.material.io/styles/color), oklch.com, contrast-ratio.com, accessible-colors.com, WCAG 2.2 (w3.org/TR/WCAG22), wiki/kolory-i-dark-mode. Ostatni update: 2026-05-10.*

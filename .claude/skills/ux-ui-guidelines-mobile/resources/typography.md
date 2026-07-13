@@ -132,6 +132,8 @@ export default function RootLayout() {
 
 NativeWind v4+ daje pełen Tailwind w RN. Definicja custom presetu:
 
+> **Wersja:** przykład = NativeWind v4 (`tailwind.config.js`). Ten szablon używa **NativeWind v5 preview + Tailwind v4 CSS-first** — setup opisuje skill `expo-tailwind-setup`. Tokeny fontSize poniżej pozostają aktualne konceptualnie.
+
 ```js
 // tailwind.config.js
 module.exports = {

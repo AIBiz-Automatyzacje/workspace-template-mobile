@@ -2,7 +2,9 @@
 
 Animacje na mobile nie są dekoracją — komunikują zmianę stanu, kierunek nawigacji i hierarchię. Każda animacja musi odpowiadać na pytanie: **co ona komunikuje?** Jeśli odpowiedź to "wygląda fajnie" — usuń ją.
 
-Stack referencyjny: `react-native-reanimated` 3.x + `Easing` z `react-native`. Pryncypia są platform-agnostic.
+Stack referencyjny: `react-native-reanimated` + `Easing` z `react-native`. Pryncypia są platform-agnostic.
+
+> **Wersja:** aktualny major to **Reanimated 4.x** — wymaga New Architecture (Fabric). **3.x to legacy linia** (Old Architecture, wciąż wspierana dla projektów które jeszcze nie migrowały). API animacji poniżej (`withTiming`, `withSpring`, `Easing`, `useSharedValue`) jest stabilne między 3.x i 4.x — przykłady w tym pliku działają na obu, poza sekcją Shared Element Transitions niżej.
 
 ---
 
@@ -163,7 +165,9 @@ export function PressableButton({ onPress, children }: { onPress: () => void; ch
 
 ## Shared element transitions
 
-Reanimated 3.x ma natywne wsparcie dla shared element transitions przez `sharedTransitionTag`. Używaj gdy ten sam element pojawia się na dwóch ekranach (avatar w liście → avatar w detailu, zdjęcie produktu w gridzie → na detail page).
+> **Status: eksperymentalny, not recommended for production.** W Reanimated 4 Shared Element Transitions działają na New Architecture (Fabric) dopiero od **4.2.0**, i to za feature flagą (`ENABLE_SHARED_ELEMENT_TRANSITIONS`) — ze znanymi crashami i ograniczeniami. Traktuj `sharedTransitionTag` jako preview feature, nie stabilne API — testuj dokładnie przed użyciem w production flow.
+
+Reanimated ma wsparcie dla shared element transitions przez `sharedTransitionTag`. Używaj gdy ten sam element pojawia się na dwóch ekranach (avatar w liście → avatar w detailu, zdjęcie produktu w gridzie → na detail page).
 
 ```tsx
 import Animated from 'react-native-reanimated';
@@ -198,7 +202,7 @@ Performance: shared transitions kosztują — używaj 1-2 na ekran max.
 | Animacja na każdy mount listy podczas scrolla | Distrakcja | Initial render staggered, reszta instant |
 | `transition: all` (CSS pattern, nie ma w Reanimated, ale w NativeWind tak) | Animuje rzeczy które nie powinny | Specyficzne properties |
 | Spring na destructive action confirm | "Confirm delete" nie powinno być wesołe | Subtle timing fade |
-| `useNativeDriver: false` bez powodu | Animacja przez JS thread = jank | Domyślnie native driver (Reanimated 3 robi to automatycznie) |
+| `useNativeDriver: false` bez powodu | Animacja przez JS thread = jank | Domyślnie native driver (Reanimated robi to automatycznie) |
 
 ---
 

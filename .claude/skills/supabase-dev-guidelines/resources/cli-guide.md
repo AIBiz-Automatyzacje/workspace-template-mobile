@@ -195,7 +195,7 @@ Kluczowe sekcje:
 project_id = "my-project"
 
 [db]
-major_version = 15
+major_version = 17  # dopasuj do wersji Postgres używanej na remote (supabase status / dashboard)
 
 [auth]
 site_url = "http://localhost:3000"

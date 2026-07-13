@@ -2,7 +2,7 @@
 
 Haptyka i gesty to dwie warstwy które odróżniają mobile od desktopu. Źle użyte są męczące lub mylące. Dobrze użyte — niewidoczne, ale brakuje ich gdy znikają. Things 3 i Linear Mobile to wzorce: haptyka tylko w momentach które **komunikują informację**, nigdy jako ozdoba.
 
-Stack referencyjny: `expo-haptics` + `react-native-gesture-handler` 2.x + `react-native-reanimated` 3.x.
+Stack referencyjny: `expo-haptics` + `react-native-gesture-handler` (RNGH) — aktualny major **3.x** + `react-native-reanimated` — aktualny major **4.x** (3.x legacy, patrz [motion-microinteractions.md](motion-microinteractions.md)).
 
 ---
 
@@ -66,6 +66,9 @@ Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
 // Selection — picker, slider, segmented
 Haptics.selectionAsync();
+
+// Android-specific — pełen dostęp do natywnego haptic engine (np. gesture-based haptics)
+Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Confirm);
 ```
 
 > Wszystkie funkcje są async i `Promise<void>`. Nigdy nie `await` w handlerze — fire-and-forget. Jeśli czekasz na haptykę, gubisz natychmiastowy feedback.
@@ -89,6 +92,7 @@ Haptics.selectionAsync();
 | Warning modal trigger | `notificationAsync` | `Warning` |
 | Drag start | `impactAsync` | `Light` |
 | Drag drop | `impactAsync` | `Light` |
+| Android — natywny haptic engine (precyzyjniejsze wzorce niż `impactAsync`) | `performAndroidHapticsAsync` | np. `AndroidHaptics.Confirm`, `.Reject`, `.GestureStart` |
 
 ---
 
@@ -123,7 +127,9 @@ async function gentleConfirm(): Promise<void> {
 
 ## Gesty natywne
 
-`react-native-gesture-handler` (RNGH) 2.x używa nowego API z `Gesture.Tap()`, `Gesture.LongPress()`, `Gesture.Pan()`, `Gesture.Pinch()`. Stary `PanResponder` z core RN — nie używaj, słabsza wydajność i brak natywnego wątku.
+`react-native-gesture-handler` (RNGH) — od 2.x działa builder API (`Gesture.Tap()`, `Gesture.LongPress()`, `Gesture.Pan()`, `Gesture.Pinch()`), pokazane niżej. Stary `PanResponder` z core RN — nie używaj, słabsza wydajność i brak natywnego wątku.
+
+> **Nota v3:** RNGH 3.x wprowadza nowe, hookowe API (np. `useTapGesture()`) kompatybilne z React Compiler i **deprecatuje builder API** (`Gesture.Tap()` i pozostałe `Gesture.*` mają zostać usunięte w przyszłej wersji). Przykłady niżej w builder API nadal działają na 3.x, ale w nowym kodzie preferuj hooki — sprawdź aktualny przewodnik migracji RNGH przed startem nowego projektu.
 
 | Gest | API | Use case |
 |------|-----|----------|

@@ -1,13 +1,18 @@
 ---
 name: supabase-dev-guidelines
 description: Auth (Google/Facebook OAuth, email), Database (PostgreSQL, RLS policies, SECURITY DEFINER), Edge Functions, Realtime subscriptions. Uzywaj przy pracy z autentykacja, baza danych, migracjami, bezpieczenstwem.
+paths:
+  - "supabase/**"
+  - "**/*.sql"
+  - "lib/**"
+  - "hooks/**"
 ---
 
 # Supabase Development Guidelines
 
 ## Cel
 
-Kompleksowy przewodnik dla pracy z Supabase w aplikacjach Vite SPA - autentykacja, baza danych, RLS policies, Edge Functions i bezpieczeństwo.
+Kompleksowy przewodnik dla pracy z Supabase w aplikacjach Expo (React Native) - autentykacja, baza danych, RLS policies, Edge Functions i bezpieczeństwo.
 
 ## Kiedy Używać Tego Skilla
 
@@ -36,7 +41,7 @@ Kompleksowy przewodnik dla pracy z Supabase w aplikacjach Vite SPA - autentykacj
 
 - [ ] Utwórz katalog `supabase/functions/function-name/`
 - [ ] Użyj `Deno.serve()` (nie importuj serve)
-- [ ] Importy: `jsr:@supabase/supabase-js@2`, `npm:stripe@17`
+- [ ] Importy: `jsr:@supabase/supabase-js@2`, `npm:stripe@22`
 - [ ] CORS headers w `_shared/cors.ts`
 - [ ] Zweryfikuj JWT jeśli wymagana autentykacja
 - [ ] Loguj błędy (bez wrażliwych danych)
@@ -48,7 +53,7 @@ Kompleksowy przewodnik dla pracy z Supabase w aplikacjach Vite SPA - autentykacj
 - [ ] RLS włączony na każdej tabeli
 - [ ] UUID (`auth.uid()`) w policies, nie email
 - [ ] Audit log bez INSERT policy dla authenticated (tylko triggers/SECURITY DEFINER)
-- [ ] `SET search_path = public` w każdej funkcji SECURITY DEFINER
+- [ ] `SET search_path = ''` (pusty) + w pełni kwalifikowane nazwy (`public.tabela`) w każdej funkcji SECURITY DEFINER
 - [ ] Email enumeration protection włączone w Dashboard
 
 ---
@@ -57,21 +62,16 @@ Kompleksowy przewodnik dla pracy z Supabase w aplikacjach Vite SPA - autentykacj
 
 ### Typed Client (Standard 2026)
 ```typescript
-// lib/supabase.ts
-import { createClient } from '@supabase/supabase-js';
+// lib/supabase.ts — pełna konfiguracja klienta (SecureStore, deep linking) w sekcji
+// "Mobile (Expo / React Native)" niżej; tu tylko helper types.
 import type { Database } from '@/types/database';
 
-export const supabase = createClient(
-    import.meta.env.VITE_SUPABASE_URL,
-    import.meta.env.VITE_SUPABASE_ANON_KEY
-);
-
 // Helper types
-export type Tables =
+export type Tables<T extends keyof Database['public']['Tables']> =
     Database['public']['Tables'][T]['Row'];
-export type InsertTables =
+export type InsertTables<T extends keyof Database['public']['Tables']> =
     Database['public']['Tables'][T]['Insert'];
-export type UpdateTables =
+export type UpdateTables<T extends keyof Database['public']['Tables']> =
     Database['public']['Tables'][T]['Update'];
 ```
 
@@ -126,13 +126,21 @@ const { data, error } = await supabase.rpc('ensure_user_profile');
 - Email/hasło
 
 **Kluczowe Koncepcje:**
-- PKCE z jawnym `exchangeCodeForSession(code)` w callback
+- PKCE wymaga jawnego `flowType: 'pkce'` przy `createClient` (implicit jest domyślny w `supabase-js`)
+- Na mobile (deep link, `detectSessionInUrl: false`) wymiana kodu jest **zawsze jawna**:
+  `exchangeCodeForSession(code)` albo `setSession({ access_token, refresh_token })` w callbacku —
+  to jest poprawne dla natywnego flow (patrz sekcja Mobile niżej), inaczej niż w przeglądarce
 - Hook `useAuth()` zarządza sesją
 - Trigger `handle_new_user()` tworzy rekord w `public.profiles`
 - Funkcja `ensure_user_profile()` jako fallback
 - `getSession()` dla UI, `getUser()` lub `getClaims()` dla krytycznych operacji
 
-**[Pełny Przewodnik: resources/auth-patterns.md](resources/auth-patterns.md)**
+> ⚠️ **resources/auth-patterns.md opisuje wzorce webowe (Vite SPA)** — react-router,
+> `window.location.origin`, `localStorage`. Na mobile korzystaj z sekcji
+> [„Mobile (Expo / React Native)"](#mobile-expo--react-native) niżej (deep linking +
+> `WebBrowser.openAuthSessionAsync`), a resource traktuj jako materiał koncepcyjny do adaptacji.
+
+**[Pełny Przewodnik (web/Vite SPA — wymaga adaptacji na mobile): resources/auth-patterns.md](resources/auth-patterns.md)**
 
 ---
 
@@ -165,7 +173,7 @@ const { data, error } = await supabase.rpc('ensure_user_profile');
 **Wzorce 2026:**
 - `Deno.serve()` (wbudowane, bez importu)
 - `jsr:@supabase/supabase-js@2` (nie esm.sh)
-- `npm:stripe@17` (nie esm.sh)
+- `npm:stripe@22` (nie esm.sh)
 - `constructEventAsync` dla Stripe webhooks
 - Runtime: **Deno 2.x** (upgrade z 1.45.2)
 - `deno.json` preferowany nad import maps
@@ -216,7 +224,7 @@ const { data, error } = await supabase.rpc('ensure_user_profile');
 1. **RLS Zawsze Włączony**: Każda tabela musi mieć RLS
 2. **UUID w Policies**: `auth.uid() = user_id`, nigdy email
 3. **Generated Types**: `supabase gen types` po każdej migracji
-4. **SECURITY DEFINER Ostrożnie**: Zawsze `SET search_path = public`
+4. **SECURITY DEFINER Ostrożnie**: Zawsze `SET search_path = ''` (pusty) + w pełni kwalifikowane nazwy (`public.tabela`)
 5. **Service Role Tylko w Edge Functions**: Nigdy nie eksponuj na froncie
 6. **Audit Log Izolowany**: Wpisy tylko przez triggers/SECURITY DEFINER
 7. **Logger dla Błędów**: `logger.error()` zamiast `console.error()`
@@ -225,11 +233,13 @@ const { data, error } = await supabase.rpc('ensure_user_profile');
 
 ## Zmienne Środowiskowe
 
-### Frontend (.env.local)
+### Klient (Expo)
 ```env
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_ANON_KEY=your_anon_key
+EXPO_PUBLIC_SUPABASE_URL=your_supabase_url
+EXPO_PUBLIC_SUPABASE_ANON_KEY=your_anon_key
 ```
+Prefix `EXPO_PUBLIC_` jest wymagany, żeby Expo zbundlował zmienną do klienta (patrz sekcja
+Mobile niżej — `VITE_*` nie istnieje w tym środowisku, to pozostałość po szablonie webowym).
 
 ### Edge Functions
 ```env
@@ -293,28 +303,87 @@ if (user) { /* autoryzacja */ }
 
 Specyfika Supabase w aplikacji mobilnej. Zapamiętaj: **server-side code → Edge Functions, NIE Expo API Routes** (Decyzja architektoniczna repo #3 — Edge Functions są bliżej bazy, mają natywną integrację z auth, jeden billing).
 
-### Session persistence — `expo-secure-store` zamiast `localStorage`
+### Session persistence — `LargeSecureStore` (SecureStore + AsyncStorage), NIE `localStorage`
 
-`localStorage` **nie istnieje** na natywie. Skonfiguruj custom storage:
+`localStorage` **nie istnieje** na natywie. Prosty adapter, który wrzuca całą sesję (JWT + refresh
+token) bezpośrednio do `expo-secure-store`, **nie działa niezawodnie** — SecureStore odrzuca wartości
+większe niż ok. 2048 bajtów, a sesja z JWT regularnie ten limit przekracza (cicha utrata sesji).
+Oficjalny wzorzec Supabase to `LargeSecureStore`: 256-bitowy klucz AES trzymany w SecureStore
+(mały, mieści się bez problemu), a nim zaszyfrowana sesja ląduje w `AsyncStorage` (bez limitu
+rozmiaru). Wymaga dodatkowo `aes-js` i `react-native-get-random-values`:
+
+```bash
+npx expo install expo-secure-store @react-native-async-storage/async-storage
+npm install aes-js react-native-get-random-values
+```
 
 ```typescript
 // lib/supabase.ts
 import 'react-native-url-polyfill/auto';
 import { createClient } from '@supabase/supabase-js';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as SecureStore from 'expo-secure-store';
+import * as aesjs from 'aes-js';
+import 'react-native-get-random-values';
 
-const ExpoSecureStoreAdapter = {
-  getItem: (key: string) => SecureStore.getItemAsync(key),
-  setItem: (key: string, value: string) => SecureStore.setItemAsync(key, value),
-  removeItem: (key: string) => SecureStore.deleteItemAsync(key),
-};
+// LargeSecureStore: klucz AES-256 w SecureStore (Keychain/Keystore),
+// zaszyfrowana sesja w AsyncStorage — omija limit ~2048 B SecureStore.
+class LargeSecureStore {
+  private async _encrypt(key: string, value: string) {
+    const encryptionKey = crypto.getRandomValues(new Uint8Array(256 / 8));
+
+    const cipher = new aesjs.ModeOfOperation.ctr(encryptionKey, new aesjs.Counter(1));
+    const encryptedBytes = cipher.encrypt(aesjs.utils.utf8.toBytes(value));
+
+    // Klucz szyfrujący (mały) idzie do SecureStore — bezpiecznie mieści się w limicie
+    await SecureStore.setItemAsync(key, aesjs.utils.hex.fromBytes(encryptionKey));
+
+    return aesjs.utils.hex.fromBytes(encryptedBytes);
+  }
+
+  private async _decrypt(key: string, value: string) {
+    const encryptionKeyHex = await SecureStore.getItemAsync(key);
+    if (!encryptionKeyHex) {
+      return encryptionKeyHex;
+    }
+
+    const cipher = new aesjs.ModeOfOperation.ctr(
+      aesjs.utils.hex.toBytes(encryptionKeyHex),
+      new aesjs.Counter(1)
+    );
+    const decryptedBytes = cipher.decrypt(aesjs.utils.hex.toBytes(value));
+
+    return aesjs.utils.utf8.fromBytes(decryptedBytes);
+  }
+
+  async getItem(key: string) {
+    const encrypted = await AsyncStorage.getItem(key);
+    if (!encrypted) {
+      return encrypted;
+    }
+
+    return await this._decrypt(key, encrypted);
+  }
+
+  async removeItem(key: string) {
+    await AsyncStorage.removeItem(key);
+    await SecureStore.deleteItemAsync(key);
+  }
+
+  async setItem(key: string, value: string) {
+    // Sesja (potencjalnie > 2048 B) idzie zaszyfrowana do AsyncStorage — bez limitu rozmiaru
+    const encrypted = await this._encrypt(key, value);
+
+    await AsyncStorage.setItem(key, encrypted);
+  }
+}
 
 export const supabase = createClient(
   process.env.EXPO_PUBLIC_SUPABASE_URL!,
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY!,
   {
     auth: {
-      storage: ExpoSecureStoreAdapter,
+      storage: new LargeSecureStore(),
       autoRefreshToken: true,
       persistSession: true,
       detectSessionInUrl: false,  // mobile NIE używa URL detection
@@ -323,7 +392,34 @@ export const supabase = createClient(
 );
 ```
 
-`expo-secure-store` używa Keychain (iOS) / Keystore (Android) — sekrety szyfrowane przez OS. To jest **wymagane**, nie opcjonalne (kompromis na sesję = lekceważenie wymagań App Store / Play Store).
+Źródło wzorca: [oficjalny tutorial Supabase dla Expo/React Native](https://supabase.com/docs/guides/getting-started/tutorials/with-expo-react-native?auth-store=secure-store).
+`expo-secure-store` używa Keychain (iOS) / Keystore (Android) — klucz szyfrujący jest chroniony przez OS.
+To jest **wymagane**, nie opcjonalne (kompromis na sesję = lekceważenie wymagań App Store / Play Store).
+
+### AppState — auto-refresh tokena tylko gdy aplikacja jest aktywna
+
+Bez podpięcia `AppState` autoRefreshToken próbuje odświeżać token nawet w tle, co marnuje baterię i
+może kolidować z wybudzeniem aplikacji. Oficjalny quickstart RN Supabase startuje/zatrzymuje
+auto-refresh na zmianach stanu aplikacji:
+
+```typescript
+// app/_layout.tsx (root, raz na cały cykl życia aplikacji)
+import { AppState } from 'react-native';
+import { useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+
+useEffect(() => {
+  const subscription = AppState.addEventListener('change', (state) => {
+    if (state === 'active') {
+      supabase.auth.startAutoRefresh();
+    } else {
+      supabase.auth.stopAutoRefresh();
+    }
+  });
+
+  return () => subscription.remove();
+}, []);
+```
 
 ### OAuth deep linking — schema `yourapp://`, NIE `https://`
 

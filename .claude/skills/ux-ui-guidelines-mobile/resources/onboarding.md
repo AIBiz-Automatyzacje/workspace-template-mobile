@@ -97,7 +97,7 @@ Proszenie o wszystkie uprawnienia na starcie = najszybsza droga do odrzucenia. A
 | Aparat | W momencie kliknięcia "Dodaj zdjęcie" |
 | Mikrofon | W momencie kliknięcia "Nagraj" |
 
-**Pre-permission priming** — pokaż własny modal WYJAŚNIAJĄCY dlaczego prosisz, ZANIM odpalisz natywny prompt. Użytkownik klika "OK" → wtedy odpalasz `expo-permissions`. Jeśli kliknie "Nie teraz" — nie zużywasz native promptu (drugi raz user musi iść do ustawień).
+**Pre-permission priming** — pokaż własny modal WYJAŚNIAJĄCY dlaczego prosisz, ZANIM odpalisz natywny prompt. Użytkownik klika "OK" → wtedy odpalasz natywny prompt danego modułu (`Notifications.requestPermissionsAsync()`, `Camera.requestCameraPermissionsAsync()`, itd. — pakiet `expo-permissions` został usunięty z SDK, każdy moduł ma własne API uprawnień). Jeśli kliknie "Nie teraz" — nie zużywasz native promptu (drugi raz user musi iść do ustawień).
 
 ```tsx
 // Pre-permission priming

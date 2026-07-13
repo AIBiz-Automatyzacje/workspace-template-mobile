@@ -124,14 +124,19 @@ Realtime respektuje RLS policies:
 CREATE POLICY "favorites_select_own"
 ON favorites FOR SELECT
 TO authenticated
-USING (auth.uid() = user_id);
+USING ((SELECT auth.uid()) = user_id);
 
 -- Uzytkownik otrzyma tylko zmiany SWOICH ulubionych
 ```
 
-## Realtime Authorization (Public Beta)
+## Realtime Authorization
 
 Od `supabase-js >= v2.44.0` dostępna jest autoryzacja kanałów Realtime przez RLS na tabeli `realtime.messages`.
+
+> **Ważne:** dla kanałów prywatnych (`config: { private: true }`) wyłącz w Dashboardzie
+> **Database → Replication → Realtime → „Allow public access"** (domyślnie może być włączone) —
+> inaczej RLS na `realtime.messages` nie jest wymuszane i każdy klient dostanie dostęp do kanału
+> niezależnie od policy.
 
 ### Konfiguracja
 
@@ -164,7 +169,8 @@ const channel = supabase.channel('room:' + userId, {
 });
 ```
 
-> **Uwaga:** Realtime Authorization jest w Public Beta — API może się zmienić.
+> **Uwaga:** pamiętaj o wyłączeniu „Allow public access" w Dashboardzie (patrz wyżej) — bez tego
+> RLS na `realtime.messages` nie jest wymuszane.
 
 ---
 
@@ -357,7 +363,8 @@ useEffect(() => {
 ### Limity Supabase
 
 - Max 200 concurrent connections per project (Free tier)
-- Max 500 channels per connection
+- Max 100 channels per connection (wszystkie plany)
+- Free tier opcjonalnie: limit ~100 messages/s
 - RLS policies musza przepuszczac SELECT
 
 ### Optymalizacje

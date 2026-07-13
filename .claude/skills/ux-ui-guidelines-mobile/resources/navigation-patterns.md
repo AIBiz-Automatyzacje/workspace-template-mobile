@@ -166,7 +166,7 @@ Kluczowe: NIGDY nie blokuj swipe-back na iOS bez bardzo dobrego powodu (np. mult
     title: "Settings",
     headerLargeTitle: true, // iOS large title style
     headerTransparent: false,
-    headerBackTitleVisible: false, // bez "Back" text przy strzałce iOS
+    headerBackButtonDisplayMode: "minimal", // bez "Back" text przy strzałce iOS (React Navigation v7+; `headerBackTitleVisible` usunięte)
   }}
 />
 ```
@@ -217,19 +217,21 @@ iOS supports natively `formSheet` + detents (medium/large) od iOS 15+. Expo Rout
   name="filter"
   options={{
     presentation: "formSheet",
-    sheetAllowedDetents: ["medium", "large"], // iOS 15+
+    sheetAllowedDetents: [0.5, 1], // iOS 15+ — liczby 0-1 (lub 'fitToContents'), NIE stringi 'medium'/'large'
     sheetGrabberVisible: true, // pokaż grabber u góry
     sheetCornerRadius: 16,
   }}
 />
 ```
 
-**Kiedy `medium` first:**
+Android obsługuje maks. 3 detenty, iOS dowolną liczbę. Detenty muszą być posortowane rosnąco.
+
+**Kiedy `0.5` (medium) first:**
 - Selekcja z listy 3-7 opcji
 - Quick action (share, save, delete)
 - Filter / sort options
 
-**Kiedy `large` first:**
+**Kiedy `1` (large) first:**
 - Form który może wymagać scroll
 - Preview z możliwością edit
 

@@ -99,7 +99,7 @@ AI tools (GPT Image, Midjourney, generatory UI, vibecoded apki) potrafią przysp
 
 **Sygnatura AI:** `shadow-xl` na bocznej karcie. `shadow-2xl` na buttonie.
 
-**Fix:** używaj cieni HIERARCHICZNIE. Resting state — minimum lub zero. Elevated states (modal, sheet, dropdown) — wyraźniejszy cień. Patrz [[resources/visual-polish-mobile.md]] reguła shadow-as-border.
+**Fix:** używaj cieni HIERARCHICZNIE. Resting state — minimum lub zero. Elevated states (modal, sheet, dropdown) — wyraźniejszy cień. Patrz [[resources/polish-checklist.md]] sekcja Component patterns polish — "Image outline 1px subtle border" to konkretny wzorzec zamiany shadow na subtelny border w resting state.
 
 ### 12. Lavender gradient w background
 

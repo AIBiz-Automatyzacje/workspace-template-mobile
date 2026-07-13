@@ -10,10 +10,11 @@ CLI do automatyzacji testów E2E aplikacji mobilnych iOS/Android. Działa na zbu
 ## Setup Check
 
 ```bash
-command -v maestro >/dev/null 2>&1 && echo "Installed: $(maestro --version)" || echo "NOT INSTALLED — instalacja: curl -Ls 'https://get.maestro.mobile.dev' | bash"
+command -v maestro >/dev/null 2>&1 && echo "Installed: $(maestro --version)" || echo "NOT INSTALLED — instalacja: curl -fsSL 'https://get.maestro.mobile.dev' | bash"
 ```
 
 **Wymagania platformowe:**
+- **Java 17+** wymagane przez CLI — `JAVA_HOME` musi wskazywać na instalację Java 17+ (sprawdź: `java -version`)
 - **iOS:** macOS + Xcode + iOS Simulator (otwarte: `open -a Simulator`)
 - **Android:** Android Studio + emulator AVD (uruchomiony: `emulator -avd <name>`)
 - Aplikacja zbudowana i zainstalowana (przez `eas build --local` lub `expo run:ios` / `expo run:android`)
@@ -23,7 +24,7 @@ command -v maestro >/dev/null 2>&1 && echo "Installed: $(maestro --version)" || 
 1. **Launch:** uruchom emulator + zainstaluj aplikację (build z dev clienta wystarczy)
 2. **Flow YAML:** zapisz scenariusz w pliku `.yaml` (folder `.maestro/`)
 3. **Run:** `maestro test .maestro/login-flow.yaml`
-4. **Inspect:** screenshoty + video w `.maestro/screenshots/` po każdym `takeScreenshot`
+4. **Inspect:** artefakty domyślnie w `~/.maestro/tests` (macOS/Linux) — zmień lokalizacją przez `maestro test --test-output-dir=<dir>`. `takeScreenshot` zapisuje tylko zrzut ekranu; wideo powstaje WYŁĄCZNIE przy jawnym `startRecording`/`stopRecording` (albo `maestro record`), nie automatycznie
 
 ```yaml
 # .maestro/login-flow.yaml
@@ -56,8 +57,8 @@ maestro test .maestro/login-flow.yaml
     arguments:
       isFirstLaunch: true
 - stopApp
-- pressKey: Back
-- pressKey: Home
+- pressKey: back
+- pressKey: home
 
 # Interakcje
 - tapOn: "Submit"
@@ -108,6 +109,7 @@ maestro test .maestro/login-flow.yaml
 - openLink: "myapp://auth/callback?code=xyz"
 
 # Permissions (system dialogs iOS/Android)
+# Od Maestro 2.0 default = allow — blok `permissions:` potrzebny tylko do deny/unset
 - launchApp:
     permissions:
       all: allow             # albo deny / unset
@@ -115,16 +117,11 @@ maestro test .maestro/login-flow.yaml
 
 ## Maestro Studio (interactive recording)
 
-Analog do Playwright codegen / agent-browser snapshot. Otwiera GUI, klikasz na ekranie, generuje YAML.
+Od CLI 2.6.0 Studio **nie jest już częścią CLI** — to osobna aplikacja desktopowa. Pobranie: https://studio.maestro.dev (macOS: `MaestroStudio.dmg`, Windows: `MaestroStudio.exe`, Linux: `MaestroStudio.AppImage`). Otwierasz aplikację, wybierasz workspace i device w GUI — każdy tap/swipe/input generuje live preview YAML, który kopiujesz do flow file.
 
-```bash
-maestro studio
-# Otwiera browser na http://localhost:9999
-# Każdy tap/swipe/input → live preview YAML
-# Skopiuj wygenerowany YAML do flow file
-```
+Analog do Playwright codegen / agent-browser snapshot. Używaj przy projektowaniu nowego flow — szybciej niż pisanie YAML ręcznie.
 
-Używaj przy projektowaniu nowego flow — szybciej niż pisanie YAML ręcznie.
+**Legacy:** na CLI <= 2.5.x komenda `maestro studio` (otwierająca `localhost:9999`) jeszcze działa — w 2.6.0 usunięta z binarki na rzecz osobnej aplikacji.
 
 ## Deep Linking (OAuth, push notifications)
 
@@ -147,8 +144,8 @@ To kluczowy use case mobile, którego **nie da się przetestować** w expo-route
 |---|---|---|
 | `appId` | `com.example.myapp` (bundle ID z Xcode) | `com.example.myapp` (package name z `app.json` android.package) |
 | Emulator setup | iOS Simulator (Xcode) | AVD przez Android Studio / `emulator` CLI |
-| System dialogs | `permissions: all: allow` | `permissions: all: allow` |
-| Back gesture | `pressKey: Back` no-op (iOS bez Back) | `pressKey: Back` działa |
+| System dialogs | `permissions: all: allow` (default od 2.0) | `permissions: all: allow` (default od 2.0) |
+| Back gesture | `pressKey: back` no-op (iOS bez Back) | `pressKey: back` działa |
 | Status bar | Maestro ignoruje | Maestro ignoruje |
 
 Pisz flow **cross-platform** gdy się da. Gdy musisz różnicować, użyj osobnych plików `.maestro/ios/` i `.maestro/android/`.
@@ -194,7 +191,7 @@ Maestro steruje WYŁĄCZNIE elementami w accessibility tree **Twojej aplikacji**
 
 | Natywna powierzchnia OS | Maestro steruje? | Wzorzec zamiast tego |
 |---|---|---|
-| Picker zdjęć / kamera / picker dokumentów | ❌ NIE | Dane, które wpadłyby tą drogą → **wstrzyknij przez service_role** (`runScript: .maestro/inject-*.js`, wzór `etap-12-inject-message.js`) i asertuj **RENDER** (siatka/miniatura/teaser) |
+| Picker zdjęć / kamera / picker dokumentów | ❌ NIE | Dane, które wpadłyby tą drogą → **wstrzyknij przez service_role** (`runScript: .maestro/inject-*.js`, szablon niżej) i asertuj **RENDER** (siatka/miniatura/teaser) |
 | Natywny `Alert` / `ActionSheet` (confirm, destructive „Usuń") | ❌ NIE | Krok → `Operator checklist` jako `[Manual]` |
 | Share sheet, picker kontaktów / kalendarza | ❌ NIE | inject danych lub `[Manual]` |
 | Biometria (Face ID / Touch ID enrollment) | ❌ NIE | `[Manual]` (mock biometrii = poza harnessem) |
@@ -202,12 +199,45 @@ Maestro steruje WYŁĄCZNIE elementami w accessibility tree **Twojej aplikacji**
 | Permission dialogs (kamera/geo/powiadomienia) | ⚠️ częściowo | `launchApp: permissions: all: allow` |
 | Tap / scroll / swipe / input / deep link w UI apki | ✅ TAK | normalny flow Maestro |
 
-**Reguła autora E2E:** zanim napiszesz `[E2E]`, prześledź flow krok po kroku — jeśli któryś krok wymaga natywnej powierzchni z kolumny ❌, NIE pisz flow który ją tapuje. Wstrzyknij dane (service_role) i asertuj render, albo przenieś krok do `[Manual]`. **Wzór inject:** `.maestro/etap-12-inject-message.js` (REST insert kluczem service_role, omija RLS i natywne UI; trigger realtime → realny dowód toru danych).
+**Reguła autora E2E:** zanim napiszesz `[E2E]`, prześledź flow krok po kroku — jeśli któryś krok wymaga natywnej powierzchni z kolumny ❌, NIE pisz flow który ją tapuje. Wstrzyknij dane (service_role) i asertuj render, albo przenieś krok do `[Manual]`. **Wzór inject:** `.maestro/etap-12-inject-message.js` — to wzorzec **zewnętrzny** (projekt gramywpadla; plik nie istnieje w tym szablonie), REST insert kluczem service_role, omija RLS i natywne UI, trigger realtime = realny dowód toru danych. Minimalny szablon inline poniżej.
 
 **Skrypt `runScript`/inject leci w GraalJS Maestro, NIE w Node** (regresja etap-12b — zablokowała wszystkie 4 flow):
 - **Brak dostępu do filesystemu** — `http` w GraalJS nie czyta plików z dysku. Binarkę (obraz placeholder) przekazuj **inline w body jako string/base64**, NIGDY jako `{filePath: ...}`.
-- Brak `require`, brak modułów Node — tylko czysty REST (`http`) + inline payload. Wzór 1:1: `etap-12-inject-message.js`.
-- Sekrety (service_role URL/key, TOURNAMENT_UUID) wchodzą przez `env:` w YAML flow, nigdy w repo.
+- Brak `require`, brak modułów Node — tylko czysty REST (`http`) + inline payload.
+- Sekrety (service_role URL/key, ID rekordu itp.) **NIGDY jako wartości w bloku `env:` pliku flow** (plik leży w repo) — przekaż przez `maestro test -e KEY="wartość"` (np. wczytane z `.env.e2e`) albo zmienną środowiskową z prefiksem `MAESTRO_` (`export MAESTRO_SUPABASE_URL=...`). Wewnątrz `.js` skryptu zmienna jest dostępna jako goły identyfikator JS (np. `MAESTRO_SUPABASE_URL`), w YAML flow wyłącznie jako referencja `${KEY}`.
+
+**Minimalny szablon inline** (`.maestro/inject-example.js`):
+
+```javascript
+// GraalJS (Maestro), NIE Node — brak fs, brak require, body ZAWSZE inline
+const response = http.post(MAESTRO_SUPABASE_URL + "/rest/v1/messages", {
+  headers: {
+    apikey: MAESTRO_SUPABASE_SERVICE_ROLE_KEY,
+    Authorization: "Bearer " + MAESTRO_SUPABASE_SERVICE_ROLE_KEY,
+    "Content-Type": "application/json",
+    Prefer: "return=representation",
+  },
+  // Inline string, NIGDY {filePath: ...} — GraalJS nie czyta plików z dysku
+  body: JSON.stringify({
+    conversation_id: MAESTRO_CONVERSATION_ID,
+    content: "E2E seed message",
+  }),
+});
+
+if (response.status !== 201) {
+  throw new Error("Inject failed: " + response.status + " " + response.body);
+}
+```
+
+## Harness E2E w tym repo
+
+Autonomiczne E2E (uruchamiane przez `feature-tester-mobile-e2e` / autopilot) leci na **dedykowanym projekcie Supabase** skonfigurowanym w `.env.e2e` — NIGDY na środowisku dev/prod:
+
+- **Konto testowe:** `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` — flow loguje się na stałe konto zamiast tworzyć nowego usera za każdym razem.
+- **Seedy:** `.maestro/<flow>-seed.sql` — idempotentne (upsert, nie insert), referencja do konta testowego przez **email**, nie stały ID (ID różni się między środowiskami).
+- **Sekrety:** wyłącznie z `.env.e2e`, przekazywane przez `-e`/`MAESTRO_*` (patrz sekcja wyżej) — nigdy hardcoded w YAML/JS.
+
+Pełne szczegóły konfiguracji i autorstwo deliverables (kto pisze seed, kto flow): `dev-plan` §3.4b oraz `.claude/templates/e2e-env/README.md`.
 
 ## Common gotchas
 
@@ -229,12 +259,14 @@ maestro test .maestro/login.yaml
 # Run wszystkie w folderze
 maestro test .maestro/
 
-# Interactive recording
-maestro studio
+# Interactive recording — osobna aplikacja desktopowa (studio.maestro.dev), NIE komenda CLI od 2.6.0
 
-# Hierarchia UI (debugging)
+# Hierarchia UI (debugging) — od 2.6.0 output wyłącznie JSON; podgląd na żywo: Maestro Viewer w desktop Studio
 maestro hierarchy
 
-# List devices
-maestro device list
+# List local devices
+maestro list-devices
+
+# Start emulator/symulator gdy nic nie jest uruchomione
+maestro start-device --platform ios   # albo --platform android
 ```

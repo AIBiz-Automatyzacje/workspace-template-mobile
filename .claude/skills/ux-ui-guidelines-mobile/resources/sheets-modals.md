@@ -84,8 +84,8 @@ export const unstable_settings = {
 <Stack.Screen
   name="filter-sheet"
   options={{
-    presentation: 'modal', // iOS sheet
-    sheetAllowedDetents: ['medium', 'large'],
+    presentation: 'formSheet', // iOS sheet z detentami — WYMAGA formSheet, nie 'modal'
+    sheetAllowedDetents: [0.5, 1], // liczby 0-1 (procent wysokości ekranu), NIE stringi 'medium'/'large'
     sheetGrabberVisible: true,
     sheetCornerRadius: 24,
   }}
@@ -347,8 +347,8 @@ export default function RootLayout() {
       <Stack.Screen
         name="filter"
         options={{
-          presentation: 'modal',
-          sheetAllowedDetents: ['medium', 'large'],
+          presentation: 'formSheet',
+          sheetAllowedDetents: [0.5, 1],
           sheetGrabberVisible: true,
           sheetCornerRadius: 24,
         }}
@@ -423,7 +423,7 @@ export function CopyButton({ value }: { value: string }) {
 - `[[icons.md]]` — close X button conventions
 - `[[states-loading-empty-error.md]]` — error display: inline vs toast vs modal
 - `[[platform-conventions.md]]` — iOS sheet vs Android bottom sheet
-- `[[forms.md]]` — form w modal vs full-screen
+- `[[resources/forms-keyboard.md]]` — form w modal vs full-screen
 
 ---
 

@@ -24,7 +24,7 @@ Format: `[ ]` checklist. Każdy punkt linkuje do pełnego pliku z kontekstem.
 - [ ] **8pt grid bez wyjątków**. Wszystkie spacingi (padding, margin, gap) wielokrotności 4 lub 8 (4, 8, 12, 16, 24, 32, 48). Wyjątki = bug.
 - [ ] **Concentric border radius**. Outer radius = inner radius + padding. Karta z `borderRadius: 16, padding: 12` ma children z `borderRadius: 4`.
 - [ ] **Safe area respect**. `useSafeAreaInsets()` na każdym top/bottom screen. Nigdy nie pozwól treści zniknąć pod notch/Dynamic Island/home indicator.
-- [ ] **Touch target 44pt iOS / 48dp Android**. Min wszystkich interactive elements. WCAG 2.2 AA hard floor = 24pt — nigdy poniżej. → patrz [accessibility-mobile.md](accessibility-mobile.md)
+- [ ] **Touch target 44pt iOS / 48dp Android**. Min wszystkich interactive elements. WCAG 2.2 AA hard floor = 24×24 CSS px (na mobile ≈ pt/dp) — nigdy poniżej. → patrz [accessibility-mobile.md](accessibility-mobile.md)
 - [ ] **Visual rhythm — consistent gap między sekcjami**. Te same odstępy między cards w liście, między sekcjami formularza.
 
 ---

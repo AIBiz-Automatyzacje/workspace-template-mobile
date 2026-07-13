@@ -274,6 +274,8 @@ export function FavoriteIcon({ isActive, size = 24 }: FavoriteIconProps) {
 
 ### Sizing system w NativeWind theme
 
+> **Wersja:** przykład = NativeWind v4 (`tailwind.config.ts`). Ten szablon używa **NativeWind v5 preview + Tailwind v4 CSS-first** — setup opisuje skill `expo-tailwind-setup`. Tokeny sizingowe poniżej pozostają aktualne konceptualnie.
+
 ```ts
 // tailwind.config.ts (extension)
 export default {

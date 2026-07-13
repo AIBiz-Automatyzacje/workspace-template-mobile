@@ -91,10 +91,11 @@ Zmapuj endpointy vs wymagania autoryzacji.
 | DELETE /posts/:id | nie  | nie           | tak   | tak   |
 
 2. **Zweryfikuj RLS policies** -- czy odzwierciedlaja macierz dostepu
-3. **Edge Functions JWT** -- czy kazda chroniona funkcja wywoluje `supabase.auth.getUser()`?
+3. **Edge Functions JWT** -- czy kazda chroniona funkcja wywoluje `supabase.auth.getUser()` / `getClaims()`?
 4. **Sprawdz `getSession()` vs `getUser()`** -- `getSession()` nie weryfikuje tokena server-side
-5. **Sprawdz role-based access** -- czy nie ma hardcoded email/ID w logice autoryzacji
-6. **Biometria** (expo-local-authentication) to LOKALNA bramka UX, NIE autoryzacja —
+5. **Sprawdz role-based access** -- rola z `app_metadata` lub tabeli rol, NIGDY z `user_metadata` (edytowalne przez usera); brak hardcoded email/ID
+6. **Fail-closed** -- blad sprawdzenia dostepu = odmowa, nigdy przyznanie (A10:2025)
+7. **Biometria** (expo-local-authentication) to LOKALNA bramka UX, NIE autoryzacja —
    serwer nadal musi weryfikowac token; biometria nie zastepuje auth
 
 ### Krok 5: Sensitive Data Exposure
@@ -105,7 +106,7 @@ Szukaj wyciekow danych wrazliwych. Pamietaj: bundle da sie zdekompilowac (`strin
    - Szukaj: API keys, tokeny, hasla w kodzie zrodlowym
    - **Wszystko z prefiksem `EXPO_PUBLIC_*` jest PUBLICZNE w bundlu** — wolno tam trzymac
      wylacznie anon key i jawne URL-e; klucze platne (OpenAI, Stripe secret) NIGDY —
-     ukrywaj za Edge Function / API route (skill expo-api-routes)
+     ukrywaj za Edge Function / API route (skill eas-hosting)
    - Sprawdz `.env.example` -- czy nie zawiera prawdziwych wartosci
    - Sprawdz git history -- `git log --diff-filter=A -- "*.env*"`
 2. **Service role key:**
@@ -126,11 +127,19 @@ Szukaj wyciekow danych wrazliwych. Pamietaj: bundle da sie zdekompilowac (`strin
 Przejdz kategorie OWASP pod katem stacku:
 
 - **OWASP Mobile Top 10 (2024)** dla warstwy aplikacji: M1 improper credential usage,
-  M2 supply chain, M3 insecure auth/authz, M4 insufficient input validation, M5 insecure
-  communication, M6 inadequate privacy controls, M8 security misconfiguration,
-  M9 insecure data storage, M10 insufficient cryptography — wiekszosc pokrywaja kroki 1-5.
-- **OWASP Top 10 (2021)** dla warstwy backendu (Edge Functions / API routes):
-  mapowanie w **[resources/owasp-react-supabase.md](resources/owasp-react-supabase.md)**
+  M2 supply chain (w tym EAS Update jako kanal dostarczania kodu — code signing OTA
+  i kontrola dostepu do kanalow, patrz `resources/owasp-react-supabase.md` A03),
+  M3 insecure auth/authz, M4 insufficient input/output validation, M5 insecure
+  communication, M6 inadequate privacy controls, M7 insufficient binary protections
+  (w Expo managed zakres ograniczony — nie polegaj na obfuskacji, sekrety poza bundlem
+  to krok 5; anti-tampering / root-jailbreak detection to LOW/hardening dla aplikacji
+  wysokiego ryzyka), M8 security misconfiguration, M9 insecure data storage,
+  M10 insufficient cryptography — wiekszosc pokrywaja kroki 1-5.
+- **OWASP Top 10:2025** dla warstwy backendu (Edge Functions / API routes):
+  mapowanie w **[resources/owasp-react-supabase.md](resources/owasp-react-supabase.md)**.
+  Zwroc uwage na zmiany 2025: SSRF wchloniety do A01, nowe A03 (Software Supply Chain --
+  m.in. klucz `service_role` dla agentow AI/MCP) i A10 (Mishandling of Exceptional
+  Conditions -- fail-open, wyciek bledow).
   (UWAGA: resource pisany pod web — sekcje XSS/CSP czytaj przez pryzmat kroku 3 tego skilla).
 
 ---
@@ -222,5 +231,6 @@ LOW -- Hardening, defense-in-depth
 - **OWASP Top 10 (backend/Edge Functions)** -- `resources/owasp-react-supabase.md`
   (dziedzictwo webowe: sekcje XSS/CSP interpretuj przez krok 3 — powierzchnia mobilna)
 - **Wzorce auth i bezpieczenstwa Supabase** -- `resources/auth-security-patterns.md`
-  (wzorce RLS/JWT/policies uniwersalne; fragmenty o cookies/SSR nie dotycza mobile —
-  w Expo sesja zyje w SecureStore, nie w cookies)
+  (wzorce RLS/JWT/policies uniwersalne; §3 React XSS i §5 Secrets sa webowe — w RN
+  odpowiednio: walidacja protokolu przy `Linking.openURL`/WebView (krok 3 tego skilla)
+  oraz `EXPO_PUBLIC_*` zamiast `VITE_*` (krok 5 tego skilla))

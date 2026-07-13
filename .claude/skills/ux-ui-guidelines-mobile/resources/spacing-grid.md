@@ -166,10 +166,11 @@ Apple promuje traktowanie Dynamic Island i notch jako część designu, NIE jako
 | **Tab bar height (sam tab bar)** | 49pt | 56dp (Material) / 80dp (M3 navigation bar) |
 | **Tab bar + safe area bottom (iPhone 15 Pro)** | 83pt | n/a (gestural nav może mieć 0) |
 | **Header / Nav bar** | 44pt + status bar | 56dp |
-| **Status bar (notch device)** | ~47pt (iPhone 15 Pro) | 24-28dp |
+| **Status bar — notch (iPhone X–14)** | 47pt | 24-28dp |
+| **Status bar — Dynamic Island (iPhone 14 Pro–16 Pro)** | 59pt | n/a |
 | **Dynamic Island clearance** | ~37pt (height) | n/a |
 
-**Zasada:** używaj `useSafeAreaInsets` zamiast hardcodować — różne urządzenia, różne wartości.
+**Zasada:** te wartości różnią się per model urządzenia (notch vs Dynamic Island to różne wycięcia z różnym top inset) i zmieniają się z każdą generacją iPhone'a — **zawsze `useSafeAreaInsets`, nigdy hardcode**. Powyższe liczby to punkt odniesienia, nie stałe do wpisania w kod.
 
 ---
 
@@ -257,6 +258,8 @@ Reguła: jeśli wygląda nie tak, zaufaj OKU, nie linijce.
 ---
 
 ## NativeWind preset — `tailwind.config.js`
+
+> **Wersja:** przykład poniżej to setup **NativeWind v4 / Tailwind v3** (`tailwind.config.js`, JS-owy `presets`/`theme.extend`). Ten szablon używa **NativeWind v5 preview + Tailwind v4 CSS-first** — pełny setup opisuje skill `expo-tailwind-setup`. Tokeny spacingowe/radius poniżej pozostają aktualne konceptualnie, tylko mechanika configu jest inna w v5 (CSS `@theme`, nie `tailwind.config.js`).
 
 ```js
 // tailwind.config.js
@@ -432,7 +435,7 @@ concentricInnerRadius = parentRadius - padding
 
 - [[resources/typography.md]] — line-height ↔ vertical rhythm
 - [[resources/platform-conventions.md]] — touch targets per platforma, tab bar dimensions
-- [[resources/visual-polish-mobile.md]] — concentric radius, optical alignment
+- [[resources/polish-checklist.md]] — concentric radius, optical alignment w kontekście "Spacing & layout polish"
 - [[resources/ai-pitfalls.md]] — niespójny spacing jako AI signature
 
 *Źródła: Apple HIG Layout (developer.apple.com/design/human-interface-guidelines/layout), Apple WWDC25 "Get to know the new design system" (concentric shapes 3 typy — primary source), Material 3 Layout (m3.material.io/foundations/layout), Steven Hoober — autor oryginalnych badań thumb zone (4ourth.com/Touch.html, primary research correction), react-native-safe-area-context (github.com/th3rdwave/react-native-safe-area-context), wiki/typografia-i-spacing. Ostatni update: 2026-05-15.*

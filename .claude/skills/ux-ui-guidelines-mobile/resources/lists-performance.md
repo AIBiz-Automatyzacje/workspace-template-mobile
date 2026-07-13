@@ -64,7 +64,7 @@ Virtualization renderuje TYLKO to co widać w viewport + buffer. Lista 10 000 it
 
 FlashList Shopify używa cell recycling (jak iOS UITableView). Cells nie są niszczone, są reused dla nowego dataset itemu.
 
-**Wymagania:**
+**Wersja: v2 (aktualna).** FlashList v2 wymaga **New Architecture** (Fabric) — sprawdź `newArchEnabled: true` w `app.json` przed migracją z v1.
 
 ```tsx
 import { FlashList } from '@shopify/flash-list';
@@ -72,20 +72,24 @@ import { FlashList } from '@shopify/flash-list';
 <FlashList
   data={items}
   renderItem={({ item }) => <Item data={item} />}
-  estimatedItemSize={80} // MANDATORY
   keyExtractor={(item) => item.id}
+  // BRAK estimatedItemSize — v2 mierzy automatycznie, prop jest "no longer used"
 />
 ```
 
-`estimatedItemSize` to nie strict — lista zarządza variable height. Ale dobra estymata = mniej layout passes na początku.
+**Co się zmieniło w v2:**
+- `estimatedItemSize` / `estimatedListSize` — **nieużywane** (auto-sizing zamiast ręcznej estymaty)
+- `MasonryFlashList` (osobny komponent w v1) → zastąpiony propem `masonry` na zwykłym `FlashList` (`<FlashList masonry numColumns={3} />`)
+- Nowe hooki: `useRecyclingState` (lokalny stan itemu, resetowany po recyklingu — zamiast `useState` wewnątrz recyklowanego komponentu), `useLayoutState`, `useMappingHelper`, `useFlashListContext`
 
-**Variable height:**
+**Legacy (v1, `@shopify/flash-list` < 2.0):** `estimatedItemSize` był MANDATORY prop. Projekty wciąż na v1 powinny go zostawić, ale zaplanować upgrade do v2 (wymaga New Architecture).
+
+**Variable height + typ itemu:**
 
 ```tsx
 <FlashList
   data={items}
   renderItem={renderItem}
-  estimatedItemSize={80}
   // Daj typ itemu — FlashList trzyma osobne pule recyclingu per typ
   getItemType={(item) => item.type} // 'message' | 'system' | 'date-divider'
 />
@@ -94,9 +98,8 @@ import { FlashList } from '@shopify/flash-list';
 Bez `getItemType`, FlashList recycluje text-message cell jako date-divider — nieprzyjemne flickery.
 
 **Drawbacks FlashList:**
-- Onboarding setup, więcej props niż FlatList
-- Cell recycling = item musi być stateless lub state via key, nie internal useState
-- Dev warning "estimatedItemSize off" gdy estymata znacznie różna od reality — fix it
+- Migracja v1 → v2 wymaga New Architecture (jednorazowy koszt jeśli projekt jeszcze na Old Architecture)
+- Cell recycling = item musi być stateless lub state via `useRecyclingState`, nie plain `useState`
 
 ---
 
@@ -230,7 +233,6 @@ const handleEndReached = useCallback(async () => {
 <FlashList
   data={items}
   renderItem={renderItem}
-  estimatedItemSize={80}
   onEndReached={handleEndReached}
   onEndReachedThreshold={0.5} // 50% before bottom
   ListFooterComponent={isLoading ? <LoadingFooter /> : null}
@@ -283,22 +285,33 @@ Pattern Things 3, Apple Mail, Gmail.
 - ~80% width — full action commit (auto-execute)
 - Haptic feedback przy 80% threshold cross — sygnalizuje "release = commit"
 
-**Library: `react-native-gesture-handler` + Reanimated** lub `react-native-swipeable` (legacy ale działa).
+**Library: `ReanimatedSwipeable`** z `react-native-gesture-handler/ReanimatedSwipeable` (RNGH 3.x) — drop-in replacement dla legacy `Swipeable`, przepisany na Reanimated. Legacy `Swipeable` (import bezpośrednio z `react-native-gesture-handler`) nadal działa, ale nowe projekty powinny zaczynać od `ReanimatedSwipeable`.
 
 ```tsx
-import { Swipeable } from 'react-native-gesture-handler';
+import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
 import { Pressable, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 
-function RightActions({ onDelete }: { onDelete: () => void }) {
+function renderRightActions(
+  _progress: SharedValue<number>,
+  translation: SharedValue<number>,
+  onDelete: () => void,
+) {
+  const style = useAnimatedStyle(() => ({
+    transform: [{ translateX: translation.value + 80 }],
+  }));
+
   return (
-    <Pressable
-      onPress={onDelete}
-      className="bg-destructive justify-center items-center w-20 h-full"
-      accessibilityLabel="Usuń"
-    >
-      <Text className="text-white">Usuń</Text>
-    </Pressable>
+    <Reanimated.View style={style}>
+      <Pressable
+        onPress={onDelete}
+        className="bg-destructive justify-center items-center w-20 h-full"
+        accessibilityLabel="Usuń"
+      >
+        <Text className="text-white">Usuń</Text>
+      </Pressable>
+    </Reanimated.View>
   );
 }
 
@@ -309,7 +322,9 @@ export function SwipeableRow({ item, onDelete }: Props) {
 
   return (
     <Swipeable
-      renderRightActions={() => <RightActions onDelete={() => onDelete(item.id)} />}
+      renderRightActions={(progress, translation) =>
+        renderRightActions(progress, translation, () => onDelete(item.id))
+      }
       onSwipeableOpen={handleSwipeOpen}
       friction={2}
       rightThreshold={40}
@@ -393,7 +408,7 @@ export function ItemList({ items, onItemPress }: { items: Item[]; onItemPress: (
       data={items}
       renderItem={renderItem}
       keyExtractor={(item) => item.id}
-      estimatedItemSize={64}
+      // v2: bez estimatedItemSize — auto-sizing
     />
   );
 }
@@ -404,7 +419,7 @@ export function ItemList({ items, onItemPress }: { items: Item[]; onItemPress: (
 ## Checklist — list performance review
 
 - [ ] FlashList dla > 50 items (lub FlatList z `getItemLayout`)
-- [ ] `estimatedItemSize` ustawione (FlashList)
+- [ ] FlashList v2 + New Architecture włączona (lub v1 legacy z `estimatedItemSize` ustawionym)
 - [ ] `keyExtractor` używa stable ID, NIE index
 - [ ] `renderItem` w `useCallback`
 - [ ] Item komponent w `memo`

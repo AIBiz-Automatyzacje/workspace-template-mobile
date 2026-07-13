@@ -4,7 +4,7 @@ Accessibility to nie "feature for blind people" — to **good design for everyon
 
 WCAG 2.2 AA to baseline w 2026. European Accessibility Act egzekwuje od czerwca 2025 — apki bez a11y mogą być prawnie zablokowane na rynku EU.
 
-Stack referencyjny: React Native a11y props + `expo-screen-reader` patterns + `AccessibilityInfo`.
+Stack referencyjny: React Native a11y props + `AccessibilityInfo` (`expo-screen-reader` nie istnieje jako pakiet — screen reader detection i announcements idą przez `AccessibilityInfo` z `react-native`).
 
 ---
 
@@ -18,7 +18,7 @@ Stack referencyjny: React Native a11y props + `expo-screen-reader` patterns + `A
 | **1.4.11 Non-text contrast** | Ikony, bordery ≥ 3:1 | Outline na cards, icon visibility |
 | **2.4.11 Focus Not Obscured** | Focus widoczny pełnie, nie pod barem | Sticky bar respect focus |
 | **2.5.5 Target Size (AAA)** | 44×44pt rekomendowane | Min size buttonów |
-| **2.5.8 Target Size (AA)** | Min 24×24pt | Hard floor — nigdy mniej |
+| **2.5.8 Target Size (AA)** | Min 24×24 CSS px (WCAG; na mobile ≈ pt/dp) | Hard floor — nigdy mniej |
 | **2.5.7 Dragging Movements** | Alternatywa dla drag | Single-tap option dla każdego drag |
 | **3.3.7 Redundant Entry** | Nie wymagaj dwukrotnego wpisania danych | Autofill, persisted state |
 | **3.3.8 Accessible Authentication** | Brak puzzle CAPTCHA dla a11y | Biometric, magic link, passkey |
@@ -26,7 +26,7 @@ Stack referencyjny: React Native a11y props + `expo-screen-reader` patterns + `A
 **Touch target hard rules:**
 - iOS: 44pt minimum (Apple HIG)
 - Android: 48dp minimum (Material 3)
-- WCAG 2.2 AA: 24×24pt absolute floor
+- WCAG 2.2 AA: 24×24 CSS px absolute floor (na mobile ≈ pt/dp)
 - **Cel praktyczny:** **44pt iOS / 48dp Android dla wszystkich primary actions**
 
 ---
@@ -200,26 +200,33 @@ useEffect(() => {
 
 ## Reduce Transparency
 
-iOS Liquid Glass / Material You glass effects są piękne, ale nie-czytelne dla części userów. iOS i Android (12+) mają toggle "Reduce Transparency" → daj solid alternative.
+iOS Liquid Glass / Material You glass effects są piękne, ale nie-czytelne dla części userów. **`isReduceTransparencyEnabled` to iOS-only API** — Android nie ma odpowiadającego systemowego toggle'a ani `AccessibilityInfo` API dla transparency. Na Androidzie fallback jest projektowy: domyślnie solid surfaces zamiast rely na runtime detection.
+
+`backdropFilter` (web CSS) **nie istnieje w `ViewStyle` React Native** — nie renderuje blur, tylko cicho nic nie robi. Blur na natywie idzie przez `expo-blur` (`BlurView`), które renderuje prawdziwy natywny blur i (jak w tabeli niżej) samo respektuje Reduce Transparency.
 
 ```tsx
 import { AccessibilityInfo } from 'react-native';
+import { BlurView } from 'expo-blur';
 
 const [reduceTransparency, setReduceTransparency] = useState(false);
 
 useEffect(() => {
+  // iOS-only — na Androidzie zawsze false, projektuj solid fallback jako default
   AccessibilityInfo.isReduceTransparencyEnabled?.().then(setReduceTransparency);
 }, []);
 
-<View style={[
-  styles.surface,
-  reduceTransparency
-    ? { backgroundColor: '#FFFFFF' }
-    : { backgroundColor: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(20px)' },
-]}>
-  {children}
-</View>
+{reduceTransparency ? (
+  <View style={[styles.surface, { backgroundColor: '#FFFFFF' }]}>
+    {children}
+  </View>
+) : (
+  <BlurView intensity={40} tint="light" style={styles.surface}>
+    {children}
+  </BlurView>
+)}
 ```
+
+> **Uwaga:** `BlurView` sam już respektuje Reduce Transparency systemowo (patrz tabela niżej — "Zero" odpowiedzialności). Manualny branch powyżej jest przydatny TYLKO gdy chcesz custom solid fallback (inny kolor niż systemowy default) — jeśli wystarczy Ci zachowanie systemowe, wystarczy sam `<BlurView>` bez warunku.
 
 ### Natywne API vs custom — KTO odpowiada za fallback
 

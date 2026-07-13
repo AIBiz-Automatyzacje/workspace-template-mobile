@@ -1,6 +1,10 @@
 ---
 name: ux-ui-guidelines-mobile
-description: Wytyczne UX/UI dla aplikacji mobilnych (Expo + React Native + NativeWind, ale stack-agnostic w pryncypiach). Platform conventions (iOS HIG vs Material 3), typografia natywna (SF Pro/Roboto, Dynamic Type, type scale), 8pt grid + safe areas, semantic colors + dark mode jako redesign, ikony (SF Symbols vs Lucide vs Material Symbols), motion i micro-interactions (Reanimated 3, easing, stagger), haptics + native gestures (expo-haptics), stany loading/empty/error, formy + klawiatura mobilna, navigation patterns (tabs/drawer/stack/modal), bottom sheets i modale, listy (FlashList, swipe actions), accessibility (VoiceOver, TalkBack, Dynamic Type), pułapki AI-generowanego UI, teardowny premium apek (Things 3, Bear, Linear, Wellspoken), app icon i splash screen. Używaj przy projektowaniu ekranów mobilnych, budowie design system pod mobile, decyzjach iOS vs Android, "ekran wygląda tanio", "feels off na mobile", "native feel vs web feel", review designu mobilnego, mobile polish.
+description: Wytyczne UX/UI dla aplikacji mobilnych (Expo + React Native + NativeWind, ale stack-agnostic w pryncypiach). Platform conventions (iOS HIG vs Material 3), typografia natywna (SF Pro/Roboto, Dynamic Type, type scale), 8pt grid + safe areas, semantic colors + dark mode jako redesign, ikony (SF Symbols vs Lucide vs Material Symbols), motion i micro-interactions (Reanimated — aktualny major 4.x, wymaga New Architecture; 3.x legacy — easing, stagger), haptics + native gestures (expo-haptics, RNGH 3.x), stany loading/empty/error, formy + klawiatura mobilna, navigation patterns (tabs/drawer/stack/modal), bottom sheets i modale, listy (FlashList v2, swipe actions), accessibility (VoiceOver, TalkBack, Dynamic Type), pułapki AI-generowanego UI, teardowny premium apek (Things 3, Bear, Linear, Wellspoken), app icon i splash screen. Używaj przy projektowaniu ekranów mobilnych, budowie design system pod mobile, decyzjach iOS vs Android, "ekran wygląda tanio", "feels off na mobile", "native feel vs web feel", review designu mobilnego, mobile polish.
+paths:
+  - "app/**/*.tsx"
+  - "components/**/*.tsx"
+  - "screens/**/*.tsx"
 ---
 
 # UX/UI Guidelines — Mobile
@@ -15,7 +19,7 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 - Decyzje iOS vs Android (HIG vs Material 3)
 - Budowa mobile design system (tokens, components, theme)
 - Implementacja accessibility (VoiceOver, TalkBack, Dynamic Type)
-- Animacje i micro-interactions (Reanimated 3, haptyka, gesty)
+- Animacje i micro-interactions (Reanimated 4.x/3.x legacy, haptyka, gesty)
 - Stany dynamiczne (loading, empty, error, offline)
 - Formy mobilne (klawiatura, autofill, biometria, validation)
 - Navigation patterns (tabs, drawer, modal, sheet, deep linking)
@@ -117,8 +121,8 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 
 | Plik | Co zawiera |
 |------|------------|
-| [[resources/motion-microinteractions.md]] | Kiedy animować, timing matrix, easing, stagger, Reanimated 3 patterns |
-| [[resources/haptics-gestures.md]] | expo-haptics matrix, native gestures, RNGH 2.x, gesture conflicts |
+| [[resources/motion-microinteractions.md]] | Kiedy animować, timing matrix, easing, stagger, Reanimated 4.x patterns (3.x legacy) |
+| [[resources/haptics-gestures.md]] | expo-haptics matrix, native gestures, RNGH 3.x, gesture conflicts |
 | [[resources/forms-keyboard.md]] | Input states, keyboardType, autofill, KeyboardAvoidingView, react-hook-form + zod |
 
 ### States & Feedback
@@ -126,6 +130,7 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 | Plik | Co zawiera |
 |------|------------|
 | [[resources/states-loading-empty-error.md]] | Skeleton vs spinner, empty state typology, error recovery, offline-first |
+| [[resources/onboarding.md]] | Ile ekranów onboardingu, progressive disclosure, just-in-time permissions, paywall placement |
 
 ### Architecture
 
@@ -180,7 +185,7 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 ## Powiązane Skills
 
 - **expo-overview** — hub stack guidelines (decision tree który expo-* skill kiedy)
-- **expo-building-native-ui** — implementacja UI w Expo Router (native tabs, animacje, SF Symbols, blur)
+- **expo-native-ui** — implementacja UI w Expo Router (native tabs, animacje, SF Symbols, blur)
 - **expo-tailwind-setup** — TailwindCSS v4 + NativeWind v5 setup
 - **ux-ui-guidelines** — webowy odpowiednik (React 19 + Tailwind v4 web)
 - **mobile-e2e-maestro** — automatyzacja testów E2E mobile

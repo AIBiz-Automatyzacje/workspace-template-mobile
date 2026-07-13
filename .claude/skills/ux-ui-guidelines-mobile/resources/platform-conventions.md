@@ -214,7 +214,7 @@ Oficjalny moduł od zespołu Expo (Brent Vatne) eksponuje **natywne komponenty S
 - **GLOW UI** (233↑), **BNA UI** (227↑), **React Native Reusables** (104↑) — shadcn-inspired
 - **Neobrutalist for RN** (288↑) — neobrutalist style
 
-Trend: zamiast instalować dependency, **kopiujesz kod komponentu** i dostajesz pełną kontrolę. Sprawdź compatybilność z Expo SDK 55/56.
+Trend: zamiast instalować dependency, **kopiujesz kod komponentu** i dostajesz pełną kontrolę. Sprawdź compatybilność z aktualnym stabilnym SDK Expo w projekcie.
 
 ---
 
@@ -235,19 +235,24 @@ Trend: zamiast instalować dependency, **kopiujesz kod komponentu** i dostajesz 
 
 **Praktyczny test:**
 - Tap przenosi do innego ekranu/sekcji = **tab bar OK**
-- Tap wywołuje akcję w bieżącym kontekście = **toolbar / FAB / inline button**
+- Tap wywołuje akcję w bieżącym kontekście = **toolbar / inline button**, NIE tab bar
 
-**iOS 26 preferowany pattern dla akcji:** **Floating Action Button (FAB) po prawej stronie tab baru** — dedykowany button akcji poza nawigacją. Apple oficjalnie promuje ten układ od WWDC25 (mimo że historycznie FAB był Material-only).
+**iOS 26 — HIG podtrzymuje: tab bar = wyłącznie nawigacja, nigdy akcje.** Apple na WWDC25 ("Get to know the new design system") nie promuje FAB jako oficjalnego wzorca iOS — FAB pozostaje Material-specific. Zamiast tego iOS 26 wprowadza dwa nowe natywne wzorce nawigacyjne (nie akcyjne):
+
+- **Search tab role** — wydzielona zakładka wyszukiwania po trailing stronie tab bara (osobna rola, nie zwykły tab), domyślna w wielu natywnych apkach Apple
+- **Tab bar accessory view** — widok nad tab barem (np. mini-player, kontekstowy pasek), który minimalizuje się przy scrollu razem z tab barem
+
+**Akcję (dodaj, udostępnij, filtruj) trzymaj w toolbarze nawigacyjnym lub w treści ekranu** — nie w tab barze i nie jako FAB. To spójne z regułą HIG "tabs = nawigacja, nie akcje" z sekcji wyżej.
 
 ```tsx
-// DOBRZE iOS 26 — akcja jako FAB obok tab baru
+// DOBRZE iOS 26 — akcja w toolbarze/content, tab bar tylko nawigacja
 <View>
-  <Tabs>{/* tylko nawigacja */}</Tabs>
-  <FloatingActionButton onPress={onAdd} position="bottom-right" />
+  <Tabs>{/* tylko nawigacja, ew. dedykowany Search tab */}</Tabs>
+  {/* akcja "Dodaj" jako header button lub inline w treści ekranu — NIE FAB */}
 </View>
 ```
 
-→ Patrz [[resources/navigation-patterns.md]] dla FAB placement i konfliktów z tab barem.
+→ Patrz [[resources/navigation-patterns.md]] dla placement akcji i konfliktów z tab barem.
 
 ---
 

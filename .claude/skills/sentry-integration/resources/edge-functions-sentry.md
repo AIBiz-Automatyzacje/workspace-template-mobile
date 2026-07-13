@@ -2,14 +2,21 @@
 
 Szczegółowe wzorce integracji Sentry z Supabase Edge Functions (Deno runtime).
 
-> **⚠️ KNOWN LIMITATIONS (Stan: Marzec 2026)**
+> **ℹ️ STAN RUNTIME'U**
 >
-> Sentry Deno SDK ma ograniczenia w kontekście Supabase Edge Functions:
-> 1. **Brak wsparcia dla `Deno.serve` instrumentation** - brak automatycznej separacji scope między requestami
-> 2. **Wymagana wersja Deno 2.0+** - Supabase Edge Functions używają Deno 1.45.2
-> 3. **Rozwiązanie:** Używaj `Sentry.withScope()` lub przekazuj kontekst bezpośrednio do `captureException`
+> Supabase Edge Runtime działa dziś na Deno 2.x, a `@sentry/deno` wspiera `beforeSend`, ale
+> **nie instrumentuje `Deno.serve`** — oficjalna dokumentacja Supabase mówi wprost, że SDK
+> nie zapewnia scope separation między requestami w tym samym isolate. Dlatego
+> `defaultIntegrations: false` jest bezpiecznym defaultem, a izolację kontekstu trzeba robić
+> jawnie przez `withScope()` — to nie jest opcjonalny bonus, tylko jedyny sposób na uniknięcie
+> wycieku tagów/usera między requestami w tym samym isolate.
 >
-> Śledź postępy: [GitHub Discussion #33629](https://github.com/orgs/supabase/discussions/33629)
+> Dobre praktyki, które nadal warto stosować:
+> 1. **Używaj `Sentry.withScope()`** dla izolacji kontekstu per operacja/branch — czytelniejsze
+>    niż globalne tagi, niezależnie od instrumentacji runtime'u.
+> 2. **`await Sentry.flush()`** przed zakończeniem requestu — isolate może zostać zamrożony
+>    zaraz po zwróceniu `Response`, więc zdarzenia muszą wyjść przed `return`.
+> 3. **Centralne maskowanie PII** rób w `beforeSend` (patrz [Shared Helper](#shared-helper)).
 
 ## Table of Contents
 
@@ -28,13 +35,16 @@ Szczegółowe wzorce integracji Sentry z Supabase Edge Functions (Deno runtime).
 Supabase Edge Functions używają Deno. Oficjalnie zalecany import:
 
 ```typescript
-// Oficjalny Sentry SDK dla Deno
-import * as Sentry from 'npm:@sentry/deno';
+// Oficjalny Sentry SDK dla Deno — pinuj do majora
+import * as Sentry from 'npm:@sentry/deno@^10';
 ```
 
 **Uwagi:**
-- `npm:@sentry/deno` to aktualny zalecany import (stary `deno.land/x/sentry` jest deprecated)
-- Oficjalnie wymaga Deno 2.0+, ale działa z Supabase Edge Functions (Deno 1.45.2) z `defaultIntegrations: false`
+- `npm:@sentry/deno` to aktualny zalecany import (stary `deno.land/x/sentry` jest deprecated).
+  Pinuj do majora (`@^10`) — przykład w dokumentacji Supabase pokazuje `@^8`, więc sprawdź
+  aktualny major przed wyborem wersji dla nowego projektu
+- Wymaga Deno 2.x — Supabase Edge Runtime spełnia ten wymóg. `beforeSend` działa, ale SDK
+  **nie instrumentuje `Deno.serve`** — patrz `defaultIntegrations: false` niżej
 
 ---
 
@@ -43,7 +53,7 @@ import * as Sentry from 'npm:@sentry/deno';
 **Plik: `supabase/functions/_shared/sentry.ts`**
 
 ```typescript
-import * as Sentry from 'npm:@sentry/deno';
+import * as Sentry from 'npm:@sentry/deno@^10';
 
 let initialized = false;
 
@@ -51,8 +61,9 @@ let initialized = false;
  * Inicjalizuje Sentry dla Edge Function
  * @param functionName - Nazwa funkcji (np. 'stripe-webhook')
  *
- * WAŻNE: Ze względu na brak wsparcia Deno.serve w Sentry SDK,
- * używamy defaultIntegrations: false i ręcznie zarządzamy scope
+ * SDK działa na Deno 2.x, ale nie instrumentuje Deno.serve. Kontekst per
+ * operacja izolujemy jawnie przez Sentry.withScope() — to jedyny sposób na
+ * scope separation na tym runtime, nie auto-instrumentacja.
  */
 export function initSentry(functionName: string): typeof Sentry {
   if (!initialized) {
@@ -63,12 +74,26 @@ export function initSentry(functionName: string): typeof Sentry {
       Sentry.init({
         dsn,
         environment,
+        release: Deno.env.get('SENTRY_RELEASE'), // np. 'stripe-webhook@1.4.0'
         tracesSampleRate: 0.1, // 10% transakcji
 
-        // KRYTYCZNE: Wyłącz domyślne integracje (nie działają z Deno.serve)
+        // SDK nie instrumentuje Deno.serve i nie daje scope separation między
+        // requestami w tym samym isolate — dlatego ten default zostaje, a izolację
+        // robimy jawnie przez withScope() (patrz captureError niżej).
         defaultIntegrations: false,
 
-        // Nie ma beforeSend w Deno SDK, maskowanie w captureError
+        // Centralne maskowanie PII — jeden punkt dla wszystkich zdarzeń
+        beforeSend(event) {
+          if (event.user?.email) {
+            event.user.email = event.user.email.replace(/^(.{2}).*(@.*)$/, '$1***$2');
+          }
+          // Usuń wrażliwe nagłówki, jeśli trafiły do requestu
+          if (event.request?.headers) {
+            delete event.request.headers['authorization'];
+            delete event.request.headers['cookie'];
+          }
+          return event;
+        },
       });
 
       // Tagi globalne (będą współdzielone między requestami!)
@@ -157,15 +182,15 @@ export function captureMessage(
 
 ```typescript
 // UWAGA: Używamy Deno.serve (natywne API) zamiast serve z deno.land/std
-import Stripe from 'https://esm.sh/stripe@17?target=deno';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import Stripe from 'npm:stripe@22';
+import { createClient } from 'jsr:@supabase/supabase-js@2';
 import { initSentry, captureError } from '../_shared/sentry.ts';
 
 // Inicjalizacja Sentry (raz przy cold start)
 const Sentry = initSentry('stripe-webhook');
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') || '', {
-  apiVersion: '2024-12-18.acacia', // Aktualna wersja API Stripe (grudzień 2024)
+  apiVersion: '2026-06-24.dahlia', // Wersja API pinowana przez stripe-node v22.3.x
   httpClient: Stripe.createFetchHttpClient(),
 });
 
@@ -204,8 +229,10 @@ Deno.serve(async (req) => {
       status: 200,
     });
   } catch (error) {
-    // KRYTYCZNE: Przechwycenie błędu do Sentry z izolowanym scope
-    captureError(error, {
+    // KRYTYCZNE: await przed Response — captureError robi Sentry.flush(),
+    // a isolate może zostać zamrożony zaraz po zwróceniu odpowiedzi.
+    // Alternatywa bez blokowania: EdgeRuntime.waitUntil(captureError(...)).
+    await captureError(error, {
       operation: 'stripe_webhook',
       event_type: 'unknown', // Nie mamy event.type bo parsowanie się nie powiodło
       extra: {
@@ -226,7 +253,7 @@ Deno.serve(async (req) => {
 
 **Kluczowe zmiany vs stary pattern:**
 - `Deno.serve()` zamiast `serve()` z `deno.land/std`
-- Wersje bibliotek bez pinowania (np. `stripe@17` zamiast `stripe@14.5.0`)
+- Wersje bibliotek bez pinowania (np. `stripe@22` zamiast `stripe@22.3.0`)
 - `Sentry.withScope()` dla izolacji kontekstu między requestami
 
 ---
@@ -266,7 +293,8 @@ switch (event.type) {
 
       console.log(`Payment succeeded for user ${userId}`);
     } catch (error) {
-      captureError(error, {
+      // await — flush musi się dokończyć zanim handler zwróci Response
+      await captureError(error, {
         operation: 'checkout_session_completed',
         event_type: event.type,
         user_id: userId,
@@ -383,7 +411,8 @@ supabase secrets list
 
 **Problem:** Błędy mają kontekst z poprzedniego requestu (brak izolacji scope).
 
-**Przyczyna:** Sentry Deno SDK nie wspiera `Deno.serve` instrumentation.
+**Przyczyna:** Ustawianie tagów/usera na globalnym scope (`Sentry.setTag`, `Sentry.setUser`)
+zamiast na scope izolowanym per operacja.
 
 **Rozwiązanie:** ZAWSZE używaj `Sentry.withScope()`:
 
@@ -413,57 +442,33 @@ captureError(error, {
 
 **Rozwiązanie:**
 1. Używaj `npm:@sentry/deno` (stary `deno.land/x/sentry` jest deprecated)
-2. Ustaw `defaultIntegrations: false` w `Sentry.init()`
-3. Dodaj `await Sentry.flush(2000)` po `captureException` — runtime może się zakończyć przed wysłaniem
-4. Alternatywnie: custom fetch do Sentry API (fallback)
+2. Dodaj `await Sentry.flush(2000)` po `captureException` — isolate może zostać zamrożony przed wysłaniem
+3. Sprawdź, czy `SENTRY_DSN` jest ustawiony jako secret (`supabase secrets list`)
+
+`@sentry/deno` na Edge Runtime ma status **beta** — traktuj wysyłkę jako "zwykle działa", nie
+"gwarantowane", i zawsze rób `await Sentry.flush(2000)` przed `Response` (patrz `captureError`
+wyżej), żeby zamrożenie isolate'u nie ucięło requestu w połowie wysyłki. Ręczny fallback bez SDK
+poniżej jest dla skrajnych przypadków (np. debugowanie samego SDK), nie standardowej ścieżki.
+Gdybyś jednak musiał wysłać zdarzenie bez SDK, celuj w aktualny **envelope endpoint**
+(`/api/{PROJECT_ID}/envelope/`), a nie w zdeprecjonowany `/store/` z nagłówkiem `X-Sentry-Auth`.
+Uwaga: body dla `/envelope/` to format newline-delimited (nagłówek envelope + nagłówek itemu +
+payload), a nie zwykły JSON — dlatego ręczne budowanie jest kruche i lepiej polegać na SDK:
 
 ```typescript
-// Fallback: Custom fetch do Sentry (jeśli SDK nie działa)
-async function sendToSentry(error: Error, context: Record<string, unknown>) {
-  const dsn = Deno.env.get('SENTRY_DSN');
-  if (!dsn) return;
-
-  // Parse DSN
-  const [protocol, rest] = dsn.split('://');
-  const [auth, hostAndProject] = rest.split('@');
-  const [host, projectId] = hostAndProject.split('/');
-
-  const event = {
-    event_id: crypto.randomUUID().replace(/-/g, ''),
-    timestamp: new Date().toISOString(),
-    platform: 'javascript',
-    exception: {
-      values: [
-        {
-          type: error.name,
-          value: error.message,
-          stacktrace: { frames: [] },
-        },
-      ],
-    },
-    contexts: context,
-    tags: { runtime: 'deno', platform: 'supabase' },
-  };
-
-  await fetch(`${protocol}://${host}/api/${projectId}/store/`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Sentry-Auth': `Sentry sentry_version=7, sentry_key=${auth}`,
-    },
-    body: JSON.stringify(event),
-  });
-}
+// Klucz z DSN: https://<PUBLIC_KEY>@<HOST>/<PROJECT_ID>
+const url = `https://${host}/api/${projectId}/envelope/?sentry_key=${publicKey}&sentry_version=7`;
+// body = `${JSON.stringify(envelopeHeader)}\n${JSON.stringify(itemHeader)}\n${JSON.stringify(event)}`
 ```
 
 ### Wersje bibliotek (Best Practices)
 
 **Stripe:**
-- Używaj major version bez patch: `stripe@17` zamiast `stripe@14.5.0`
-- Sprawdź `apiVersion` - aktualna: `2024-12-18.acacia`
+- Używaj major version bez patch: `stripe@22` zamiast `stripe@22.3.0`
+- Sprawdź `apiVersion` - aktualna: `2026-06-24.dahlia` (pinowana przez stripe-node v22.3.x)
 
 **Supabase JS:**
 - Używaj: `@supabase/supabase-js@2` (automatycznie najnowsza z major 2)
 
 **Sentry:**
-- Używaj: `npm:@sentry/deno` (stary `deno.land/x/sentry` jest deprecated)
+- Używaj: `npm:@sentry/deno@^10`, pinowane do majora (stary `deno.land/x/sentry` jest deprecated;
+  przykład w dokumentacji Supabase pokazuje `@^8` — sprawdź aktualny major przed wyborem wersji)

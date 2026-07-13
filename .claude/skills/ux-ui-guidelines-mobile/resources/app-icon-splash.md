@@ -67,7 +67,7 @@ Paleta kolorów ikony = dominująca paleta apki. User otwiera ikonę → splash 
 
 ### Required sizes (rendered)
 
-System wygeneruje wszystkie z 1024×1024 source przy `expo-app-icon` lub Asset Catalog. Source powinien być:
+System wygeneruje wszystkie rozmiary z 1024×1024 source przez konfigurację `expo.icon` / `ios.icon` w `app.json` (Expo generuje Asset Catalog automatycznie przy buildzie). Source powinien być:
 
 - 1024×1024px PNG
 - bez alpha channel (App Store rejection)
@@ -116,7 +116,7 @@ Apple na WWDC25 (sesja "Design app icons for Liquid Glass", 312K views, plus ofi
 
 ### iOS tools
 
-- **`expo-app-icon`** config plugin — wszystko z source 1024
+- **`expo.icon` / `ios.icon` w `app.json`** — konfiguracja natywna (light/dark/tinted), bez dodatkowego config pluginu
 - **Bakery** (Mac app) — visual editor wariantów iOS 18
 - **Icon Set Creator** (Mac App Store) — exporty
 - **Figma Apple icon template** — community plugin
@@ -442,6 +442,6 @@ Dla complex animation (Headspace flowing shapes). `lottie-react-native` package.
 - Material 3 — Adaptive Icons (m3.material.io/styles/icons/designing-icons)
 - Android Asset Studio (romannurik.github.io/AndroidAssetStudio)
 - expo-splash-screen (docs.expo.dev/versions/latest/sdk/splash-screen)
-- expo-app-icon (docs.expo.dev/versions/latest/config/app)
+- Expo app config — `icon` / `ios.icon` / `android.adaptiveIcon` (docs.expo.dev/versions/latest/config/app)
 - iOS 18 icon variants — Apple WWDC24 sessions
 - iOS 26 Liquid Glass icon rules — Apple WWDC25 "Design app icons for Liquid Glass" (312K views) + oficjalne templates Figma/Sketch na developer.apple.com

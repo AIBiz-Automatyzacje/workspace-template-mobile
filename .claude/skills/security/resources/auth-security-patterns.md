@@ -1,6 +1,6 @@
 # Wzorce Bezpieczenstwa Auth
 
-Wzorce bezpieczenstwa specyficzne dla auth flow w stacku React 19 + Supabase + Edge Functions.
+Wzorce bezpieczenstwa specyficzne dla auth flow w stacku React Native (Expo) + Supabase + Edge Functions (resource wspoldzielony z wariantem web — sekcje webowe oznaczone).
 
 ---
 
@@ -55,20 +55,26 @@ USING ((SELECT auth.uid()) = user_id)
 WITH CHECK ((SELECT auth.uid()) = user_id);
 ```
 
-### Admin Access
+### Dostęp administracyjny (role)
 
-Dostep administracyjny -- przez role w JWT claims lub oddzielna tabele.
+> ⚠️ **KRYTYCZNE — najczęstszy błąd autoryzacji w Supabase, notorycznie popełniany przez agentów AI.**
+> NIGDY nie trzymaj roli w `user_metadata`. Pole `raw_user_meta_data` (czyli claim `user_metadata` w JWT) jest **edytowalne przez samego użytkownika** — wystarczy `supabase.auth.updateUser({ data: { role: 'admin' } })` z konsoli/DevTools i atakujący podnosi sobie rolę, po czym RLS przepuszcza go do cudzych danych (privilege escalation).
+> Do autoryzacji używaj **`app_metadata`** (ustawiane wyłącznie server-side, użytkownik go nie zmieni) albo **dedykowanej tabeli ról**.
+> Nie używaj też top-levelowego claimu `role` w policy — to zarezerwowany claim Postgres/PostgREST (`authenticated` / `anon` / `service_role`), nie rola aplikacyjna.
 
 ```sql
--- Opcja 1: Przez custom claims w JWT (wymaga konfiguracji w Supabase Dashboard)
+-- ŹLE: user_metadata jest edytowalne przez klienta -> privilege escalation
+-- USING ((SELECT auth.jwt() -> 'user_metadata' ->> 'role') = 'admin')   -- NIGDY
+
+-- Opcja 1: app_metadata (ustawiane server-side, immutable dla usera)
 CREATE POLICY "admins_full_access"
 ON posts FOR ALL
 TO authenticated
 USING (
-    (SELECT auth.jwt() ->> 'role') = 'admin'
+    (SELECT auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
 );
 
--- Opcja 2: Przez tabele admin_users
+-- Opcja 2: dedykowana tabela rol (preferowane przy RBAC / wielu rolach)
 CREATE POLICY "admins_manage_posts"
 ON posts FOR ALL
 TO authenticated
@@ -80,6 +86,15 @@ USING (
 );
 ```
 
+Rolę w `app_metadata` ustawiasz **tylko z backendu** przez Admin API (klucz `service_role`) — nigdy z klienta:
+
+```ts
+// Server-side only (service_role) -- np. Edge Function, nigdy w przegladarce
+await supabaseAdmin.auth.admin.updateUserById(userId, {
+    app_metadata: { role: 'admin' },
+});
+```
+
 ### Typowe Bledy RLS
 
 | Blad | Konsekwencja | Poprawka |
@@ -87,6 +102,7 @@ USING (
 | Brak `ENABLE ROW LEVEL SECURITY` | Pelny dostep dla kazdego | Zawsze wlaczaj RLS |
 | Brak policy na DELETE | Nikt nie moze usuwac (lub kazdy, jesli RLS wylaczony) | Dodaj explicit DELETE policy |
 | `auth.email()` w policy | Email jest mutowalny -- uzytkownik moze zmienic | Uzywaj `auth.uid()` (UUID immutable) |
+| Rola z `user_metadata` w policy | User edytuje `user_metadata` z DevTools i podnosi sobie rolę (privilege escalation) | Używaj `app_metadata` (server-side) lub tabeli ról; nie top-level `role` |
 | `auth.uid()` bez subquery | Wolniejsze -- ewaluowane per row | Uzywaj `(SELECT auth.uid())` -- ewaluowane raz |
 | Brak policy = brak dostepu | Tabela jest niedostepna dla klientow | Zamierzone dla service-only tabel, blad dla reszty |
 | Policy na SELECT ale nie na INSERT | Uzytkownik widzi dane ale nie moze tworzyc | Sprawdz kazda operacje osobno |
@@ -98,6 +114,65 @@ USING (
 ### JWT Verification -- Standardowy Wzorzec
 
 Kazda chroniona Edge Function musi weryfikowac JWT.
+
+**getClaims() -- PREFEROWANE server-side.** Od 1 pazdziernika 2025 nowe projekty Supabase
+domyslnie uzywaja asymetrycznych kluczy JWT -- `getClaims()` weryfikuje token lokalnie przez
+JWKS (bez round-tripu do serwera Auth), wiec jest szybsze niz `getUser()`.
+
+```typescript
+import { createClient } from 'jsr:@supabase/supabase-js@2';
+
+Deno.serve(async (req) => {
+    // CORS preflight
+    if (req.method === 'OPTIONS') {
+        return new Response(null, { headers: corsHeaders });
+    }
+
+    try {
+        const authHeader = req.headers.get('Authorization');
+        if (!authHeader) {
+            return new Response(
+                JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Brak tokena' } }),
+                { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+        }
+
+        const token = authHeader.replace('Bearer ', '');
+        const supabase = createClient(
+            Deno.env.get('SUPABASE_URL')!,
+            Deno.env.get('SUPABASE_ANON_KEY')!
+        );
+
+        // Weryfikacja lokalna przez JWKS -- bez sieciowego zapytania do Auth
+        const { data, error: claimsError } = await supabase.auth.getClaims(token);
+        if (claimsError || !data) {
+            return new Response(
+                JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Nieprawidlowy token' } }),
+                { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+        }
+
+        // Logika biznesowa z zweryfikowanym data.claims.sub (user_id)
+        // ...
+
+        return new Response(
+            JSON.stringify({ data: { success: true } }),
+            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+    } catch (error) {
+        // Loguj bez wrazliwych danych
+        console.error('Edge Function error:', error instanceof Error ? error.message : 'Unknown');
+        return new Response(
+            JSON.stringify({ error: { code: 'INTERNAL', message: 'Blad serwera' } }),
+            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+    }
+});
+```
+
+**getUser() -- fallback dla starszych projektow.** Projekty na starszych symetrycznych kluczach
+JWT nie maja jeszcze JWKS do lokalnej weryfikacji -- `getUser()` kontaktuje sie z serwerem Auth
+przy kazdym wywolaniu i pozostaje jedyna opcja.
 
 ```typescript
 import { createClient } from 'jsr:@supabase/supabase-js@2';
@@ -124,7 +199,7 @@ Deno.serve(async (req) => {
             { global: { headers: { Authorization: authHeader } } }
         );
 
-        // Weryfikacja -- getUser() kontaktuje sie z serwerem Auth
+        // Weryfikacja -- getUser() kontaktuje sie z serwerem Auth (fallback, patrz getClaims() wyzej)
         const { data: { user }, error: authError } = await supabase.auth.getUser();
         if (authError || !user) {
             return new Response(
@@ -194,7 +269,7 @@ export const corsHeaders: Record<string, string> = {
 Kazdy input do Edge Function musi byc walidowany.
 
 ```typescript
-import { z } from 'npm:zod@3';
+import { z } from 'npm:zod@4';
 
 const CreatePostSchema = z.object({
     title: z.string().min(1).max(200),
@@ -246,8 +321,10 @@ function SafeComponent({ userInput }: { userInput: string }) {
 
 Kazde wstawianie surowego HTML od uzytkownika do DOM jest niebezpieczne -- zarowno przez React API (`__html`), jak i natywne DOM API. Zawsze sanityzuj przez DOMPurify.
 
+> ⚠️ **React Native: DOMPurify bez DOM to CICHY NO-OP** -- `isSupported === false`, a `sanitize()` zwraca input BEZ ZMIAN. NIGDY nie sanityzuj DOMPurify w runtime RN; sanityzacja user-HTML wylacznie server-side (Edge Function) albo nie renderuj HTML w ogole; tresc do WebView traktuj wg kroku 3 SKILL.md.
+
 ```typescript
-// BEZPIECZNE -- sanityzacja DOMPurify przed renderowaniem HTML
+// BEZPIECZNE -- tylko web/server-side (DOM dostepny); w RN patrz ostrzezenie wyzej -- sanityzacja DOMPurify przed renderowaniem HTML
 import DOMPurify from 'dompurify';
 
 function SafeComment({ html }: { html: string }) {
@@ -498,7 +575,7 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL');
 
 **Najwazniejsze zasady:**
 1. RLS zawsze wlaczony, policies na kazdej operacji, `(SELECT auth.uid())` zamiast `auth.email()`
-2. Edge Functions -- `getUser()` do weryfikacji JWT, service_role tylko gdy konieczne
+2. Edge Functions -- `getClaims()` (asymetryczne klucze, preferowane) / `getUser()` (fallback) do weryfikacji JWT, service_role tylko gdy konieczne
 3. React -- uwazaj na niebezpieczne renderowanie raw HTML, user URLs, dynamiczne `src`/`href`
 4. Zod na kazdej granicy systemu (Edge Functions, formularze, query params)
 5. Secrets -- VITE_* tylko dla publicznych kluczy, reszta w Edge Functions env vars
