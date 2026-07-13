@@ -1,9 +1,9 @@
 export const meta = {
   name: 'dev-docs-review-wf',
-  description: 'Code review fazy: context-packager (mapa zmian raz) -> 7 reviewerow rownolegle (security/perf/architektura/typescript/spec-compliance/test/E2E) -> dedup -> adversarial verify P1/P2 (P1=3 sceptykow, P2=1) -> scribe zapisuje raport + bookkeeping checkboxow Weryfikacja: -> severity gate.',
+  description: 'Code review fazy: context-packager (mapa zmian raz) -> routing reviewerow wg mapy (rdzen zawsze; perf/architektura warunkowo na malych fazach) -> do 8 reviewerow rownolegle (security/perf/architektura/typescript/spec-compliance/simplicity/test/E2E Maestro) -> dedup 2-przebiegowy (JS + semantyczny haiku) -> adversarial verify P1/P2 (P1=3 sceptykow, P2=1) -> scribe zapisuje raport + bookkeeping checkboxow Weryfikacja: -> severity gate.',
   whenToUse: 'Review jednej fazy. Wolany przez dev-autopilot lub standalone z args {sciezka, faza}.',
   phases: [
-    { title: 'Review', detail: 'context-packager + 7 reviewerow rownolegle (w tym spec-compliance: zgodnosc ze spec/planem)' },
+    { title: 'Review', detail: 'context-packager + 8 reviewerow rownolegle (w tym spec-compliance i simplicity/YAGNI)' },
     { title: 'Verify', detail: 'adversarial verify per finding (P1=3 sceptykow, P2=1)' },
     { title: 'Zapis', detail: 'raport + bookkeeping + severity gate' },
   ],
@@ -136,6 +136,7 @@ const REVIEWERZY = [
   { key: 'architecture', agentType: 'architecture-strategist', fokus: 'SOLID, wzorce, nazewnictwo, import organization, granice warstw' },
   { key: 'typescript', agentType: 'kieran-typescript-reviewer', fokus: 'type safety, brak any/as/!, discriminated unions, explicit return types' },
   { key: 'spec-compliance', agentType: 'spec-flow-analyzer', fokus: 'zgodnosc implementacji ze spec/planem IU: (a) wymagania ze spec/IU BRAKUJACE lub czesciowo zaimplementowane (under-implementation), (b) zachowanie w diffie o ktore nikt nie prosil (scope creep / over-implementation), (c) wymagania pozornie zaimplementowane ale BLEDNIE. Cytuj linie spec/IU (ID wymagania lub nazwa IU). Jesli brak spec ani planu — zwroc pusta liste findingow' },
+  { key: 'simplicity', agentType: 'code-simplicity-reviewer', fokus: 'YAGNI i minimalizm: zbedna zlozonosc, abstrakcje bez 2+ uzyc, defensive code na niemozliwe scenariusze, martwy kod, redundancja, uproszczenia bez utraty funkcji. Duplication > Complexity — prosta duplikacja jest OK, zlozona abstrakcja DRY nie' },
 ]
 
 // Blok doklejany w trybie re-review (po cyklu fix) — targetowana weryfikacja zamiast pelnego re-skanu.
@@ -177,7 +178,8 @@ Nie oceniaj jakosci, nie zglaszaj findingow. Zwroc obiekt {diffStat, pliki[]}.`
 
 function reviewerPrompt(sciezka, faza, fokus, poprzednie, kontekst) {
   return `Jestes reviewerem fazy ${faza} w folderze ${sciezka}.
-Przeczytaj zmiany git tej fazy (diff) + requirements doc (docs/dev-brainstorms/*-requirements.md jesli istnieje) + plan techniczny / Implementation Unit fazy ${faza} w docs/plans/ (Files:, Test scenarios:, Patterns to follow:).
+Przeczytaj zmiany git tej fazy (diff) + requirements doc (docs/brainstorms/*-requirements.md jesli istnieje) + plan techniczny / Implementation Unit fazy ${faza} w docs/plans/ (Files:, Test scenarios:, Patterns to follow:).
+Przeczytaj tez .claude/rules/learned-patterns.md (jesli istnieje) — reguly z poprzednich zadan tego projektu; naruszenie ktorejkolwiek z nich zglos jako finding.
 Skup sie na: ${fokus}.
 Sklasyfikuj kazdy finding: P1 (blocking), P2 (important), P3 (nit) oraz typ: KOD / TEST / E2E / OPERATOR.
 Zwroc obiekt {findings:[...]} zgodny ze schematem. Sam nie zapisuj plikow.${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
@@ -223,6 +225,9 @@ KLASYFIKACJA per scenariusz (to jest krytyczne — nie wszystko jest P2):
   To NIE jest defekt kodu — to brakujacy warunek srodowiskowy. NIE klasyfikuj jako P2.
   W opisie podaj: tresc checkboxa + dokladny blocker + Operator action (kroki do odblokowania).
 - Scenariusz WYKONANY i PASSED -> nie zglaszaj (scribe odznaczy w bookkeepingu).
+
+Jesli zadanie ma figma_screens / mockupy w sekcji designerskiej — zrob side-by-side visual
+comparison screenshotu z emulatora (Maestro takeScreenshot) z mockupem (rozbieznosci wizualne = P2 typ E2E).
 
 Zwroc {findings:[...]}. Nie zapisuj plikow (scribe zrobi bookkeeping).
 ${BLOK_DLUGIE_KOMENDY}${rereviewBlok(poprzednie)}`
@@ -274,7 +279,27 @@ phase('Review')
 // Poprawka 9: zbuduj diff/mape raz; reviewerzy dostaja ja inline zamiast kazdy odkrywac zmiany od zera.
 // Null (agent skipniety/blad) -> reviewerzy robia wlasna dyskryminacje jak dotad (fallback w mapaBlok).
 const kontekst = await agent(kontekstPrompt(sciezka, faza), { schema: KONTEKST, label: 'kontekst:diff', phase: 'Review' })
-const thunki = REVIEWERZY.map((r) => () =>
+
+// Routing reviewerow wg mapy zmian (bezpieczna wersja): rdzen — security, typescript,
+// spec-compliance, simplicity (+ test-coverage, e2e) — odpala sie ZAWSZE (XSS potrafi siedziec
+// w pliku "czysto UI-owym", spec/testy dotycza kazdej fazy). Warunkowo tylko performance
+// i architecture na MALYCH fazach (<=2 pliki), gdzie zwykle nie maja czego ocenic.
+// Brak kontekstu (packager padl/null) => pelny sklad — bez mapy nie wiemy nic o fazie.
+const plikiFazy = (kontekst && kontekst.pliki) || []
+const malaFaza = plikiFazy.length > 0 && plikiFazy.length <= 2
+const WZORZEC_PERF = /(^|\/)(hooks|lib)\/|quer|fetch|realtime|\.sql$/i
+const perfIstotny = !malaFaza || plikiFazy.some((p) => WZORZEC_PERF.test(p.plik))
+const nowyModul = plikiFazy.some((p) => /\bnow(y|a|e)\b/i.test(p.czegoDotyczy || ''))
+const archIstotny = !malaFaza || nowyModul
+const aktywni = REVIEWERZY.filter((r) => {
+  if (r.key === 'performance') return perfIstotny
+  if (r.key === 'architecture') return archIstotny
+  return true
+})
+const pominieci = REVIEWERZY.filter((r) => !aktywni.includes(r)).map((r) => r.key)
+if (pominieci.length) log(`Routing: mala faza (${plikiFazy.length} pliki) — pomijam reviewerow: ${pominieci.join(', ')}`)
+
+const thunki = aktywni.map((r) => () =>
   agent(reviewerPrompt(sciezka, faza, r.fokus, poprzKod, kontekst), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })
 )
 thunki.push(() => agent(testCoveragePrompt(sciezka, faza, poprzTest, kontekst), { schema: FINDINGS, label: 'review:test-coverage', phase: 'Review' }))
@@ -282,7 +307,7 @@ thunki.push(() => agent(e2ePrompt(sciezka, faza, poprzE2e), { schema: FINDINGS, 
 
 const wyniki = await parallel(thunki)
 
-// Dedup w JS (po pliku + poczatku opisu) — bariera byla potrzebna wlasnie tu.
+// Dedup przebieg 1 — JS (po pliku + poczatku opisu): lapie identyczne sformulowania za darmo.
 // Przy kolizji klucza wygrywa WYZSZE severity (P1<P2<P3), nie kolejnosc reviewerow.
 const wszystkie = wyniki.filter(Boolean).flatMap((w) => w.findings)
 const RANGA = { P1: 0, P2: 1, P3: 2 }
@@ -292,7 +317,52 @@ for (const f of wszystkie) {
   const obecny = poKluczu.get(klucz)
   if (!obecny || RANGA[f.severity] < RANGA[obecny.severity]) poKluczu.set(klucz, f)
 }
-const dedup = [...poKluczu.values()]
+let dedup = [...poKluczu.values()]
+
+// Dedup przebieg 2 — semantyczny (haiku): 8 reviewerow czesto opisuje TEN SAM problem roznymi
+// slowami; klucz tekstowy tego nie sklei, a kazdy duplikat P1/P2 kosztuje potem 1-3 sceptykow
+// w verify. Agent zwraca TYLKO grupy indeksow-duplikatow; scalanie liczy JS (wygrywa wyzsze
+// severity). Agent null / niepoprawne indeksy => zostaje wynik przebiegu 1 (best-effort).
+if (dedup.length > 1) {
+  const DEDUP_GRUPY = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      duplikaty: {
+        type: 'array',
+        items: { type: 'array', items: { type: 'integer' } },
+        description: 'grupy indeksow (min 2 na grupe) opisujacych TEN SAM problem; findingi bez duplikatu POMIN',
+      },
+    },
+    required: ['duplikaty'],
+  }
+  const lista = dedup.map((f, i) => `${i}. [${f.severity}/${f.typ}] ${f.plik} — ${f.opis}`).join('\n')
+  const grupy = await agent(
+    `Ponizej ponumerowana lista findingow z code review od NIEZALEZNYCH reviewerow (faza ${faza}, ${sciezka}).
+Znajdz grupy wpisow opisujacych TEN SAM problem inna parafraza (ten sam plik/mechanizm i ta sama przyczyna).
+NIE lacz roznych problemow w tym samym pliku ani problemow o wspolnym objawie, ale innej przyczynie.
+W razie watpliwosci NIE laczyc. Zwroc wylacznie grupy 2+ indeksow; brak duplikatow => {duplikaty: []}.
+
+${lista}`,
+    { schema: DEDUP_GRUPY, label: 'dedup:semantyczny', model: 'haiku', phase: 'Review' }
+  )
+  if (grupy && Array.isArray(grupy.duplikaty)) {
+    const doUsuniecia = new Set()
+    for (const grupa of grupy.duplikaty) {
+      const poprawne = [...new Set(grupa)].filter((i) => Number.isInteger(i) && i >= 0 && i < dedup.length)
+      if (poprawne.length < 2) continue
+      // Reprezentant grupy = najwyzsze severity (najnizsza RANGA); reszta odpada.
+      const reprezentant = poprawne.reduce((a, b) => (RANGA[dedup[a].severity] <= RANGA[dedup[b].severity] ? a : b))
+      for (const i of poprawne) if (i !== reprezentant) doUsuniecia.add(i)
+    }
+    if (doUsuniecia.size) {
+      log(`Dedup semantyczny: scalono ${doUsuniecia.size} duplikatow (z ${dedup.length} findingow)`)
+      dedup = dedup.filter((_, i) => !doUsuniecia.has(i))
+    }
+  } else if (!grupy) {
+    log('Dedup semantyczny: agent zwrocil null — zostaje dedup JS')
+  }
+}
 
 // Faza 2: adversarial verify — tylko P1/P2 (P3/nity przechodza bez weryfikacji)
 phase('Verify')
@@ -341,9 +411,19 @@ log(`Verify: z ${doWeryfikacji.length} findingow P1/P2 potwierdzono ${potwierdzo
 
 // Faza 3: scribe zapisuje raport + bookkeeping + liczy severity gate
 phase('Zapis')
-const wynik = await agent(scribePrompt(sciezka, faza, potwierdzone), { schema: REVIEW_RESULT, label: `scribe:faza-${faza}` })
+let wynik = await agent(scribePrompt(sciezka, faza, potwierdzone), { schema: REVIEW_RESULT, label: `scribe:faza-${faza}` })
 if (!wynik) {
-  // Scribe padl — zwroc zweryfikowane findingi zamiast null (orkiestrator i tak liczy gate w JS z findings[]).
+  // Scribe padl — jedna ponowna proba (to JEDYNY agent zapisujacy review-faza-N.md i sekcje
+  // "Do poprawy"; bez tych artefaktow fix dziala bez kontekstu, a czlowiek bez widoku).
+  log(`Scribe fazy ${faza} padl — ponawiam raz`)
+  wynik = await agent(
+    `${scribePrompt(sciezka, faza, potwierdzone)}\n\n(PONOWNA PROBA — poprzedni zapis nie zwrocil wyniku. Pliki zapisuj idempotentnie: nadpisz raport w calosci, sekcje w zadaniach ZASTAP zamiast dopisywac duplikat.)`,
+    { schema: REVIEW_RESULT, label: `scribe:faza-${faza}:retry` }
+  )
+}
+if (!wynik) {
+  // Scribe padl 2x — zwroc zweryfikowane findingi + flage scribeFail (orkiestrator liczy gate w JS
+  // z findings[], ale NIE moze oznaczyc review jako done: raport i checkboxy nie powstaly).
   return {
     fazaNumer: faza,
     findings: potwierdzone,
@@ -351,6 +431,7 @@ if (!wynik) {
     severityGate: 'BLOKUJE',
     raportSciezka: '',
     e2e: { passed: 0, failed: 0, skipped: 0 },
+    scribeFail: true,
   }
 }
 return wynik

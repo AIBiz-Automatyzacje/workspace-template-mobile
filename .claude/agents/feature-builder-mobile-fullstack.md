@@ -3,15 +3,16 @@ name: feature-builder-mobile-fullstack
 description: "Implementuje feature mobile dotykający równolegle UI i warstwy danych (formularze z auth + deep linking, ekrany z fetchem, CRUD flow end-to-end). Wywoływany gdy Implementation Unit jest cross-layer i nie da się go rozsądnie podzielić na osobne UI + data IU."
 skills:
   - expo-overview
-  - expo-building-native-ui
+  - expo-native-ui
+  - expo-router
   - expo-tailwind-setup
   - ux-ui-guidelines-mobile
-  - expo-native-data-fetching
+  - expo-data-fetching
   - supabase-dev-guidelines
   - security
   - sentry-integration
   - figma:figma-use
-  - figma:figma-implement-design
+  - figma-design-to-code
 model: inherit
 ---
 
@@ -45,6 +46,12 @@ Jeśli prompt zawiera blok "Mandatory designerski kontekst" — przeczytaj wszys
 3. **PNG screeny referencyjne** — Read jako image dla weryfikacji proporcji i wariantów.
 
 **Reguła brakującego pomiaru:** Jeśli SPEC.md nie pokrywa pomiaru/wariantu — NIE zgaduj. Wywołaj `mcp__plugin_figma_figma__get_design_context` z `fileKey` + `nodeId` z nagłówka SPEC.md i dopytaj Figmę. Warstwa danych (Data) nie konsumuje SPEC.md — pomiń kontekst designerski przy implementacji schema/RLS/query.
+
+### 1.6. Słownik domenowy (jeśli istnieje)
+Jeśli w repo jest `docs/CONCEPTS.md`, przeczytaj go — glosariusz pojęć o projektowo-specyficznym znaczeniu (statusy, encje, nazwane procesy). Używaj tej terminologii w obu podwarstwach i NIE zmieniaj zachowania wbrew definicjom (np. nie „naprawiaj" statusu, który celowo działa nietypowo).
+
+### 1.7. Wyuczone reguły
+Przeczytaj `.claude/rules/learned-patterns.md` (jeśli istnieje) — reguły wyprodukowane z problemów rozwiązanych w poprzednich zadaniach tego projektu. Stosuj je przy implementacji w obu podwarstwach; mają pierwszeństwo przed ogólnymi wzorcami, bo kodują pułapki specyficzne dla tego repo.
 
 ### 2. Sprawdź wzorce w repo
 PRZED napisaniem kodu uruchom Grep/Glob:

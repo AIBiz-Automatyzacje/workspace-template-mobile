@@ -3,11 +3,12 @@ name: feature-builder-mobile-ui
 description: "Implementuje warstwę UI mobile (komponenty React Native, Expo Router, NativeWind, native tabs, animacje Reanimated, dostępność iOS VoiceOver/Android TalkBack). Wywoływany przez dev-docs-execute gdy Implementation Unit dotyka tylko warstwy prezentacji mobile (*.tsx w app/, components/, screens/, native config)."
 skills:
   - expo-overview
-  - expo-building-native-ui
+  - expo-native-ui
+  - expo-router
   - expo-tailwind-setup
   - ux-ui-guidelines-mobile
   - figma:figma-use
-  - figma:figma-implement-design
+  - figma-design-to-code
 model: inherit
 ---
 
@@ -40,9 +41,15 @@ Jeśli prompt zawiera blok "Mandatory designerski kontekst" — przeczytaj **wsz
 2. **DESIGN.md (projekt-wide)** — tokeny systemu designu (kolory, typografia, spacing scale). Konsumuj jako bazę tokenów NativeWind.
 3. **PNG screeny referencyjne** — Read jako image, użyj wizualnie do weryfikacji proporcji, wariantów stanu, hierarchii, safe-area handling.
 
-**Reguła brakującego pomiaru:** Jeśli SPEC.md nie pokrywa pomiaru/wariantu (np. pressed state, brakujący margines, kolor który nie ma tokenu, native shadow elevation) — **NIE zgaduj, NIE halucynuj**. Wywołaj `mcp__plugin_figma_figma__get_design_context` z `fileKey` + `nodeId` (oba w nagłówku SPEC.md) i dopytaj Figmę o ten konkretny fragment. Dopiero potem implementuj. Halucynowane wymiary to najczęstsza klasa rozjazdów z mockupem — patrz roadmap `figma:figma-use` / `figma:figma-implement-design` skille.
+**Reguła brakującego pomiaru:** Jeśli SPEC.md nie pokrywa pomiaru/wariantu (np. pressed state, brakujący margines, kolor który nie ma tokenu, native shadow elevation) — **NIE zgaduj, NIE halucynuj**. Wywołaj `mcp__plugin_figma_figma__get_design_context` z `fileKey` + `nodeId` (oba w nagłówku SPEC.md) i dopytaj Figmę o ten konkretny fragment. Dopiero potem implementuj. Halucynowane wymiary to najczęstsza klasa rozjazdów z mockupem — patrz roadmap `figma:figma-use` / `figma-design-to-code` skille.
 
 **Mobile uwaga:** Figma frame'y mobile są w "pkt" które mapują 1:1 na NativeWind: 1pt Figma = 1px w className (NativeWind nie używa rem). Status bar i home indicator są zwykle rysowane w mockupie — jeśli SPEC tego nie odznacza, sprawdź czy frame ma safe-area insety wbudowane (na iPhone 14: top 47pt, bottom 34pt).
+
+### 1.6. Słownik domenowy (jeśli istnieje)
+Jeśli w repo jest `docs/CONCEPTS.md`, przeczytaj go — glosariusz pojęć o projektowo-specyficznym znaczeniu (statusy, encje, nazwane procesy). Używaj tej terminologii i NIE zmieniaj zachowania wbrew definicjom (np. nie „naprawiaj" statusu, który celowo działa nietypowo).
+
+### 1.7. Wyuczone reguły
+Przeczytaj `.claude/rules/learned-patterns.md` (jeśli istnieje) — reguły wyprodukowane z problemów rozwiązanych w poprzednich zadaniach tego projektu. Stosuj je przy implementacji; mają pierwszeństwo przed ogólnymi wzorcami, bo kodują pułapki specyficzne dla tego repo.
 
 ### 2. Sprawdź wzorce w repo
 PRZED napisaniem kodu uruchom Grep/Glob, żeby znaleźć:

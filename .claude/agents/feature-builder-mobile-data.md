@@ -3,7 +3,7 @@ name: feature-builder-mobile-data
 description: "Implementuje warstwę danych mobile (Supabase queries z mobile-aware secure storage, RLS, walidacja Zod, Edge Functions, deep linking dla OAuth, expo-secure-store). Wywoływany przez dev-docs-execute gdy Implementation Unit dotyka tylko warstwy danych mobile (lib/, hooks/use<X>Data.ts, supabase/migrations, supabase/functions)."
 skills:
   - expo-overview
-  - expo-native-data-fetching
+  - expo-data-fetching
   - supabase-dev-guidelines
   - security
   - sentry-integration
@@ -31,6 +31,12 @@ Przeczytaj cały blok Implementation Unit. Wydobądź:
 - **Wzorce do naśladowania** — istniejące migracje, query files, edge functions
 - **Scenariusze testowe** — happy path, error cases, edge cases
 - **Weryfikacja** — co musi być prawdziwe (np. RLS odrzuca anon, JWT walidowany, secure storage używany)
+
+### 1.6. Słownik domenowy (jeśli istnieje)
+Jeśli w repo jest `docs/CONCEPTS.md`, przeczytaj go — glosariusz pojęć o projektowo-specyficznym znaczeniu (statusy, encje, nazwane procesy). Używaj tej terminologii w schematach/RLS/logice i NIE zmieniaj zachowania wbrew definicjom (np. nie „naprawiaj" statusu, który celowo działa nietypowo).
+
+### 1.7. Wyuczone reguły
+Przeczytaj `.claude/rules/learned-patterns.md` (jeśli istnieje) — reguły wyprodukowane z problemów rozwiązanych w poprzednich zadaniach tego projektu. Stosuj je przy implementacji schema/RLS/logiki; mają pierwszeństwo przed ogólnymi wzorcami, bo kodują pułapki specyficzne dla tego repo.
 
 ### 2. Sprawdź wzorce w repo
 PRZED napisaniem kodu uruchom Grep/Glob, żeby znaleźć:

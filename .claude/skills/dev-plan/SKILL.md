@@ -26,6 +26,8 @@ Zadawaj jedno pytanie na raz. Preferuj zwięzły single-select gdy istnieją nat
 
 Nie kontynuuj dopóki nie masz jasnego inputu do planowania.
 
+**Słownik domenowy:** jeśli istnieje `docs/CONCEPTS.md`, przeczytaj go najpierw — to glosariusz pojęć o projektowo-specyficznym znaczeniu. Używaj tej terminologii w planie i NIE planuj zmian sprzecznych z definicjami (np. „naprawy" statusu, który celowo działa nietypowo).
+
 ## Główne zasady
 
 1. **Używaj wymagań jako źródła prawdy** — jeśli `/dev-brainstorm` wyprodukował requirements doc, planowanie powinno na nim bazować zamiast wymyślać zachowania od nowa.
@@ -426,9 +428,9 @@ Każdy Implementation Unit MUSI mieć zadeklarowany `Delegate to:` — nazwa sub
 
 | Ścieżki w `Pliki:` | Subagent | Skille (mirror dla `Skills in play:`) |
 |---|---|---|
-| Tylko `*.tsx` w `app/`, `components/`, `screens/`, lub native config (`app.json`, `app.config.ts`) | `feature-builder-mobile-ui` | expo-overview, expo-building-native-ui, expo-tailwind-setup, figma:figma-use, figma:figma-implement-design |
-| Tylko `*.ts` w `lib/`, `hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-mobile-data` | expo-overview, expo-native-data-fetching, supabase-dev-guidelines, security, sentry-integration |
-| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-building-native-ui, expo-tailwind-setup, expo-native-data-fetching, supabase-dev-guidelines, security, sentry-integration, figma:figma-use, figma:figma-implement-design |
+| Tylko `*.tsx` w `app/`, `components/`, `screens/`, lub native config (`app.json`, `app.config.ts`) | `feature-builder-mobile-ui` | expo-overview, expo-native-ui, expo-router, expo-tailwind-setup, figma:figma-use, figma-design-to-code |
+| Tylko `*.ts` w `lib/`, `hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-mobile-data` | expo-overview, expo-data-fetching, supabase-dev-guidelines, security, sentry-integration |
+| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-native-ui, expo-router, expo-tailwind-setup, expo-data-fetching, supabase-dev-guidelines, security, sentry-integration, figma:figma-use, figma-design-to-code |
 
 **Reguła praktyczna:** jeśli da się rozsądnie podzielić na dwa osobne IU (jeden UI, drugi data) — podziel. `feature-builder-mobile-fullstack` używaj **tylko** gdy podział byłby sztuczny (np. ekran logowania z OAuth, gdzie UI bez auth call lub auth call bez ekranu są bezużyteczne).
 
