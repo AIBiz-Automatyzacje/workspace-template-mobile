@@ -1,6 +1,6 @@
 ---
 name: expo-tailwind-setup
-description: "TailwindCSS v4 w Expo z react-native-css + NativeWind v5 (preview — pinuj exact `5.0.0-preview.2`, NIE `^5.0.0-preview.2`). Universal styling iOS/Android/web. Używaj przy setupie Tailwinda w Expo, 'className w React Native', migracji z StyleSheet."
+description: "Framework (OSS). TailwindCSS v4 w Expo z react-native-css + NativeWind v5 dla universal stylingu iOS/Android/web. Używaj przy setupie Tailwinda w Expo, 'className w React Native', migracji z StyleSheet."
 version: 1.0.0
 license: MIT
 ---

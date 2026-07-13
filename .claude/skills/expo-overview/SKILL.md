@@ -1,11 +1,11 @@
 ---
 name: expo-overview
-description: "Hub stack guidelines dla projektu Expo (React Native). Decision tree: który expo-* skill wybrać. Konwencje RN vs web (View vs div, Link z expo-router, NativeWind, brak DOM). Używaj na początku każdej rozmowy o projekcie mobilnym, przy 'projekt Expo', 'mobile app', 'React Native', 'jak to zrobić w Expo'."
+description: "Hub stack guidelines dla projektu Expo (React Native). Decision tree: który expo-*/eas-* skill wybrać. Konwencje RN vs web (View vs div, Link z expo-router, NativeWind, brak DOM). Używaj na początku każdej rozmowy o projekcie mobilnym, przy 'projekt Expo', 'mobile app', 'React Native', 'jak to zrobić w Expo'."
 ---
 
 # Expo Overview — Mobile Stack Hub
 
-Ten skill jest **pierwszym przystankiem** gdy pracujesz w repo mobilnym (Expo). Pełni rolę indeksu / routera dla 12 stack-specific skilli Expo. Zaczynaj tu, potem deleguj do konkretnego `expo-*` skilla.
+Ten skill jest **pierwszym przystankiem** gdy pracujesz w repo mobilnym (Expo). Pełni rolę indeksu / routera dla 13 stack-specific skilli Expo (upstream: [`expo/skills`](https://github.com/expo/skills), konwencja nazw `expo-*` = framework OSS, `eas-*` = płatny serwis EAS). Zaczynaj tu, potem deleguj do konkretnego skilla.
 
 ## Detekcja stacku
 
@@ -16,26 +16,29 @@ Jesteś w projekcie Expo gdy:
 
 **To NIE jest projekt webowy.** Nie używaj skilla `tailwind-react-guidelines` (tu go nie ma — wycięty w transformacji). Nie używaj `agent-browser` (tu go nie ma — używaj `mobile-e2e-maestro`).
 
-## Decision tree — który expo-* skill?
+## Decision tree — który skill?
 
 | Co budujesz / nad czym pracujesz | Skill |
 |---|---|
-| Ekran, komponent UI, nawigacja, animacja, native tabs | `expo-building-native-ui` |
+| Ekran, komponent UI, animacja, kontrolki, SF Symbols, media | `expo-native-ui` |
+| Nawigacja, routing, taby, modale, form sheets, headery | `expo-router` |
 | Setup Tailwinda / NativeWind / `className` w RN | `expo-tailwind-setup` |
-| Fetch z API, React Query, SWR, Expo Router data loaders, offline cache | `expo-native-data-fetching` |
-| Natywne komponenty Android (Material You, native pickers) | `expo-ui-jetpack-compose` |
-| Natywne komponenty iOS (SwiftUI, dynamic type, Liquid Glass) | `expo-ui-swift-ui` |
+| Fetch z API, React Query, SWR, data loaders, offline cache | `expo-data-fetching` |
+| Natywne UI przez `@expo/ui` (SwiftUI iOS / Jetpack Compose Android) | `expo-ui` |
 | Custom dev client przez EAS Build (gdy Expo Go nie wystarcza) | `expo-dev-client` |
 | Pisanie natywnych modułów Swift/Kotlin/TS, config plugins | `expo-module` |
-| Reuse webowego kodu (recharts, web libs) przez webview | `expo-use-dom` |
-| Build + submit do App Store / Google Play | `expo-deployment` |
-| YAML pipeline w `.eas/workflows/` | `expo-cicd-workflows` |
+| Reuse webowego kodu (recharts, web libs) przez webview | `expo-dom` |
+| Build + submit do App Store / Google Play | `eas-app-stores` |
+| YAML pipeline w `.eas/workflows/` | `eas-workflows` |
+| Deploy web bundle / API routes (`+api.ts`) na EAS Hosting | `eas-hosting` |
 | Health metryki OTA updateów (crash rate, payload size) | `eas-update-insights` |
-| Upgrade SDK Expo (53/54/55) | `expo-upgrading` |
+| Upgrade SDK Expo (53/54/55) | `expo-upgrade` |
 
-**Server-side code (webhooki, proxy do API, server-side auth):** używaj `supabase-dev-guidelines` (sekcja Mobile/Edge Functions). NIE adoptujemy `expo-api-routes` w tym repo (Decyzja architektoniczna #3 z transformacji).
+**Server-side code (webhooki, proxy do API, server-side auth):** domyślnie `supabase-dev-guidelines` (Edge Functions — Decyzja architektoniczna #3 z transformacji). `eas-hosting` (`+api.ts`) używaj gdy projekt świadomie wybiera backend na EAS zamiast Supabase.
 
 **Mobile E2E testing:** `mobile-e2e-maestro` (analog `agent-browser` z web).
+
+**W upstream `expo/skills` są też skille nie zaimportowane do tego szablonu** (nisza poza core flow): `expo-brownfield` (Expo w istniejącej apce natywnej), `expo-app-clip` (iOS App Clips), `expo-web-to-native` (migracja całej apki web), `expo-examples` (repo expo/examples), `eas-simulator` (zdalny simulator w chmurze EAS), `eas-observe` (metryki `expo-observe`). Gdy temat ich dotyczy — pobierz z upstreamu.
 
 ## Konwencje RN vs web (dla osób z webowego stacku)
 
@@ -57,10 +60,10 @@ Jesteś w projekcie Expo gdy:
 
 ## Mental model — kiedy native vs cross-platform
 
-**Domyślnie:** używaj cross-platform RN + NativeWind. To 90% UI. Spójność, jeden codebase, łatwiejsza utrzymanie.
+**Domyślnie:** używaj cross-platform RN + NativeWind. To 90% UI. Spójność, jeden codebase, łatwiejsze utrzymanie.
 
-**Native (`@expo/ui`):** tylko gdy potrzebujesz **prawdziwego native feel** który cross-platform nie da:
-- Native pickers (data, czas, kontakty) — mają inny zachowanie per platforma
+**Native (`@expo/ui`, skill `expo-ui`):** tylko gdy potrzebujesz **prawdziwego native feel** który cross-platform nie da:
+- Native pickers (data, czas, kontakty) — mają inne zachowanie per platforma
 - Haptyki specyficzne dla platformy
 - Dark mode platformy (automatyczny iOS dynamic colors)
 - Material You (Android 12+) z user theming
@@ -68,17 +71,18 @@ Jesteś w projekcie Expo gdy:
 
 To **nie jest** "na wszystko" — to specjalistyczne narzędzie. Vendor lock realny: wyjście z Expo wymaga przepisania ekranów używających `@expo/ui`.
 
-## Linki do 12 skilli (alfabetycznie)
+## Linki do 13 skilli (alfabetycznie)
 
+- **`eas-app-stores`** — build + submit do storeów (App Store / Google Play / TestFlight)
+- **`eas-hosting`** — deploy web bundle + API routes (`+api.ts`) na EAS Hosting
 - **`eas-update-insights`** — health metryki OTA updateów
-- **`expo-building-native-ui`** — kompletny przewodnik UI dla Expo Router
-- **`expo-cicd-workflows`** — EAS workflow YAML
-- **`expo-deployment`** — submit do storeów
+- **`eas-workflows`** — EAS workflow YAML (CI/CD)
+- **`expo-data-fetching`** — networking, React Query, offline cache
 - **`expo-dev-client`** — custom dev client przez EAS Build
+- **`expo-dom`** — web kod w webview na natywie
 - **`expo-module`** — natywne moduły (Swift/Kotlin/TS)
-- **`expo-native-data-fetching`** — networking, React Query, offline cache
+- **`expo-native-ui`** — kompletny przewodnik UI (HIG, kontrolki, media, animacje)
+- **`expo-router`** — nawigacja i routing (stack, taby, modale, headery)
 - **`expo-tailwind-setup`** — TailwindCSS v4 + NativeWind v5 preview
-- **`expo-ui-jetpack-compose`** — natywne komponenty Android (SDK 55+)
-- **`expo-ui-swift-ui`** — natywne komponenty iOS (SDK 55+)
-- **`expo-upgrading`** — upgrade SDK Expo
-- **`expo-use-dom`** — web kod w webview na natywie
+- **`expo-ui`** — natywne UI przez `@expo/ui` (SwiftUI / Jetpack Compose)
+- **`expo-upgrade`** — upgrade SDK Expo
