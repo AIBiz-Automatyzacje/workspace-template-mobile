@@ -1,6 +1,6 @@
 ---
 name: expo-module
-description: "Framework (OSS). Pisanie natywnych modułów Swift/Kotlin/TS przez Expo Modules API. Module definition DSL, native views, shared objects, config plugins, lifecycle hooks, autolinking, type system. Używaj przy 'natywny moduł', 'Swift/Kotlin w Expo', 'config plugin', integracji bibliotek natywnych."
+description: "Framework (OSS). Pisanie natywnych modułów Swift/Kotlin/TS przez Expo Modules API. Module definition DSL, native views, shared objects, config plugins, lifecycle hooks, autolinking, type system. Używaj przy 'natywny moduł', 'Swift/Kotlin w Expo', 'config plugin', integracji bibliotek natywnych. NIE do migracji istniejącego modułu Swift z definition DSL na makra Expo Modules API 2.0 — do tego jest expo-migrate-module (upstream, plugin expo-experiments, nie zaimportowany do szablonu)."
 version: 1.0.0
 license: MIT
 ---
@@ -17,6 +17,8 @@ Complete reference for building native modules and views using the Expo Modules 
 - Building config plugins that modify native project files
 - Adding Android, Apple, or web support to an existing Expo module
 - Editing `expo-module.config.json`, config plugins, or lifecycle hooks
+
+To migrate an existing Swift module from the definition DSL to the Expo Modules API 2.0 macros (`@ExpoModule`, `@JS`, `@Event`), use the `expo-migrate-module` skill (from the `expo-experiments` plugin) instead. (Uwaga: nie jest zaimportowany do tego szablonu — znajdziesz go w upstream github.com/expo/skills.)
 
 ## References
 

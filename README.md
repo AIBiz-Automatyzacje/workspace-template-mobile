@@ -36,10 +36,26 @@ Co dostajesz:
 
 ---
 
+## Bonus: Output Style „adhd"
+
+Masz dość gadatliwych odpowiedzi? W [`output-styles/adhd.md`](output-styles/adhd.md) znajdziesz
+gotowy Output Style, który sprawia, że Claude zaczyna od konkretu zamiast ściany tekstu.
+Napisany według wytycznych Anthropic dla modeli z serii 5 (zero zakazów — opisany cel,
+resztę model wyprowadza sam). Inspiracja: skill [i-have-adhd](https://github.com/ayghri/i-have-adhd)
+z wiralowego wątku na r/ClaudeAI.
+
+1. Skopiuj `output-styles/adhd.md` do folderu `.claude/output-styles/` w swoim projekcie
+   (albo do `~/.claude/output-styles/` globalnie).
+2. Zrestartuj sesję Claude Code.
+3. Wpisz `/config`, wybierz **Output style → adhd** i zatwierdź enterem.
+
+---
+
 ## Changelog
 
 | Data | Zmiana |
 |------|--------|
+| **2026-08-03** | **Port ulepszeń z `claude-code-starter` (web, commity `eb5ad6c..cc29eb5`):** **routing reviewerów v2 (domenowy)** — flagi warstw od context-packagera zamiast progu „≤2 pliki" (rdzeń security/spec/simplicity/test zawsze; perf/arch/ts/E2E warunkowo, fail-open bez flag; E2E z drugą furtką na checkboxy `[E2E]`), sekcja `## Przebieg review` w raporcie + metryki routingu/dedupu/verify w stanie i telemetrii, **bloki GRANICE ZAUFANIA** (skrypty migracyjne/ETL/seedy = granica API; też w `security-sentinel` i `coding-rules §9`) i **LIMIT P3** (max 5 akcyjnych nitów per reviewer), **zrzut diffu fazy jako artefakt** (packager pisze do /tmp, reviewerzy czytają 1 Readem), **odzyskiwanie scribe'a** (inspektor dysku po padzie — raport kompletny = nie powtarzamy review), **guard plików binarnych po fixie** (surowe bajty sterujące w pliku źródłowym = STOP zamiast serii APIErrorów), **tokeny per etap** (execute/review/fix osobno) i telemetria całego zadania (fazy z wcześniejszych runów ze stanu). Nowe skille: **`sync-template`** (aktualizacja `.claude/` z szablonu w projektach potomnych), **`coderabbit-setup`** (AI review PR-ów), Output Style **`adhd`**. **Sync `expo/skills`:** housekeeping linków wersjonowanych docs w `expo-upgrade`, wskazanie na `expo-migrate-module` w `expo-module`, nowy skill **`expo-project-structure`** (struktura greenfield). |
 | **2026-07-12** | **Port ulepszeń z `claude-code-starter` (web):** słownik domenowy `docs/CONCEPTS.md` (writer w `dev-compound`, readerzy w plan/docs/builderach, scoped `compound-refresh` w autopilocie), audyt skilli technicznych (OWASP Top 10:2025, `user_metadata` → reguła w `coding-rules §9`, Stripe v22, `search_path=''`, Sentry Deno 2.x, `getClaims()`), **8. reviewer** (`code-simplicity-reviewer`) + **routing reviewerów wg mapy zmian** + **dedup semantyczny (Haiku)** w review-wf, **targeted verify P1/KOD po fixie**, retry scribe'a + flaga `scribeFail`, warmup degraduje zamiast STOP, readerzy `learned-patterns.md` (planner/reviewerzy/buildery), audyt console.log/Sentry w domknięciu fazy, poprawna semantyka RESUME (świeży run po STOP bramki vs resume po awarii), skille `/dev-docs-execute`+`/dev-docs-review` = cienkie wrappery na workflowy, `web-research-specialist` w brainstorm/ideate, usunięty skażony `auto-error-resolver`, lokalny skill `figma-design-to-code` (poprzednia nazwa nie istniała), ujednolicona ścieżka `docs/brainstorms/`, **`/freshness-audit`** (cykliczny audyt skilli w żywych źródłach; `expo-*` poza zakresem — upstream-owned), telemetria runów autopilota (`~/.claude/telemetry/autopilot-runs.jsonl`), pola `paths` w skillach guideline. **Sync skilli Expo z upstream po reorganizacji `expo/skills` (2026-07-07, PR #98):** nowa konwencja nazw `expo-*`/`eas-*` (m.in. `expo-building-native-ui`→`expo-native-ui`, `expo-native-data-fetching`→`expo-data-fetching`, `expo-api-routes`→`eas-hosting`, `expo-deployment`→`eas-app-stores`, `expo-cicd-workflows`→`eas-workflows`, `expo-upgrading`→`expo-upgrade`, `expo-use-dom`→`expo-dom`, `expo-ui-swift-ui`+`expo-ui-jetpack-compose`→`expo-ui`), **nowy skill `expo-router`** (nawigacja), aktualizacja treści wszystkich skilli do stanu upstream, polskie opisy zachowane. |
 | 2026-06-24 | Domknięte trzy fałszywe zielone, przez które autopilot cicho pomijał E2E; wcześniej: flow Maestro + seed jako deliverables buildera, bramka opt-in E2E (twardy STOP zamiast cichego pominięcia). |
 | 2026-06-11 | **Autonomiczne E2E w autopilocie** — środowisko zarządzane z `.env.e2e` (dedykowany projekt Supabase e2e, Metro + simulator z dev-clientem, seedy per faza). |
@@ -123,11 +139,11 @@ Deterministyczne orkiestratory w JavaScript w `.claude/workflows/*.js` (suffix `
 
 ### Skille `expo-*` / `eas-*` (upstream-owned)
 
-13 skilli z oficjalnego repo **[`expo/skills`](https://github.com/expo/skills)** (stan po reorganizacji upstream 2026-07-07: `expo-*` = framework OSS, `eas-*` = płatny serwis EAS) + polskie opisy we frontmatter (nasza jedyna lokalna warstwa). **Nie modyfikujemy ich treści własnoręcznie** — aktualizacja wyłącznie przez sync diff z upstreamem.
+14 skilli z oficjalnego repo **[`expo/skills`](https://github.com/expo/skills)** (stan po reorganizacji upstream 2026-07-07: `expo-*` = framework OSS, `eas-*` = płatny serwis EAS) + polskie opisy we frontmatter (nasza jedyna lokalna warstwa). **Nie modyfikujemy ich treści własnoręcznie** — aktualizacja wyłącznie przez sync diff z upstreamem (pomijamy katalogi `agents/` i sekcje „Submitting Feedback" z telemetrią upstreamu).
 
-Hub: **`expo-overview`** (decision tree: który skill wybrać) → `expo-native-ui`, `expo-router`, `expo-tailwind-setup`, `expo-data-fetching`, `expo-ui`, `expo-dev-client`, `expo-module`, `expo-dom`, `expo-upgrade`, `eas-app-stores`, `eas-workflows`, `eas-hosting`, `eas-update-insights`.
+Hub: **`expo-overview`** (decision tree: który skill wybrać) → `expo-project-structure`, `expo-native-ui`, `expo-router`, `expo-tailwind-setup`, `expo-data-fetching`, `expo-ui`, `expo-dev-client`, `expo-module`, `expo-dom`, `expo-upgrade`, `eas-app-stores`, `eas-workflows`, `eas-hosting`, `eas-update-insights`.
 
-W upstreamie są też skille nie zaimportowane (nisza poza core flow): `expo-brownfield`, `expo-app-clip`, `expo-web-to-native`, `expo-examples`, `eas-simulator`, `eas-observe`.
+W upstreamie są też skille nie zaimportowane (nisza poza core flow): `expo-brownfield`, `expo-app-clip`, `expo-web-to-native`, `expo-examples`, `eas-simulator`, `eas-observe`, `expo-skill-feedback` oraz plugin `expo-experiments` (m.in. `expo-migrate-module`).
 
 ### Skille techniczne (guidelines pod stack)
 
@@ -148,6 +164,8 @@ W upstreamie są też skille nie zaimportowane (nisza poza core flow): `expo-bro
 | Skill | Do czego |
 |-------|----------|
 | **`figma-design-to-code`** | Implementacja designu Figma jako kod (design→code). Zaimportowany lokalnie z oficjalnego pluginu Figma — działa też bez pluginu. Preładowany do builderów UI/fullstack. |
+| **`sync-template`** | Aktualizacja maszynerii `.claude/` z tego repo szablonu w projektach potomnych (klon → diff SHA → backup → apply; „szablon zawsze wygrywa", pliki lokalne projektu nietknięte). |
+| **`coderabbit-setup`** | Generuje `.coderabbit.yaml` pod stack projektu (Expo/RN, Supabase…) + weryfikuje instalację aplikacji GitHub CodeRabbit — AI review każdego PR-a. |
 | **`zroastuj-mnie`** | Bezlitosny wywiad stress-testujący plan/projekt; sugeruje utrwalenie terminów do `docs/CONCEPTS.md`. |
 | **`gemini`** | Gemini CLI jako subagent (druga opinia: analiza kodu, audyt UX/security). |
 | **`freshness-audit`** *(workflow: `freshness-audit-wf`)* | Cykliczny audyt aktualności skilli technicznych w **żywych** źródłach. Odpalaj okresowo (np. raz w miesiącu). `expo-*` poza zakresem — ich świeżość to sync z upstreamem. |

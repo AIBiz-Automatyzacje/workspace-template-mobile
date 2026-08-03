@@ -2,3 +2,10 @@ compound-engineering-plugin-main/
 .DS_Store
 # Robocze artefakty pipeline dev-* (root-level), NIE dokumentacja szablonu w .claude/docs/
 /docs/
+
+# Lokalne artefakty sesji Claude — nie do repo szablonu
+.claude/rules/aibiz-company-context.md
+.claude/scheduled_tasks.lock
+.claude/.backups/
+.claude/.template-version
+.claude/.template-manifest

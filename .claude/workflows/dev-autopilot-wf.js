@@ -61,6 +61,38 @@ const FINDING_OTWARTY = {
   required: ['severity', 'typ', 'plik', 'opis'],
 }
 
+// Metryki fazy utrwalane w .autopilot-state.json (2026-07-26). Powod: telemetria ma dawac dane do
+// strojenia progow (routing, dedup, sceptycy), a przy resume review sie NIE powtarza — bez utrwalenia
+// wpis telemetrii mial null. Schemat MUSI istniec tu, bo stan przechodzi przez bootstrap-agenta
+// (additionalProperties: false wymazalby nieznane pole przy pierwszym zapiszStan).
+// Do stanu idzie SKROT (liczby do strojenia); pelny przebieg z flagami warstw zyje w raporcie review-faza-N.md.
+const METRYKI_FAZY = {
+  type: ['object', 'null'],
+  additionalProperties: false,
+  properties: {
+    liczniki: {
+      type: 'object',
+      additionalProperties: false,
+      properties: { p1: { type: 'integer' }, p2: { type: 'integer' }, p3: { type: 'integer' }, operator: { type: 'integer' } },
+      required: ['p1', 'p2', 'p3'],
+    },
+    przebieg: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: {
+        pominieci: { type: 'array', items: { type: 'string' }, description: 'keys reviewerow pominietych przez routing' },
+        znalezione: { type: 'integer' },
+        poDedupJs: { type: 'integer' },
+        poDedupSem: { type: 'integer' },
+        weryfikowane: { type: 'integer' },
+        obalone: { type: 'integer' },
+      },
+      required: ['pominieci', 'znalezione', 'poDedupJs', 'poDedupSem', 'weryfikowane', 'obalone'],
+    },
+  },
+  required: ['liczniki', 'przebieg'],
+}
+
 const PLAN_STATE = {
   type: 'object',
   additionalProperties: false,
@@ -90,6 +122,7 @@ const PLAN_STATE = {
           review: { type: 'string', enum: ['done', 'pending'] },
           fix: { type: 'string', enum: ['done', 'pending', 'none'], description: 'none = review nie zostawil otwartych P1/P2' },
           otwarteFindingi: { type: 'array', items: FINDING_OTWARTY },
+          metryki: METRYKI_FAZY,
         },
         required: ['numer', 'nazwa', 'execute', 'review', 'fix', 'otwarteFindingi'],
       },
@@ -193,8 +226,18 @@ const FIX_RESULT = {
     nienaprawione: { type: 'array', items: { type: 'string' } },
     nierozwiazaneP1: { type: 'integer', description: 'P1 ktorych fix NIE zamknal (krytyczne -> STOP)' },
     nierozwiazaneP2: { type: 'integer', description: 'P2 przeniesione do known-issues (graceful)' },
+    // Guard plikow binarnych (run team-os-onboarding-instalatory, 2026-07-26, repo web): fix wpisal do
+    // scripts/inbox/invite.mjs regex z SUROWYMI bajtami sterujacymi zamiast sekwencji \x.. — plik
+    // przestal byc tekstem (git: "Bin 9804 -> 15506 bytes") i KAZDY kolejny agent padal na jego Read
+    // (APIError), 6 prob z rzedu, run martwy po 2h47min. W required, bo pusta lista MUSI znaczyc
+    // "sprawdzilem i czysto"; pole opcjonalne = agent moze pominac sprawdzenie i cicho wylaczyc guard.
+    plikiBinarne: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'pliki zmienione w tej fazie, ktore git widzi jako binarne (numstat "-"), a NIE sa legalnymi binariami — typowa przyczyna: surowe bajty sterujace w pliku zrodlowym',
+    },
   },
-  required: ['naprawione', 'pozostaje', 'walidacja', 'nierozwiazaneP1', 'nierozwiazaneP2'],
+  required: ['naprawione', 'pozostaje', 'walidacja', 'nierozwiazaneP1', 'nierozwiazaneP2', 'plikiBinarne'],
 }
 
 const POSTFIX_VERDICT = {
@@ -239,6 +282,8 @@ Folder zadania: ${sciezka}
 
    A) PLIK ISTNIEJE (resume): przeczytaj go i zwroc jego fazy/zakonczenie BEZ reinterpretacji
       checkboxow md — plik stanu jest ZRODLEM PRAWDY, checkboxy to tylko widok dla czlowieka.
+      Pole "metryki" fazy (jesli obecne) PRZEPISZ 1:1 — nie licz go sam, nie uzupelniaj, nie zeruj;
+      to zapis telemetrii z runu, w ktorym review sie odbylo. Gdy pola nie ma, pomin je (null).
       zrodloStanu = "state-json". Dodatkowo porownaj informacyjnie z plikami (np. istnieje
       ${sciezka}/review-faza-N.md a stan mowi review=pending) i wpisz różnice do rozbieznosci[]
       (NIE koryguj stanu samodzielnie).
@@ -475,6 +520,22 @@ komendy z package.json; NIE eas build), commit \`fix([nazwa]): poprawki po revie
 staguj tylko zmienione pliki.
 ${BLOK_DLUGIE_KOMENDY}
 
+GUARD PLIKOW BINARNYCH (po naprawach i commicie, ZANIM zwrocisz wynik — obowiazkowy):
+zakres = commity fix tej fazy, ktore wlasnie utworzyles (te same, ktore raportujesz w commity[];
+znajdziesz je tak jak walidacja koncowa: \`git log --oneline --grep="^fix("\`) —
+uruchom \`git diff --numstat <pierwszy-commit-fixa>^..HEAD\`; gdy nic nie zacommitowales: \`git diff --numstat HEAD\`.
+Plik, ktory git widzi jako binarny, ma w numstat "-" zamiast liczb dodanych/usunietych linii.
+Do plikiBinarne[] wpisz KAZDY taki plik POZA legalnymi binariami (.png .jpg .jpeg .gif .webp .avif
+.ico .bmp, .woff .woff2 .ttf .otf, .pdf .zip .gz .mp4 .mp3, bun.lockb) — plik zrodlowy lub tekstowy
+na tej liscie to AWARIA pipeline'u, nie znalezisko.
+POWOD (run team-os-onboarding-instalatory, 2026-07-26, repo web): fix zapisal do scripts/inbox/invite.mjs regex
+z SUROWYMI bajtami sterujacymi (literalne U+0000, U+001F, U+007F) zamiast sekwencji ucieczki
+\\x00-\\x1f\\x7f-\\x9f. Plik przestal byc tekstem, a kazdy kolejny agent rozlaczal sie przy jego Read
+(APIError) — 6 prob z rzedu i caly run byl martwy. Zapisujac regexy/stringi z bajtami sterujacymi
+uzywaj WYLACZNIE sekwencji ucieczki.
+NIE probuj naprawiac takiego pliku w tym przebiegu — jego Read zabije rowniez CIEBIE. Zwroc go na liscie.
+Gdy nic nie znalazles, zwroc pusta liste (pole jest obowiazkowe: brak listy = orkiestrator nie wie, czy sprawdziles).
+
 KNOWN-ISSUES (graceful — bez osobnego agenta): jesli ZOSTAJA P2 ktorych NIE udalo sie naprawic
 (a zero nierozwiazanych P1), zapisz je do ${sciezka}/known-issues.md. Dedup: jesli sekcja
 "## Faza ${numerFazy}" juz istnieje — ZASTAP jej cala tresc (od naglowka do nastepnego "## " lub konca pliku),
@@ -483,7 +544,8 @@ Po zapisie upewnij sie ze jest DOKLADNIE jeden naglowek "## Faza ${numerFazy}".
 
 Dzialaj autonomicznie, nie pytaj usera. Zwroc obiekt FixResult — KRYTYCZNE pola (orkiestrator gate'uje
 z nich, bez re-review): nierozwiazaneP1 (P1 ktorych NIE zamknales -> orkiestrator zrobi STOP),
-nierozwiazaneP2 (P2 przeniesione do known-issues), walidacja (PASS/FAIL pelnej walidacji).`
+nierozwiazaneP2 (P2 przeniesione do known-issues), walidacja (PASS/FAIL pelnej walidacji),
+plikiBinarne (pliki zrodlowe, ktore przestaly byc tekstem -> orkiestrator zrobi STOP).`
 }
 
 function postFixVerifyPrompt(sciezka, numerFazy, finding) {
@@ -668,6 +730,21 @@ const historia = {}
 const raporty = []
 const tokRunStart = tokSpent()
 
+// Normalizacja metryk przebiegu do SKROTU (schemat METRYKI_FAZY + telemetria): review-wf zwraca
+// pelny obiekt (pominieci = [{key,powod}]), a stan po resume trzyma juz skrot (pominieci = ['key']).
+// Jedna funkcja, zeby stan i telemetria mialy IDENTYCZNY kształt niezaleznie od zrodla.
+function skrotPrzebiegu(p) {
+  if (!p) return null
+  return {
+    pominieci: (p.pominieci || []).map((x) => (typeof x === 'string' ? x : x.key)),
+    znalezione: p.znalezione,
+    poDedupJs: p.poDedupJs,
+    poDedupSem: p.poDedupSem,
+    weryfikowane: p.weryfikowane,
+    obalone: p.obalone,
+  }
+}
+
 for (const numerFazy of kolejka) {
   const faza = stan.fazy.find((f) => f.numer === numerFazy)
   if (!faza) {
@@ -678,11 +755,23 @@ for (const numerFazy of kolejka) {
   let gateFazy = 'CZYSTE'
   let cykle = 0
   let e2eSync = null
-  let licznikiFazy = null
+  // Metryki fazy: przy resume review moze byc juz 'done' i review-wf sie NIE odpali — wtedy liczniki
+  // i przebieg czytamy z faza.metryki utrwalonych w stanie (bez tego telemetria dostawala null).
+  const metrykiZeStanu = faza.metryki || {}
+  let licznikiFazy = metrykiZeStanu.liczniki || null
+  let przebiegFazy = metrykiZeStanu.przebieg || null
   let fixInfo = null
+  // Atrybucja tokenow per etap: "faza = 298k" nie mowi, czy placimy za buildery, czy za reviewerow,
+  // wiec kazdy etap ma wlasny akumulator. null (a NIE 0) = etapu w tym runie nie bylo (przy resume byl
+  // juz 'done'); 0 = wykonal sie i nic nie kosztowal. Dopisujemy delte na KONCU bloku etapu — sciezki
+  // STOP wracaja przed raporty.push, wiec ich pomiar i tak nie ma gdzie trafic.
+  const tokEtapy = { execute: null, review: null, fix: null }
+  // += zamiast =, bo etap moze wykonac sie wielokrotnie (cykle fixa) — wtedy koszt ma sie SUMOWAC.
+  const dopiszEtap = (etap, start) => { tokEtapy[etap] = (tokEtapy[etap] || 0) + (tokSpent() - start) }
 
   // 1) EXECUTE — tylko gdy pending (resume nigdy nie powtarza ukonczonego execute, w tym migracji).
   if (faza.execute === 'pending') {
+    const tokEtapStart = tokSpent()
     const exec = await workflow('dev-docs-execute-wf', { sciezka, faza: numerFazy })
     if (!exec || exec.status !== 'completed') {
       return { status: 'STOP', powod: `execute fazy ${numerFazy} zwrocil "${exec ? exec.status : 'null'}"${exec && exec.problem ? `: ${exec.problem}` : ''}`, faza: numerFazy, exec, raporty }
@@ -690,10 +779,14 @@ for (const numerFazy of kolejka) {
     faza.execute = 'done'
     await zapiszStan()
     log(`Faza ${numerFazy}: Execute OK (${exec.iu.length} IU)`)
+    dopiszEtap('execute', tokEtapStart)
   }
 
   // 2) REVIEW — tylko gdy pending. Faza ukonczona z otwartymi findingami idzie PROSTO do fix (Bug 1).
   if (faza.review === 'pending') {
+    // Etap "review" obejmuje e2e db-sync + review-wf (reviewerzy, dedup, adversarial verify) — to jeden
+    // blok warunkowy i jeden wywolywany workflow, wiec i jedna pozycja w atrybucji.
+    const tokEtapStart = tokSpent()
     // Sync bazy e2e per faza PO execute (migracje fazy powstaja w execute, db push jest
     // przyrostowy — brak nowych migracji = no-op). Niepowodzenie nie blokuje review:
     // tester E2E trafi na brak danych i sklasyfikuje OPERATOR, a detal (np. blad SQL
@@ -728,14 +821,28 @@ for (const numerFazy of kolejka) {
     }
     log(`Review fazy ${numerFazy}: P1=${liczniki.p1} P2=${liczniki.p2} P3=${liczniki.p3} OPERATOR=${liczniki.operator}`)
     licznikiFazy = liczniki
+    przebiegFazy = review.przebieg || null
+    if (przebiegFazy) {
+      const skrot = skrotPrzebiegu(przebiegFazy)
+      const pom = skrot.pominieci.length ? skrot.pominieci.join(',') : 'brak'
+      log(`Routing fazy ${numerFazy}: pominieci=${pom}; findingi ${przebiegFazy.znalezione}->${przebiegFazy.poDedupSem} po dedupie, obalone ${przebiegFazy.obalone}/${przebiegFazy.weryfikowane}`)
+    }
     faza.review = 'done'
+    // Metryki utrwalone w stanie — zrodlo dla telemetrii po resume (review sie wtedy nie powtarza).
+    // Skrot zgodny z METRYKI_FAZY: same liczby do strojenia progow. Pelny przebieg (flagi warstw,
+    // lista aktywnych) zostaje w raporcie review-faza-N.md, zeby nie puchl plik stanu.
+    faza.metryki = { liczniki, przebieg: skrotPrzebiegu(przebiegFazy) }
     faza.otwarteFindingi = otwartePoReview(review.findings)
     faza.fix = faza.otwarteFindingi.length ? 'pending' : 'none'
     await zapiszStan()
+    dopiszEtap('review', tokEtapStart)
   }
 
   // 3) FIX — bez re-review; gate z self-reportu + lista findingow przekazana wprost (md tylko jako widok).
   if (faza.fix === 'pending') {
+    // Etap "fix" obejmuje agenta fixa I targeted verify P1/KOD — verify jest czescia tego samego bloku
+    // warunkowego (bramka gate'u fixa), wiec jego koszt nalezy do fixa, nie do review.
+    const tokEtapStart = tokSpent()
     const fix = await agent(fixPrompt(sciezka, numerFazy, faza.otwarteFindingi), { schema: FIX_RESULT, label: `fix:faza-${numerFazy}` })
     if (!fix) {
       return { status: 'STOP', powod: `fix fazy ${numerFazy} zwrocil null`, faza: numerFazy, raporty }
@@ -743,6 +850,22 @@ for (const numerFazy of kolejka) {
     cykle = 1
     log(`Fix fazy ${numerFazy}: naprawiono ${fix.naprawione}, nierozwiazane P1=${fix.nierozwiazaneP1} P2=${fix.nierozwiazaneP2}, walidacja ${fix.walidacja}`)
     fixInfo = { naprawione: fix.naprawione, nierozwiazaneP2: fix.nierozwiazaneP2 }
+
+    // Guard plikow binarnych PRZED gate'em walidacji: uszkodzony plik zrodlowy jest PRZYCZYNA,
+    // a typecheck/testy failuja wtornie — na "walidacja FAIL" operator szuka defektu logiki zamiast
+    // uszkodzonego pliku. Run team-os-onboarding-instalatory (2026-07-26, repo web): surowe bajty sterujace
+    // wpisane do scripts/inbox/invite.mjs zabily 6 kolejnych agentow na Read (APIError) i caly run.
+    // Semantyka jak w sasiednich STOP-ach: fix zostaje 'pending', wiec swiezy run wraca wprost do fixa.
+    const plikiBinarne = fix.plikiBinarne || []
+    if (plikiBinarne.length) {
+      await zapiszStan()
+      return {
+        status: 'STOP',
+        powod: `Faza ${numerFazy}: po fixie git widzi jako BINARNE pliki, ktore powinny byc tekstem: ${plikiBinarne.join(', ')}. Najprawdopodobniej wpisano do nich SUROWE bajty sterujace zamiast sekwencji ucieczki (np. literalny U+001F zamiast \\x1f w regexie). Kazdy kolejny agent, ktory zrobi Read takiego pliku, rozlaczy sie na APIError — pipeline bedzie umieral w kolko, dopoki plik nie zostanie naprawiony.`,
+        naprawa: `Napraw ${plikiBinarne.join(', ')} POZA pipelinem i NIE otwieraj ich Readem (to samo rozlaczenie dotyczy kazdej sesji): albo cofnij zmiane (\`git checkout <commit-sprzed-fixa> -- <plik>\`), albo przepisz plik od nowa z sekwencjami ucieczki (\\x00-\\x1f\\x7f-\\x9f zamiast literalnych bajtow). Potwierdz \`file <plik>\` = "... text" i \`git diff --numstat\` = liczby zamiast "-", zacommituj, potem odpal SWIEZY run (te same args, BEZ resumeFromRunId).`,
+        faza: numerFazy, fix, plikiBinarne, raporty,
+      }
+    }
 
     if (fix.walidacja === 'FAIL' || fix.nierozwiazaneP1 > 0) {
       // Stan NIE oznacza fix=done — resume wroci wprost do fixa z ta sama lista.
@@ -792,6 +915,7 @@ for (const numerFazy of kolejka) {
     faza.fix = 'done'
     faza.otwarteFindingi = []
     await zapiszStan()
+    dopiszEtap('fix', tokEtapStart)
   } else if (faza.fix === 'none') {
     gateFazy = 'CZYSTE'
   }
@@ -800,8 +924,15 @@ for (const numerFazy of kolejka) {
   const tokFazy = Math.round((tokSpent() - tokFazaStart) / 1000)
   // Delta 0 po resume = agenci fazy wrocili z journala (cache), nie "darmowa faza" — oznacz w raporcie.
   const tokFazyOpis = tokFazy === 0 ? '0k (z cache — resume)' : `${tokFazy}k`
-  log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}, ~${tokFazyOpis} tokenow`)
-  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: tokFazyOpis, liczniki: licznikiFazy, fix: fixInfo, e2eSync: e2eSync ? `${e2eSync.status}: ${e2eSync.detal}` : 'n/a' })
+  // null przechodzi przez zaokraglenie jako null — inaczej etap nieobecny w runie zlalby sie z etapem
+  // darmowym (0k) i cala atrybucja przestalaby cokolwiek rozstrzygac.
+  const naK = (v) => (v === null ? null : Math.round(v / 1000))
+  const tokenyEtapy = { execute: naK(tokEtapy.execute), review: naK(tokEtapy.review), fix: naK(tokEtapy.fix) }
+  const opisEtapow = ['execute', 'review', 'fix'].map((e) => `${e} ${tokenyEtapy[e] === null ? 'n/a' : `${tokenyEtapy[e]}k`}`).join(', ')
+  log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}, ~${tokFazyOpis} tokenow (${opisEtapow})`)
+  // przebieg = metryki routingu/dedupu/verify (z review-wf albo ze stanu po resume) — dane do
+  // strojenia progow: kogo routing pomija, ile dedup sklei, ile verify obala.
+  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: tokFazyOpis, tokenyEtapy, liczniki: licznikiFazy, fix: fixInfo, e2eSync: e2eSync ? `${e2eSync.status}: ${e2eSync.detal}` : 'n/a', przebieg: skrotPrzebiegu(przebiegFazy) })
 }
 
 // ── Zakonczenie ──────────────────────────────────────────────────────────
@@ -884,11 +1015,48 @@ log(`Autopilot koniec: ${kolejka.length} faz, ~${tokRazem}k tokenow lacznie`)
 // TELEMETRIA (best-effort, tylko sciezka sukcesu): jedna linia JSONL do GLOBALNEGO pliku
 // ~/.claude/telemetry/autopilot-runs.jsonl — wspolnego dla wszystkich projektow na maszynie
 // (dane do strojenia progow pipeline'u: limit fix, sceptycy, routing; per projekt bylyby rozproszone).
+// raporty[].przebieg (od 2026-07-26) niesie liczby routingu/dedupu/verify — bez nich wpis mowil
+// tylko ILE findingow bylo, nie CZY routing kogos pomija i czy dedup semantyczny zarabia na siebie.
+// Ograniczenie swiadome: wpis powstaje TYLKO gdy caly run dojdzie do konca — run zatrzymany na
+// bramce (STOP) nie zostawia telemetrii, mimo ze fazy przed bramka maja policzone metryki w stanie.
 // Timestamp i nazwe projektu ustala leaf-agent (workflow nie moze uzyc Date.now). Pad = tylko log.
+
+// Telemetria opisuje CALE zadanie, nie tylko ten run (2026-07-27). `kolejka` filtruje po pending, wiec
+// faza domknieta we WCZESNIEJSZYM runie nie wchodzi do petli i nigdy nie dostawala wiersza — przy zadaniu
+// robionym w kilku runach gubilismy metryki dokladnie tych faz, ktore przeszly bez awarii (run
+// team-os-onboarding-instalatory, repo web: faza 1 zniknela z telemetrii, choc jej metryki leza w stanie).
+// Wiersz odtworzony ze stanu ma zrodlo:'stan' i null tam, gdzie stan nie zna wartosci (gate/cykle/tokeny
+// sa liczone w petli runu) — konsument telemetrii ma widziec brak danych, nie zgadywana wartosc.
+const raportyTelemetrii = stan.fazy
+  .map((f) => {
+    const zRunu = raporty.find((r) => r.faza === f.numer)
+    if (zRunu) return { ...zRunu, zrodlo: 'run' }
+    if (!f.metryki) return null
+    return {
+      faza: f.numer,
+      gate: null,
+      cykle: null,
+      tokeny: null,
+      // Swiadomie NIE utrwalamy tokenyEtapy w stanie: tokeny opisuja RUN, nie faze. Liczby z runu, ktory
+      // te faze zrobil, doklejone do wpisu innego runu podpieralyby jego koszt cudzymi danymi — a i tak
+      // nie mowilyby, ile kosztowalo wznowienie. Brak danych ma byc widoczny jako null, jak przy `tokeny`.
+      tokenyEtapy: null,
+      liczniki: f.metryki.liczniki || null,
+      fix: null,
+      e2eSync: 'n/a',
+      przebieg: skrotPrzebiegu(f.metryki.przebieg),
+      zrodlo: 'stan',
+    }
+  })
+  .filter(Boolean)
+const zeStanu = raportyTelemetrii.filter((r) => r.zrodlo === 'stan').map((r) => r.faza)
+if (zeStanu.length) log(`Telemetria: dokladam metryki faz z wczesniejszych runow: ${zeStanu.join(', ')}`)
+
 const wpisTelemetrii = {
   zadanie: stan.nazwaZadania,
   fazyUkonczone: kolejka.length,
-  raporty,
+  fazyZadania: raportyTelemetrii.length,
+  raporty: raportyTelemetrii,
   walidacja: 'PASS',
   e2eSrodowisko: e2eEnv ? e2eEnv.status : 'brak',
   solution: !!(compound && compound.plik),

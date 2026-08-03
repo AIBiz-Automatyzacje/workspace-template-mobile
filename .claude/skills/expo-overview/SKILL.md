@@ -20,6 +20,7 @@ Jesteś w projekcie Expo gdy:
 
 | Co budujesz / nad czym pracujesz | Skill |
 |---|---|
+| Struktura folderów NOWEGO projektu Expo, gdzie ma żyć plik | `expo-project-structure` |
 | Ekran, komponent UI, animacja, kontrolki, SF Symbols, media | `expo-native-ui` |
 | Nawigacja, routing, taby, modale, form sheets, headery | `expo-router` |
 | Setup Tailwinda / NativeWind / `className` w RN | `expo-tailwind-setup` |
@@ -71,7 +72,7 @@ Jesteś w projekcie Expo gdy:
 
 To **nie jest** "na wszystko" — to specjalistyczne narzędzie. Vendor lock realny: wyjście z Expo wymaga przepisania ekranów używających `@expo/ui`.
 
-## Linki do 13 skilli (alfabetycznie)
+## Linki do 14 skilli (alfabetycznie)
 
 - **`eas-app-stores`** — build + submit do storeów (App Store / Google Play / TestFlight)
 - **`eas-hosting`** — deploy web bundle + API routes (`+api.ts`) na EAS Hosting
@@ -82,6 +83,7 @@ To **nie jest** "na wszystko" — to specjalistyczne narzędzie. Vendor lock rea
 - **`expo-dom`** — web kod w webview na natywie
 - **`expo-module`** — natywne moduły (Swift/Kotlin/TS)
 - **`expo-native-ui`** — kompletny przewodnik UI (HIG, kontrolki, media, animacje)
+- **`expo-project-structure`** — struktura folderów nowego projektu (Expo Router, src/)
 - **`expo-router`** — nawigacja i routing (stack, taby, modale, headery)
 - **`expo-tailwind-setup`** — TailwindCSS v4 + NativeWind v5 preview
 - **`expo-ui`** — natywne UI przez `@expo/ui` (SwiftUI / Jetpack Compose)
