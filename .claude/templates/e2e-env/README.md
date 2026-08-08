@@ -22,9 +22,13 @@ Bootstrap:    precheck  — test -f .env.e2e? (tani sygnał opt-in, oddzielony o
                           AUTO-SWAP .env.local → e2e (backup .env.local.bak, dev-client
                           inline'uje env z pliku, nie z shella!); preflight Maestro+Java 17;
                           Metro (deterministyczny restart --clear obcego/po-swapie);
-                          emulator iOS (fallback Android) + dev client;
-                          CANARY = login konta e2e (REST) + launchApp przez Maestro = DOWÓD,
+                          emulator iOS (fallback Android) + dev client (5d: świeżość binarki vs
+                          package.json/Podfile.lock/app.json; 5e: entitlements przez codesign);
+                          CANARY = login konta e2e (REST) + przejście apki przez logowanie do ekranu
+                          ZA auth (.maestro/_canary.yaml; fallback launch-only gdy brak pliku) = DOWÓD,
                           że flow ruszy. „gotowe" ZABRONIONE bez canary PASS. Niegotowe = HARD STOP.
+Per faza:     natywne    — nowa zależność z kodem natywnym w package.json (git diff po execute)
+                          => dev-client jest już nieaktualny => STOP z komendą rebuildu, PRZED review.
               warmup    — rozgrzewka cache vitest (PO bramce E2E — tani gate first).
 Per faza:     db-sync   — supabase db push na bazę e2e (PIERWSZY realny apply SQL migracji
                           w pipeline!) + seedy .maestro/*-seed.sql + konto testowe.
@@ -76,6 +80,12 @@ bojowy tej fazy.
 4. **Dev client na emulatorze** (najdłuższy krok, ~10+ min, potem cache):
    `bunx expo run:ios` (lub `bunx expo run:android`) — buduje i instaluje na emulatorze. Odświeżaj
    tylko po zmianie natywnych zależności. Zostaw emulator **BOOTED** — canary env-up go użyje.
+   Świeżość binarki pilnuje env-up (krok 5d: mtime `.app` vs `package.json`/`Podfile.lock`/`app.json`)
+   i sprawdza entitlements (5e) — przestarzały lub niepodpisany dev-client = STOP z komendą rebuildu.
+4b. **Canary flow** (zalecane, mocno podnosi wartość bramki): `cp .claude/templates/e2e-env/_canary.yaml
+   .maestro/_canary.yaml` i dopasuj `appId` oraz testID do swojej apki. Bez tego pliku env-up spada do
+   canary launch-only, który **nie wykryje** braku entitlements ani natywnego modułu ładowanego za
+   logowaniem — czyli dokładnie tych awarii, które kosztowały ~3h w runie feedback-marcin-poprawki.
 5. **Maestro CLI + Java 17**: `curl -fsSL https://get.maestro.mobile.dev | bash` (jeśli brak);
    Maestro 2.0+ wymaga **Java 17+** (`JAVA_HOME`). env-up sprawdza oba w preflight i STOP-uje gdy brak.
 6. **Swap `.env.local` robi env-up automatycznie** — nie musisz ręcznie podmieniać env. Wystarczy, że

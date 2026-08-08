@@ -66,6 +66,50 @@ AKCYJNOSC: P3 zglaszasz tylko wtedy, gdy potrafisz wskazac KONKRETNA akcje napra
 Nie dobijaj do piatki na sile: zero akcyjnych P3 => zero P3 w wyniku.
 === KONIEC BLOKU LIMITU P3 ===`
 
+// Doklejany do reviewerow. Powod (run feedback-marcin-poprawki, 2026-08-06, repo gramywpadla):
+// `price_pln` to koszt CALEGO turnieju, ale trzy miejsca w kodzie czytaly go jako kwote OD GRACZA —
+// rejestr wplat pokazywal "zebrano 640 zl z 1280 zl" zamiast 80 z 160 (8x zawyzenie), a jeden ekran
+// jednoczesnie "5,00 zl za osobe" i "40 zl od gracza". Unit testy byly ZIELONE, bo fixture'y powielaly
+// to samo bledne zalozenie; zaden z 8 reviewerow tego nie zglosil, bo kod jest wewnetrznie spojny.
+// Wylapal to dopiero E2E na realnych danych — czyli najdrozsza mozliwa sciezka.
+const BLOK_SEMANTYKA = `
+=== SEMANTYKA I JEDNOSTKI POL (obowiazkowe, gdy faza tyka danych liczbowych/czasowych) ===
+Kod wewnetrznie spojny moze byc jednolicie BLEDNY: jesli fixture i implementacja przyjmuja to samo zle
+zalozenie o znaczeniu pola, testy przechodza, a produkt liczy zle.
+
+PROCEDURA (wykonaj ja, nie streszczaj):
+1. Wypisz pola liczbowe/czasowe dotkniete faza i dla KAZDEGO uruchom
+   \`grep -rn "<nazwa_pola>" --include=*.ts --include=*.tsx --include=*.sql .\` — masz zobaczyc WSZYSTKIE
+   uzycia, takze te spoza diffu. Bez tego kroku "sprawdz kazde uzycie" jest deklaracja, nie weryfikacja.
+2. Ustal znaczenie U ZRODLA, w tej kolejnosci: komentarz/CHECK w migracji SQL -> spec albo IU w docs/plans/
+   -> requirements doc. Gdy WSZYSTKIE trzy milcza (typowo goly \`numeric\` bez komentarza), NIE zgaduj
+   z nazwy zmiennej — to jest dokladnie ten moment, w ktorym poprzednio poszlo zle. Zglos wtedy P2:
+   "pole <X> nie ma zdefiniowanej semantyki w zadnym zrodle prawdy" + wskaz uzycia, ktore sie rozjezdzaja.
+3. Gdy srodowisko E2E jest aktywne (istnieje .env.e2e): odczytaj JEDEN realny wiersz z bazy e2e i porownaj
+   RZAD WIELKOSCI z wartoscia, ktora apka pokazuje uzytkownikowi. Rozjazd 8x widac natychmiast, a zaden
+   przeglad kodu nie daje takiej pewnosci jak realna liczba.
+
+Co sprawdzasz w kazdym uzyciu:
+- kwoty: calosc vs per-osoba vs per-jednostke; grosze vs zlote; brutto vs netto,
+- czas: sekundy vs milisekundy; UTC vs lokalny; timestamp vs data,
+- indeksy i skale: miesiac 0- vs 1-based; procenty jako 0..1 vs 0..100; licznik vs suma,
+- liczebnosci: liczba graczy vs liczba druzyn vs liczba miejsc.
+Rozjazd miedzy dwoma uzyciami TEGO SAMEGO pola = P1 (KOD), nawet gdy testy sa zielone — zwlaszcza gdy
+testy sa zielone, bo to znaczy, ze fixture tez jest skazony. Podaj oba miejsca i zrodlo prawdy.
+Sygnal alarmowy: dwa rozne teksty w UI opisujace te sama wartosc ("za osobe" i "od gracza" obok siebie).
+UWAGA: w opisanym runie WSZYSTKIE trzy miejsca czytaly pole jednakowo zle, wiec kanal "rozjazd miedzy
+uzyciami" NIE zadzialal — zadzialaly dopiero sprzeczne teksty w UI i realna liczba z bazy. Nie opieraj sie
+wylacznie na porownywaniu uzyc miedzy soba: jednomyslnosc kodu nie jest dowodem poprawnosci.
+=== KONIEC BLOKU SEMANTYKI ===`
+
+// Globalny limit P3 PO dedupie (2026-08-08). BLOK_LIMIT_P3 dziala per reviewer, wiec przy 8 reviewerach
+// agregat i tak dochodzil do 20-24 P3 na faze (run feedback-marcin-poprawki: 90 P3 na 5 faz przy 1 P1
+// i 17 P2 realnie naprawionych). P3 nie wchodza do petli naprawczej (otwartePoReview filtruje P1|P2),
+// wiec ponad limit placimy juz tylko za prompt scribe'a i objetosc raportu.
+// Prog 8 jest WSTEPNY — dobrany tak, by miescil obserwowana mediane po dedupie i przycinal ogon.
+// Do strojenia po zebraniu telemetrii z kilku runow (pole przebieg.p3Odrzucone mowi, ile ucielismy).
+const LIMIT_P3_GLOBALNY = 8
+
 // ── Schematy ──────────────────────────────────────────────────────────────
 
 const FINDINGS = {
@@ -221,7 +265,11 @@ const REVIEWERZY = [
   { key: 'performance', agentType: 'performance-oracle', fokus: 'N+1 queries, bundle size, lazy loading, memoization, useEffect cleanup' },
   { key: 'architecture', agentType: 'architecture-strategist', fokus: 'SOLID, wzorce, nazewnictwo, import organization, granice warstw' },
   { key: 'typescript', agentType: 'kieran-typescript-reviewer', fokus: 'type safety, brak any/as/!, discriminated unions, explicit return types' },
-  { key: 'spec-compliance', agentType: 'spec-flow-analyzer', fokus: 'zgodnosc implementacji ze spec/planem IU: (a) wymagania ze spec/IU BRAKUJACE lub czesciowo zaimplementowane (under-implementation), (b) zachowanie w diffie o ktore nikt nie prosil (scope creep / over-implementation), (c) wymagania pozornie zaimplementowane ale BLEDNIE. Cytuj linie spec/IU (ID wymagania lub nazwa IU). Jesli brak spec ani planu — zwroc pusta liste findingow' },
+  // semantyka:true -> dostaje BLOK_SEMANTYKA. Tylko spec-compliance, bo tylko on ma ZRODLO PRAWDY
+  // (spec/IU) potrzebne do rozstrzygniecia znaczenia pola; drugim wlascicielem jest test-coverage
+  // (ma fixture'y). Doklejanie tego bloku do security/simplicity/typescript to koszt promptu i paliwo
+  // na kolejne P3 u reviewerow, ktorzy nie maja czym wykonac procedury (review adwersaryjny 2026-08-08).
+  { key: 'spec-compliance', semantyka: true, agentType: 'spec-flow-analyzer', fokus: 'zgodnosc implementacji ze spec/planem IU: (a) wymagania ze spec/IU BRAKUJACE lub czesciowo zaimplementowane (under-implementation), (b) zachowanie w diffie o ktore nikt nie prosil (scope creep / over-implementation), (c) wymagania pozornie zaimplementowane ale BLEDNIE. Cytuj linie spec/IU (ID wymagania lub nazwa IU). Jesli brak spec ani planu — zwroc pusta liste findingow' },
   { key: 'simplicity', agentType: 'code-simplicity-reviewer', fokus: 'YAGNI i minimalizm: zbedna zlozonosc, abstrakcje bez 2+ uzyc, defensive code na niemozliwe scenariusze, martwy kod, redundancja, uproszczenia bez utraty funkcji. Duplication > Complexity — prosta duplikacja jest OK, zlozona abstrakcja DRY nie' },
 ]
 
@@ -289,14 +337,14 @@ zeby kazdy z nich nie musial od zera ustalac co sie zmienilo (dotad 7x ten sam g
 Nie oceniaj jakosci, nie zglaszaj findingow. Zwroc obiekt {diffStat, pliki[], warstwy{}, e2eCheckboxy, diffPlik, diffZapisany, diffUciety}.`
 }
 
-function reviewerPrompt(sciezka, faza, fokus, poprzednie, kontekst) {
+function reviewerPrompt(sciezka, faza, fokus, poprzednie, kontekst, semantyka) {
   return `Jestes reviewerem fazy ${faza} w folderze ${sciezka}.
 Przeczytaj zmiany git tej fazy (diff) + requirements doc (docs/brainstorms/*-requirements.md jesli istnieje) + plan techniczny / Implementation Unit fazy ${faza} w docs/plans/ (Files:, Test scenarios:, Patterns to follow:).
 Przeczytaj tez .claude/rules/learned-patterns.md (jesli istnieje) — reguly z poprzednich zadan tego projektu; naruszenie ktorejkolwiek z nich zglos jako finding.
 Skup sie na: ${fokus}.
 Sklasyfikuj kazdy finding: P1 (blocking), P2 (important), P3 (nit) oraz typ: KOD / TEST / E2E / OPERATOR.
 Zwroc obiekt {findings:[...]} zgodny ze schematem. Sam nie zapisuj plikow.
-${BLOK_ZAUFANIE}${BLOK_LIMIT_P3}${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
+${BLOK_ZAUFANIE}${semantyka ? BLOK_SEMANTYKA : ''}${BLOK_LIMIT_P3}${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
 }
 
 function testCoveragePrompt(sciezka, faza, poprzednie, kontekst) {
@@ -304,8 +352,15 @@ function testCoveragePrompt(sciezka, faza, poprzednie, kontekst) {
 Sprawdz: happy path, invalid inputs, boundary conditions, concurrent operations, scale.
 Test coverage: czy plan techniczny (docs/plans/) definiowal scenariusze testowe dla tej fazy i czy pliki testowe
 istnieja oraz maja asercje? Brakujace testy = P2 (typ TEST).
+
+FIXTURE'Y JAKO ZRODLO FALSZYWEJ ZIELENI (obowiazkowy krok): dla kazdego fixture'a/mocka dotknietego faza
+sprawdz, czy jego DANE sa zgodne ze znaczeniem pola u zrodla (migracja/schema), a nie tylko z tym, jak
+czyta je implementacja. Fixture powielajacy bledne zalozenie implementacji daje zielony test na zlym
+kodzie — to jedyny przypadek, w ktorym zielony suite jest DOWODEM problemu, nie jego braku.
+Znaleziony rozjazd fixture vs schema = P1 (typ KOD, bo skazona jest implementacja, nie sam test).
+
 Zwroc {findings:[...]} (severity P1/P2/P3, typ KOD/TEST/E2E/OPERATOR). Nie zapisuj plikow.
-${BLOK_DLUGIE_KOMENDY}${BLOK_LIMIT_P3}${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
+${BLOK_DLUGIE_KOMENDY}${BLOK_SEMANTYKA}${BLOK_LIMIT_P3}${mapaBlok(kontekst)}${rereviewBlok(poprzednie)}`
 }
 
 function e2ePrompt(sciezka, faza, poprzednie) {
@@ -363,6 +418,7 @@ function przebiegBlok(p) {
 | Reviewerzy aktywni | ${p.aktywni.join(', ')} |
 | Reviewerzy pominieci | ${pom} |
 | Findingi: znalezione -> dedup JS -> dedup semantyczny | ${p.znalezione} -> ${p.poDedupJs} -> ${p.poDedupSem} |
+| P3 odrzucone limitem globalnym | ${p.p3Odrzucone || 0} |
 | Adversarial verify: weryfikowane / obalone / bez glosow | ${p.weryfikowane} / ${p.obalone} / ${p.niezweryfikowane} |`
 }
 
@@ -481,7 +537,7 @@ if (pominieci.length) log(`Routing v2: pomijam ${pominieci.map((p) => p.key).joi
 else log(`Routing v2: pelny sklad (${plikiFazy.length} plikow${warstwy ? '' : ', brak flag warstw — fail-open'})`)
 
 const thunki = aktywni.map((r) => () =>
-  agent(reviewerPrompt(sciezka, faza, r.fokus, poprzKod, kontekst), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })
+  agent(reviewerPrompt(sciezka, faza, r.fokus, poprzKod, kontekst, !!r.semantyka), { schema: FINDINGS, agentType: r.agentType, label: `review:${r.key}`, phase: 'Review' })
 )
 thunki.push(() => agent(testCoveragePrompt(sciezka, faza, poprzTest, kontekst), { schema: FINDINGS, label: 'review:test-coverage', phase: 'Review' }))
 if (e2eAktywny) {
@@ -510,7 +566,11 @@ const wyniki = await parallel(thunki)
 //     progi kalibrowane na JEDNYM polskojezycznym korpusie (opisy findingow nie zawsze beda po
 //     polsku) przy zysku rzedu jednej pary na 75 findingow to zla wymiana wobec ryzyka cichej
 //     utraty findingu — regula §11 "Duplication > Complexity".
-const wszystkie = wyniki.filter(Boolean).flatMap((w) => w.findings)
+// Etykieta zrodla per finding — kolejnosc `wyniki` odpowiada kolejnosci `thunki` (aktywni, potem
+// test-coverage, potem opcjonalnie e2e). Potrzebna do sprawiedliwego przyciecia P3 (patrz wybierzNity):
+// bez niej `slice` ucinal po kolejnosci reviewerow, czyli wyciszal zawsze tych samych trzech ostatnich.
+const etykietyZrodel = [...aktywni.map((r) => r.key), 'test-coverage', ...(e2eAktywny ? ['e2e'] : [])]
+const wszystkie = wyniki.flatMap((w, i) => (w ? w.findings.map((f) => ({ ...f, _zrodlo: etykietyZrodel[i] || '?' })) : []))
 const RANGA = { P1: 0, P2: 1, P3: 2 }
 const poKluczu = new Map()
 for (const f of wszystkie) {
@@ -570,7 +630,45 @@ ${lista}`,
 // Faza 2: adversarial verify — tylko P1/P2 (P3/nity przechodza bez weryfikacji)
 phase('Verify')
 const doWeryfikacji = dedup.filter((f) => f.severity === 'P1' || f.severity === 'P2')
-const nity = dedup.filter((f) => f.severity === 'P3')
+// Globalny limit P3 PO dedupie — per-reviewerowy BLOK_LIMIT_P3 nie ogranicza AGREGATU (8 reviewerow x 5).
+// Przycinamy JAWNIE (log + metryka p3Odrzucone), nigdy po cichu: milczace uciecie czytaloby sie jak
+// "tyle bylo", a to falszywy obraz jakosci fazy. P1/P2 NIE sa tu dotykane pod zadnym warunkiem.
+const wszystkieNity = dedup.filter((f) => f.severity === 'P3')
+// Wybor round-robin po ZRODLE, nie `slice` po kolejnosci wstawiania. Powod (review adwersaryjny 2026-08-08):
+// findingi wchodza do Mapy w kolejnosci reviewerow (security, performance, architecture, typescript,
+// spec-compliance, simplicity, test-coverage, e2e), wiec proste `slice(0,8)` przy 20+ nitach przepuszczalo
+// wylacznie P3 dwoch pierwszych reviewerow i SYSTEMATYCZNIE, w kazdej fazie, wycinalo cale wyjscie
+// simplicity, test-coverage i e2e. To nie jest uciecie ogona, tylko wyciszenie trzech reviewerow.
+// W obrebie zrodla KOD/TEST ida przed OPERATOR (nit o defekcie jest wart wiecej niz nota srodowiskowa).
+function wybierzNity(nity, limit) {
+  if (nity.length <= limit) return nity
+  const PRIORYTET = { KOD: 0, TEST: 1, E2E: 2, OPERATOR: 3 }
+  const kolejki = new Map()
+  for (const f of nity) {
+    const k = f._zrodlo || '?'
+    if (!kolejki.has(k)) kolejki.set(k, [])
+    kolejki.get(k).push(f)
+  }
+  for (const q of kolejki.values()) q.sort((a, b) => (PRIORYTET[a.typ] ?? 9) - (PRIORYTET[b.typ] ?? 9))
+  const wybrane = []
+  for (let runda = 0; wybrane.length < limit; runda++) {
+    let dodano = false
+    for (const q of kolejki.values()) {
+      if (q.length > runda) {
+        wybrane.push(q[runda])
+        dodano = true
+        if (wybrane.length === limit) break
+      }
+    }
+    if (!dodano) break // wyczerpalismy wszystkie kolejki przed osiagnieciem limitu
+  }
+  return wybrane
+}
+const nity = wybierzNity(wszystkieNity, LIMIT_P3_GLOBALNY)
+const p3Odrzucone = wszystkieNity.length - nity.length
+if (p3Odrzucone) {
+  log(`Limit P3: z ${wszystkieNity.length} nitow po dedupie zostawiam ${nity.length} (odrzucone: ${p3Odrzucone}) — prog LIMIT_P3_GLOBALNY=${LIMIT_P3_GLOBALNY}`)
+}
 
 // Poprawka 8: P1 (blocking) -> 3 sceptykow (konsensus 2/3). P2 (important) -> 1 sceptyk.
 // Verify bylo 55% calego runu (dane wf_ed163076: 114/208 agentow). 3x na kazdy P2 to nadmiar —
@@ -626,6 +724,7 @@ const przebieg = {
   poDedupSem: dedup.length,
   weryfikowane: doWeryfikacji.length,
   obalone: doWeryfikacji.length - (potwierdzone.length - nity.length),
+  p3Odrzucone,
   niezweryfikowane: potwierdzone.filter((f) => f.opis.startsWith('[NIEZWERYFIKOWANY')).length,
 }
 

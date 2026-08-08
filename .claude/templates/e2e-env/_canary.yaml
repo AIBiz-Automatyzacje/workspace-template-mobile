@@ -1,0 +1,56 @@
+# Canary env-up dla dev-autopilot — SKOPIUJ do .maestro/_canary.yaml i dopasuj do swojej apki.
+#
+# PO CO TO JEST
+# env-up nie wpuszcza runu do faz, dopóki canary nie przejdzie. Canary launch-only (fallback, gdy
+# tego pliku nie ma) kończy się na pierwszym ekranie — a ten zwykle nie wymaga sesji i nie ładuje
+# żadnego natywnego modułu poza rdzeniem. Taki canary dwa razy pod rząd przepuścił środowisko,
+# na którym KAŻDY realny scenariusz padał (run feedback-marcin-poprawki, 2026-08-06):
+#   - build bez entitlements  -> expo-secure-store bez keychain access group -> sesja się nie utrwala,
+#   - przestarzała binarka    -> "Cannot find native module ExpoClipboard" na głębszym ekranie.
+# Dlatego canary MA przejść przez logowanie i zaasertować element ZA auth. Zielone światło ma
+# znaczyć „flow ruszy", nie „apka się otwiera".
+#
+# ZASADY
+# - Trzymaj go MINIMALNYM: login + jedna asercja za auth. To bramka, nie scenariusz testowy.
+# - Konto leci przez `-e` z env-up (E2E_TEST_EMAIL / E2E_TEST_PASSWORD z .env.e2e) — NIGDY na sztywno.
+# - Plik jest wersjonowany w repo (w przeciwieństwie do fallbacku w /tmp) — ma nadążać za UI.
+#   Gdy canary zacznie padać po zmianie ekranu logowania, to jest sygnał do aktualizacji TEGO pliku.
+
+appId: com.example.app # <- bundle id / applicationId z app.json
+
+---
+- launchApp:
+    clearState: true # czysty start: dowodzi, że sesja powstaje TERAZ, a nie została z poprzedniego runu
+
+# --- Logowanie ------------------------------------------------------------
+# Wariant A (preferowany): ekran dev/E2E sign-in, jeśli apka go ma.
+# - tapOn:
+#     id: "dev-sign-in-button"
+#
+# Wariant B: zwykły formularz. Podmień testID na swoje.
+- tapOn:
+    id: "login-email-input"
+- inputText: ${E2E_EMAIL}
+- tapOn:
+    id: "login-password-input"
+- inputText: ${E2E_PASSWORD}
+- tapOn:
+    id: "login-submit-button"
+
+# --- Dowód, że jesteśmy ZA auth -------------------------------------------
+# Wybierz element, który renderuje się WYŁĄCZNIE dla zalogowanego usera — ale zależny od SESJI,
+# NIE od zaseedowanych rekordów. Canary leci w bootstrapie, a `db-sync` (migracje i seedy) wykonuje się
+# dopiero per faza, PO nim: asercja na liście turniejów/wiadomości padnie na czystej bazie e2e i będzie
+# wyglądać jak zepsute środowisko. Dobre cele: nagłówek z nickiem usera, awatar, tab bar dostępny po
+# zalogowaniu, pusty stan listy („Nie masz jeszcze turniejów"). Zły cel: konkretny rekord z seeda.
+- extendedWaitUntilVisible:
+    id: "home-greeting" # <- podmień
+    timeout: 30000
+
+# --- Dowód, że sesja PRZEŻYWA restart (łapie brak entitlements) ------------
+# Bez tego kroku build bez uprawnień do keychaina przechodzi canary: logowanie „działa",
+# ale sesja nie zostaje zapisana i każdy kolejny flow startuje wylogowany.
+- launchApp # bez clearState — ma odtworzyć sesję z bezpiecznego storage
+- extendedWaitUntilVisible:
+    id: "home-greeting" # <- ten sam element co wyżej
+    timeout: 30000
