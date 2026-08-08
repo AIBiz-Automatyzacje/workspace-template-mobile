@@ -389,6 +389,11 @@ na dedykowanej bazie e2e i zsynchronizowal migracje+seedy PRZED Twoim startem. W
 
 KLASYFIKACJA per scenariusz (to jest krytyczne — nie wszystko jest P2):
 - Scenariusz WYKONANY i FAILED z powodu defektu w kodzie/UI/stylu -> finding P2 typ E2E.
+  W opisie KAZDEGO nieudanego scenariusza zacytuj DOSLOWNIE komunikat bledu z outputu Maestro/apki
+  (surowa linia, bez parafrazy). Orkiestrator rozpoznaje po niej blokery srodowiskowe — np.
+  "Cannot find native module X" (przestarzaly dev-client) albo blad SecureStore o braku uprawnienia
+  (build bez entitlements) — i zatrzymuje run zamiast ciagnac kolejne fazy na zepsutym srodowisku.
+  Parafraza ("nie udalo sie zaladowac modulu") tej detekcji NIE uruchomi.
 - Scenariusz NIEWYKONALNY headless (brak booted emulatora, Metro down, dev-client wymaga 'eas build',
   migracja/RPC niewdrozona na remote, brak seeded sesji) -> finding typ OPERATOR (severity P3).
   To NIE jest defekt kodu — to brakujacy warunek srodowiskowy. NIE klasyfikuj jako P2.
@@ -566,11 +571,42 @@ const wyniki = await parallel(thunki)
 //     progi kalibrowane na JEDNYM polskojezycznym korpusie (opisy findingow nie zawsze beda po
 //     polsku) przy zysku rzedu jednej pary na 75 findingow to zla wymiana wobec ryzyka cichej
 //     utraty findingu — regula §11 "Duplication > Complexity".
+// ── Detekcja blokera srodowiskowego po SYGNATURZE (2026-08-08) ────────────
+// Powod (run feedback-marcin-poprawki): dwie awarie srodowiska — brak modulu natywnego w dev-kliencie
+// i build bez entitlements (SecureStore nie zapisuje sesji) — objawily sie dopiero w scenariuszach E2E,
+// gdzie tester sklasyfikowal je jako P2/OPERATOR i RUN LECIAL DALEJ przez kolejne fazy. Kazdy nastepny
+// scenariusz padal z tego samego powodu, a operator dowiadywal sie o tym po godzinach.
+// Te dwie klasy maja jednoznaczne sygnatury w outpucie Maestro, wiec rozpoznajemy je w JS (bez LLM)
+// i pozwalamy orkiestratorowi zatrzymac run od razu, z gotowa instrukcja rebuildu.
+// SWIADOME OGRANICZENIE: gdy Expo albo Maestro zmieni brzmienie komunikatu, detekcja przestanie dzialac
+// po cichu — dlatego to UZUPELNIENIE normalnej klasyfikacji, nie jej zamiennik. Finding nierozpoznany
+// dalej idzie zwykla sciezka P2/OPERATOR, wiec falszywy negatyw wraca do stanu sprzed tej zmiany.
+const SYGNATURY_BLOKERA = [
+  // Wariant "native module not found" (bez tekstu posrodku) mial dziure: wczesniejsza wersja wymagala
+  // spacji PO grupie .{0,40}, wiec komunikat bez nazwy modulu przechodzil. Zlapane testem jednostkowym
+  // regeksow — trzymaj ten test przy kazdej zmianie sygnatur.
+  { re: /cannot find native module|native module\b[^\n]{0,40}(?:not found|is not available)|requirenativemodule\b[^\n]{0,40}not found|turbomoduleregistry\.getenforcing[^\n]{0,60}could not be found/i, klasa: 'brak-modulu-natywnego' },
+  { re: /securestore.{0,80}(uprawnien|permission|entitlement|keychain)|brak wymaganego uprawnienia|errsecmissingentitlement|-34018/i, klasa: 'brak-entitlements' },
+]
+function wykryjBlokerSrodowiska(findingi) {
+  for (const f of findingi) {
+    const tekst = `${f.opis || ''} ${f.plik || ''}`
+    for (const s of SYGNATURY_BLOKERA) {
+      if (s.re.test(tekst)) return { wykryty: true, klasa: s.klasa, dowod: (f.opis || '').slice(0, 500) }
+    }
+  }
+  return null
+}
+
 // Etykieta zrodla per finding — kolejnosc `wyniki` odpowiada kolejnosci `thunki` (aktywni, potem
 // test-coverage, potem opcjonalnie e2e). Potrzebna do sprawiedliwego przyciecia P3 (patrz wybierzNity):
 // bez niej `slice` ucinal po kolejnosci reviewerow, czyli wyciszal zawsze tych samych trzech ostatnich.
 const etykietyZrodel = [...aktywni.map((r) => r.key), 'test-coverage', ...(e2eAktywny ? ['e2e'] : [])]
 const wszystkie = wyniki.flatMap((w, i) => (w ? w.findings.map((f) => ({ ...f, _zrodlo: etykietyZrodel[i] || '?' })) : []))
+const blokerSrodowiska = wykryjBlokerSrodowiska(wszystkie)
+if (blokerSrodowiska) {
+  log(`BLOKER SRODOWISKA wykryty po sygnaturze (${blokerSrodowiska.klasa}) — orkiestrator zatrzyma run zamiast ciagnac kolejne fazy na zepsutym dev-kliencie`)
+}
 const RANGA = { P1: 0, P2: 1, P3: 2 }
 const poKluczu = new Map()
 for (const f of wszystkie) {
@@ -759,6 +795,7 @@ if (!wynik) {
       raportSciezka: inspekcja.raportSciezka || `${sciezka}/review-faza-${faza}.md`,
       e2e: inspekcja.e2e || { passed: 0, failed: 0, skipped: 0 },
       przebieg,
+      blokerSrodowiska,
       scribeOdzyskany: true,
     }
   }
@@ -773,8 +810,9 @@ if (!wynik) {
     raportSciezka: '',
     e2e: { passed: 0, failed: 0, skipped: 0 },
     przebieg,
+    blokerSrodowiska,
     scribeFail: true,
   }
 }
 // przebieg dokladany w JS (nie przez schemat agenta) — orkiestrator zapisuje go w stanie i telemetrii.
-return { ...wynik, przebieg }
+return { ...wynik, przebieg, blokerSrodowiska }

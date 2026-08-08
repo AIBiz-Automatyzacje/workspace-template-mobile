@@ -222,6 +222,24 @@ const NATYWNE_DEPS_RESULT = {
   required: ['wymagaRebuildu', 'nowe', 'detal'],
 }
 
+// Re-check swiezosci dev-clienta PRZED review kazdej fazy (2026-08-08). Sprawdzenie jest BEZSTANOWE
+// (kilka `stat`-ow: mtime binarki vs lockfile/Podfile.lock/build.gradle/app.json), wiec dziala takze
+// po RESUME — a to jest dokladnie luka, ktorej bramka natywna nie pokrywa: faza wykonana we WCZESNIEJSZYM
+// runie nie wchodzi w galaz `execute`, wiec jej zmiany natywne nikt juz nie sprawdzal.
+// Dwustopniowosc jest celowa: tani detektor mowi ZE cos sie zmienilo, a precyzyjny sedzia
+// (natywneDepsPrompt) rozstrzyga CZY zmiana jest natywna — inaczej dodanie paczki czysto JS
+// przestawialoby lockfile i wywolywalo zbedny rebuild.
+const SWIEZOSC_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    stan: { type: 'string', enum: ['aktualny', 'przestarzaly', 'nieznany'], description: 'nieznany = nie da sie odczytac mtime (brak emulatora/uprawnien) — NIE blokuj, ostrzez' },
+    mtimeBinarki: { type: ['integer', 'null'], description: 'epoch sekundy — punkt odciecia dla sedziego natywnosci' },
+    detal: { type: 'string' },
+  },
+  required: ['stan', 'detal'],
+}
+
 // SHA HEAD sprzed execute — punkt odniesienia dla bramki natywnych zaleznosci. Zdejmowany w JS przed
 // wywolaniem execute, zeby zakres diffu fazy byl faktem, a nie heurystyka po tresci commit message'y.
 const SHA_RESULT = {
@@ -569,14 +587,32 @@ ${BLOK_DLUGIE_KOMENDY}
    W polu detal streszcz co postawiono (platforma, swap, canary, canaryTyp, devClient) BEZ wartosci sekretow.`
 }
 
-function natywneDepsPrompt(numerFazy, shaPrzedFaza) {
+function swiezoscPrompt(numerFazy) {
+  return `Jestes tanim detektorem swiezosci dev-clienta pipeline'u dev-autopilot (przed review fazy ${numerFazy}).
+JEDNO pytanie: czy binarka na emulatorze jest starsza niz konfiguracja natywna projektu?
+
+1. Ustal sciezke zainstalowanej apki: iOS \`xcrun simctl get_app_container booted <bundleId z app.json>\`,
+   Android \`adb shell pm path <appId>\`. Nie da sie ustalic (brak booted emulatora, blad odczytu) ->
+   {stan:"nieznany", mtimeBinarki:null, detal:"<powod>"} i ZAKONCZ. To NIE jest blad — nie blokuj runu.
+2. Odczytaj mtime binarki (\`stat -f %m\` macOS / \`stat -c %Y\` Linux; Android: \`adb shell stat -c %Y\`)
+   i mtime KAZDEGO z istniejacych: ios/Podfile.lock, android/build.gradle, app.json, app.config.js,
+   app.config.ts, bun.lock, bun.lockb, pnpm-lock.yaml, yarn.lock, package-lock.json.
+   package.json CELOWO pomijamy — jego mtime przestawia kazdy git checkout i edycja pola "scripts".
+3. Binarka nowsza od wszystkich -> {stan:"aktualny", mtimeBinarki:<epoch>, detal:"binarka nowsza niz konfiguracja natywna"}.
+   Binarka STARSZA od ktoregokolwiek -> {stan:"przestarzaly", mtimeBinarki:<epoch>,
+   detal:"binarka (<data>) starsza niz <plik> (<data>)"}.
+
+Read-only, nie buduj i nie instaluj. Zwroc obiekt zgodny ze schematem.`
+}
+
+function natywneDepsPrompt(numerFazy, zakresKomenda, kontekstZakresu) {
   return `Jestes bramka natywnych zaleznosci pipeline'u dev-autopilot (po execute fazy ${numerFazy}).
 JEDNO pytanie: czy ta faza uniewaznila dev-clienta na emulatorze, czyli czy zmienila NATYWNA warstwe aplikacji?
 
-1. ZAKRES — uzyj DOKLADNIE tego polecenia (SHA zapisany przez orkiestratora TUZ PRZED execute tej fazy,
-   wiec zakres jest deterministyczny; nie zgaduj po tresci commit message'y i nie uzywaj origin/main —
-   w repo bez remote'a ta referencja nie istnieje, a przy zadaniu wielofazowym objelaby cudze fazy):
-   \`git diff ${shaPrzedFaza}..HEAD -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json\`
+1. ZAKRES (${kontekstZakresu}) — uzyj DOKLADNIE tego polecenia; nie zgaduj po tresci commit message'y
+   i nie uzywaj origin/main (w repo bez remote'a ta referencja nie istnieje, a przy zadaniu wielofazowym
+   objelaby cudze fazy):
+   \`${zakresKomenda}\`
 2. Pusty diff -> {wymagaRebuildu:false, nowe:[], detal:"faza nie tknela zaleznosci ani konfiguracji natywnej"}.
 3. ZMIANY KONFIGURACJI NATYWNEJ (niezalezne od zaleznosci): dodany/zmieniony wpis w \`plugins\`, \`ios\`,
    \`android\`, \`permissions\`, \`entitlements\` w app.json/app.config.* -> to samo uniewaznia binarke co nowy modul.
@@ -1076,7 +1112,14 @@ for (const numerFazy of kolejka) {
     // po calym runie (tak bylo z expo-clipboard w fazie C, run feedback-marcin-poprawki).
     // Stan ma execute=done, wiec swiezy run po rebuildzie wejdzie prosto w review tej fazy — nic nie przepada.
     if (e2eAktywne && shaPrzed) {
-      const nat = await agent(natywneDepsPrompt(numerFazy, shaPrzed), { schema: NATYWNE_DEPS_RESULT, label: `natywne-deps:faza-${numerFazy}` })
+      const nat = await agent(
+        natywneDepsPrompt(
+          numerFazy,
+          `git diff ${shaPrzed}..HEAD -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json`,
+          'SHA zdjety przez orkiestratora TUZ PRZED execute tej fazy, wiec zakres jest deterministyczny'
+        ),
+        { schema: NATYWNE_DEPS_RESULT, label: `natywne-deps:faza-${numerFazy}` }
+      )
       if (nat && nat.wymagaRebuildu) {
         return await stopRun({
           powod: `Faza ${numerFazy} dodala zaleznosci z kodem natywnym: ${nat.nowe.join(', ')}. Dev-client na emulatorze ich NIE zawiera — scenariusze E2E tej i kolejnych faz padna na "Cannot find native module". ${nat.detal}`,
@@ -1103,6 +1146,44 @@ for (const numerFazy of kolejka) {
       e2eSync = await agent(e2eDbSyncPrompt(sciezka, numerFazy), { schema: E2E_DB_SYNC_RESULT, label: `e2e:db-sync:faza-${numerFazy}` })
       log(`E2E db-sync fazy ${numerFazy}: ${e2eSync ? `${e2eSync.status} — ${e2eSync.detal}` : 'agent zwrocil null'}`)
     }
+    // RE-CHECK SWIEZOSCI DEV-CLIENTA (bezstanowy) — zamyka luke bramki natywnej po RESUME: faza wykonana
+    // we wczesniejszym runie nie przechodzi przez galaz `execute`, wiec jej zmiany natywne nikt by nie
+    // sprawdzil, a tester E2E padlby na "Cannot find native module" dopiero w srodku scenariusza.
+    // Detektor jest tani i nie potrzebuje zadnego stanu; gdy zadziala, sedzia rozstrzyga czy to naprawde
+    // zmiana natywna (paczka czysto JS tez rusza lockfile, a nie wymaga rebuildu).
+    if (e2eAktywne) {
+      const sw = await agent(swiezoscPrompt(numerFazy), { schema: SWIEZOSC_RESULT, label: `swiezosc:faza-${numerFazy}`, model: 'haiku' })
+      if (sw && sw.stan === 'przestarzaly') {
+        log(`Faza ${numerFazy}: binarka starsza niz konfiguracja natywna (${sw.detal}) — sprawdzam, czy zmiana jest realnie natywna`)
+        const odciecie = sw.mtimeBinarki
+        const zakres = odciecie
+          ? `git log --since=@${odciecie} --format=%H --reverse -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json | head -1 | xargs -I{} git diff {}^..HEAD -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json`
+          : `git diff HEAD~5..HEAD -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json`
+        const nat = await agent(
+          natywneDepsPrompt(
+            numerFazy,
+            zakres,
+            odciecie
+              ? 'zakres liczony od PIERWSZEGO commita nowszego niz zainstalowana binarka — to dokladnie te zmiany, ktorych dev-client NIE zawiera'
+              : 'nie udalo sie odczytac mtime binarki; zakres przybliżony (ostatnie 5 commitow) — przy watpliwosci raportuj wymagaRebuildu:true'
+          ),
+          { schema: NATYWNE_DEPS_RESULT, label: `natywne-deps:swiezosc:faza-${numerFazy}` }
+        )
+        if (!nat || nat.wymagaRebuildu) {
+          return await stopRun({
+            powod: `Faza ${numerFazy}: dev-client na emulatorze jest starszy niz konfiguracja natywna projektu (${sw.detal})${nat ? ` i zmiana JEST natywna: ${nat.nowe.join(', ')}. ${nat.detal}` : ', a sedzia natywnosci nie zwrocil werdyktu — nie przepuszczam runu na niepewnej binarce'}. Scenariusze E2E padlyby na "Cannot find native module" w srodku fazy.`,
+            naprawa: 'Przebuduj dev-clienta i zainstaluj na emulatorze: `bunx expo prebuild` -> `(cd ios && pod install)` -> `xcodebuild -workspace ios/*.xcworkspace -scheme <scheme> -configuration Debug -sdk iphonesimulator CODE_SIGN_IDENTITY="-"` (podpis ad-hoc — CODE_SIGNING_ALLOWED=NO odbiera entitlements i psuje SecureStore) -> `xcrun simctl install booted <.app>`. Android: `bunx expo run:android`. Potem SWIEZY run (te same args, BEZ resumeFromRunId).',
+            faza: numerFazy, swiezosc: sw, natywne: nat, raporty,
+          })
+        }
+        log(`Faza ${numerFazy}: binarka starsza, ale zmiany sa czysto JS (${nat.detal}) — rebuild niepotrzebny, lece dalej`)
+      } else if (sw && sw.stan === 'nieznany') {
+        log(`Faza ${numerFazy}: nie da sie sprawdzic swiezosci dev-clienta (${sw.detal}) — przepuszczam z ostrzezeniem`)
+      } else if (!sw) {
+        log(`Faza ${numerFazy}: detektor swiezosci zwrocil null — przepuszczam z ostrzezeniem`)
+      }
+    }
+
     const review = await workflow('dev-docs-review-wf', {
       sciezka,
       faza: numerFazy,
@@ -1118,6 +1199,22 @@ for (const numerFazy of kolejka) {
       return await stopRun({
         powod: `Faza ${numerFazy}: scribe padl 2x — findingi zweryfikowane (P1/P2 w wyniku), ale raport review-faza-${numerFazy}.md nie zostal zapisany. Review pozostaje pending; odpal SWIEZY run (reviewerzy odpala sie ponownie).`,
         faza: numerFazy, findings: review.findings, raporty,
+      })
+    }
+    // BLOKER SRODOWISKA wykryty po SYGNATURZE w outpucie Maestro (review-wf liczy to w JS, bez LLM).
+    // Bez tego run ciagnal kolejne fazy na trwale zepsutym dev-kliencie, a kazdy nastepny scenariusz padal
+    // z tego samego powodu — operator dowiadywal sie dopiero na completion-gate, po godzinach pracy.
+    // Review ZOSTAJE zapisane (raport i sekcja "Do poprawy" sa juz na dysku), ale nie oznaczamy go jako
+    // done: findingi E2E powstaly na zepsutym srodowisku, wiec po rebuildzie faza wymaga powtorki.
+    if (review.blokerSrodowiska && review.blokerSrodowiska.wykryty) {
+      const b = review.blokerSrodowiska
+      const rebuild = 'Przebuduj dev-clienta: `bunx expo prebuild` -> `(cd ios && pod install)` -> `xcodebuild -workspace ios/*.xcworkspace -scheme <scheme> -configuration Debug -sdk iphonesimulator CODE_SIGN_IDENTITY="-"` -> `xcrun simctl install booted <.app>`. Android: `bunx expo run:android`. Potem SWIEZY run (te same args, BEZ resumeFromRunId) — review tej fazy powtorzy sie na sprawnym srodowisku.'
+      return await stopRun({
+        powod: `Faza ${numerFazy}: scenariusz E2E padl na BLOKERZE SRODOWISKA (${b.klasa}), nie na defekcie kodu. Dowod z outputu: "${b.dowod}". Kazdy kolejny scenariusz padlby tak samo, wiec zatrzymuje run zamiast ciagnac go na zepsutej binarce.`,
+        naprawa: b.klasa === 'brak-entitlements'
+          ? `Binarka zostala zbudowana BEZ podpisu, wiec nie ma entitlements i expo-secure-store nie zapisuje sesji — logowanie "dziala", ale sesja nie przezywa restartu. ${rebuild} KLUCZOWE: podpis ad-hoc CODE_SIGN_IDENTITY="-", NIE CODE_SIGNING_ALLOWED=NO.`
+          : `Dev-client nie zawiera modulu natywnego uzywanego przez ten ekran. ${rebuild}`,
+        faza: numerFazy, blokerSrodowiska: b, raporty,
       })
     }
     // Filar 3: liczniki/gate w JS z findings[]; liczniki scribe'a tylko do porownania w logu.
