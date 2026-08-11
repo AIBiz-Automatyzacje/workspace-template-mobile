@@ -4,13 +4,26 @@ Po tym setupie autopilot **autonomicznie wykonuje testy Maestro**: stawia Metro 
 bazie e2e, synchronizuje migracje+seedy per faza, a fail asercji wchodzi w pętlę fix jako
 finding P2 typ E2E.
 
-**Bramka opt-in (od 2026-06-16, wzmocniona 2026-07-13):**
-- **Brak `.env.e2e`** → projekt nie chce E2E → flow klasyfikowane jako OPERATOR, run leci dalej (status quo).
-  Sygnał opt-in czyta osobny, tani **precheck** (samo `test -f .env.e2e`), oddzielony od ciężkiego env-up.
+> **Nie wykonuj tych kroków ręcznie z pamięci — odpal skill `/e2e-setup`.** Ten plik jest
+> kanoniczną specyfikacją harnessu (architektura, bramki, konwencje planów); skill jest ścieżką
+> wykonawczą z dowodami przejścia każdego kroku i katalogiem pułapek z realnych przejść.
+
+**Bramka opt-in (od 2026-06-16, wzmocniona 2026-07-13, naprawiona 2026-08-11):**
+- **Brak `.env.e2e`, a plan zadania NIE ma żadnego `[E2E]`** → projekt faktycznie nie chce E2E →
+  flow klasyfikowane jako OPERATOR, run leci dalej (status quo).
+- **Brak `.env.e2e`, ale plan zadania MA niezaznaczone `[E2E]`** → **TWARDY STOP w bootstrapie**,
+  przed fazą 1, z odesłaniem do `/e2e-setup`. Do 2026-08-11 ta kombinacja była nieodróżnialna od
+  świadomej rezygnacji i degradowała się cicho — run przejeżdżał cały plan, a brak środowiska
+  wychodził dopiero na completion-gate, czyli po zapłaceniu za całą pracę (regresja e3-core-loop:
+  3 fazy, ~20 h, zanim ktokolwiek zauważył). Świadomy opt-out: przenieś pozycję do
+  `Operator checklist` i zmień marker `[E2E]` → `[Manual]`.
+  Oba sygnały czyta osobny, tani **precheck** (`test -f .env.e2e` + `grep '[E2E]'` w planie zadania),
+  oddzielony od ciężkiego env-up.
 - **`.env.e2e` istnieje, ale środowisko niegotowe LUB canary nie przechodzi** → autopilot
   **TWARDO zatrzymuje run w bootstrapie** z gotową komendą naprawczą. Powód: gdy projekt opt-in'ował
   się w E2E, ciche pominięcie = E2E znika z runu bez śladu (regresja etap-11). Świadomy run headless:
-  usuń/zmień nazwę `.env.e2e`.
+  usuń/zmień nazwę `.env.e2e` **i** zdejmij markery `[E2E]` z planu — samo usunięcie pliku już nie
+  wystarczy, bo bramka setupu czyta plan zadania.
 - **env-up padł (null) przy potwierdzonym opt-in** → retry raz, drugi null = **STOP** (nie cicha degradacja
   do OPERATOR — to infra hiccup, nie brak setupu).
 
@@ -111,7 +124,7 @@ bojowy tej fazy.
   PASS" jest nieosiągalne, choć każdy flow osobno przechodzi. Dołóż do etapu runner
   `.maestro/<etap>-run-all.sh` przeplatający `psql -v ON_ERROR_STOP=1 -f <seed>` z
   `maestro test <flow>` para po parze i wskaż go w checkboxach `Weryfikacja: [E2E]` oraz w Operator
-  checklist. Wzór: `.maestro/e3-run-all.sh` w repo Nawykometr (etap E3).
+  checklist. Wzór: runner etapu obok flow, np. `.maestro/e3-run-all.sh`.
 - **Seedy aplikuj `psql`, nie `supabase db query -f`**: `db query` wysyła plik jako JEDNO prepared
   statement, więc seed z `begin; do $$ … $$; commit;` pada na `cannot insert multiple commands into
   a prepared statement (42601)`. CLI nadaje się do jednozdaniowych sprawdzeń, nie do seedów.

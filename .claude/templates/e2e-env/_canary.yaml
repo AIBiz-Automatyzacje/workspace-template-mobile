@@ -48,9 +48,9 @@
 # (odpowiednik `simctl terminate` + `simctl openurl`). Dotyczy też pierwszego wejścia po
 # `launchApp: {clearState: true}` — `clearState` nie jest ochroną, bo po czyszczeniu kontenera
 # apka zostaje podniesiona.
-# Pełna diagnostyka i sygnatura crashu (skopiuj do swojego docs/solutions/, jeśli trafisz na to
-# ponownie): docs/solutions/runtime-errors/2026-08-11-sigsegv-jsi-teardown-goracy-relaunch.md
-# w repo Nawykometr (etap E3, 2026-08-11).
+# Sygnatura potwierdzona empirycznie 2026-08-11 (Expo SDK 55, iOS 26.4). Gdy trafisz na to
+# ponownie, opisz przebieg w swoim docs/solutions/runtime-errors/ — crash jest w expo-modules-core,
+# więc naprawa flow go nie usuwa, tylko przestaje w niego celować.
 
 appId: com.example.app # <- bundle id / applicationId z app.json
 

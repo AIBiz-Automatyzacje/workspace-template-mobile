@@ -154,6 +154,7 @@ W upstreamie są też skille nie zaimportowane (nisza poza core flow): `expo-bro
 | **`security`** | Audyt bezpieczeństwa mobile: **OWASP Top 10:2025 + Mobile Top 10 (2024)**, RLS, `app_metadata` vs `user_metadata`, sekrety w bundlu (`EXPO_PUBLIC_*` jest publiczne!), SecureStore, deep linking, WebView. |
 | **`sentry-integration`** | Error tracking dla React Native + Edge Functions (Deno 2.x): `beforeSend`, `withScope`, `defaultIntegrations: false`, GDPR maskowanie. |
 | **`mobile-e2e-maestro`** | E2E na emulatorze przez Maestro CLI: tap/scroll/gesty, deep linking, asercje, screenshoty, **granice możliwości** (natywnych powierzchni OS nie dotknie — inject przez service_role). |
+| **`e2e-setup`** | One-time setup środowiska E2E (dedykowany projekt Supabase, `.env.e2e`, migracje, marker bazy, konto testowe, dev-client, canary jako dowód) + 12 pułapek z realnych przejść. Odpal **przed** autopilotem na etapie z `[E2E]`. |
 | **`eas-update-insights`** | Health check OTA updateów EAS: crash rate, install/launch counts, embedded vs OTA per channel. |
 | **`code-quality`** | Audyt jakości (stack-agnostic): architektura, performance, prostota (YAGNI), wzorce. |
 | **`code-review`** | Code review pod stack — raport z klasyfikacją problemów. |

@@ -413,7 +413,7 @@ Autonomiczne E2E (autopilot) działa na **dedykowanym projekcie testowym** opisa
 - **Seed musi być idempotentny** (DELETE/upsert, bezpieczny do re-runu) i referować konto testowe przez `(select id from auth.users where email='<E2E_TEST_EMAIL>')` — **nigdy przez stałe ID**. Wzór: istniejący `.maestro/<inny>-seed.sql` w repo. Flow loguje się kontem `E2E_TEST_EMAIL` (wzór: istniejący flow logowania w `.maestro/`).
 - **E2E celuje w projekt z `.env.e2e`** — nigdy nie wstrzykuj danych testowych do dev/prod ani przez Supabase MCP. Smoke RLS (np. odmowa nie-uczestnikowi) wykonuj SQL-em na bazie e2e (`psql "$SUPABASE_E2E_DB_URL"`).
 - **Realtime / multi-client realistycznie:** single-client (render, wysłanie, optimistic+echo dedup) jest autonomicznie testowalny i należy do `[E2E]`. Prawdziwy two-client „na żywo" (równoczesne urządzenia) → `Operator checklist` `[Manual]`, bo harness single-client tego nie dowiedzie.
-- **Projekt bez `.env.e2e`** (brak opt-in do E2E): scenariusz `[E2E]` przenieś do `Operator checklist` jako `[Manual]` — seed nie jest wtedy wymagany.
+- **Projekt bez `.env.e2e`** (środowisko E2E nieskonfigurowane): masz dwie drogi i musisz wybrać ŚWIADOMIE, bo autopilot zatrzyma run na bramce setupu, gdy plan zawiera choć jeden `[E2E]`, a pliku nie ma. Albo (a) postaw środowisko przed startem — skill `/e2e-setup` (one-time, ~30 min), albo (b) przenieś scenariusz do `Operator checklist` jako `[Manual]` — seed nie jest wtedy wymagany. Nie zostawiaj `[E2E]` „na później": to właśnie ta ścieżka kończy się etapem zamkniętym z niewykonanymi testami.
 
 Używaj `Notatka wykonawcza` oszczędnie. Dobre użycia:
 - `Notatka wykonawcza: Zacznij od failing integration testu dla kontraktu request/response.`

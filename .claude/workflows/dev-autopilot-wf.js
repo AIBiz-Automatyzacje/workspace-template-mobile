@@ -3,7 +3,7 @@ export const meta = {
   description: 'Autonomiczny pipeline: bootstrap (stan z .autopilot-state.json) -> per faza (execute -> review+verify -> fix, bez re-review) -> compound -> compound-refresh (scoped) -> complete. Orkiestrator trzyma stan w JSON i liczy gate\'y w JS; buildery i reviewerzy to leaf-agenci.',
   whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). DWA tryby wznowienia: (1) po AWARII runu (crash/kill w polowie) -> Workflow({scriptPath, resumeFromRunId}) + ZAWSZE te same args (args nie przezywa miedzy wywolaniami) — cache journala odtworzy ukonczone kroki; (2) po STOP bramki (srodowisko E2E, fix FAIL, nierozwiazane P1, scribe) gdy operator COS NAPRAWIL -> SWIEZY run (nowe Workflow BEZ resumeFromRunId): resume zwrocilby porazke agenta bramkowego z cache zamiast sprawdzic naprawe, a stan faz i tak wznawia sie z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy; checkboxy md to tylko widok). Reczne edycje .autopilot-state.json tez wymagaja swiezego runu.',
   phases: [
-    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + srodowisko E2E (precheck opt-in -> env-up: auto-swap .env.local, Metro+emulator, swiezosc dev-clienta + entitlements, canary przez logowanie do ekranu ZA auth jako DOWOD; TWARDY STOP gdy .env.e2e istnieje a canary nie przechodzi) + rozgrzewka cache testow' },
+    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + srodowisko E2E (precheck: .env.e2e ORAZ czy plan ma [E2E]; zadanie wymaga E2E a brak .env.e2e -> STOP z /e2e-setup -> env-up: auto-swap .env.local, Metro+emulator, swiezosc dev-clienta + entitlements, canary przez logowanie do ekranu ZA auth jako DOWOD; TWARDY STOP gdy .env.e2e istnieje a canary nie przechodzi) + rozgrzewka cache testow' },
     { title: 'Zakonczenie', detail: 'walidacja koncowa (+ completion-gate E2E i przeglad known-issues) -> compound -> compound-refresh (scoped: dotknieta kategoria + CONCEPTS.md, tylko gdy compound cos zapisal) -> complete (compound pierwszy: sciezki w docs/active/ jeszcze zyja) -> telemetria (1 linia JSONL do ~/.claude/telemetry/autopilot-runs.jsonl; od 2026-08-08 takze na sciezkach STOP)' },
   ],
 }
@@ -170,15 +170,21 @@ const WARMUP_RESULT = {
   required: ['status', 'detal'],
 }
 
-// Precheck: TANI, deterministyczny sygnal opt-in (czy repo ma .env.e2e) — oddzielony od ciezkiego
-// env-up, zeby flake ciezkiego agenta na projekcie opt-in NIE degradowal cicho E2E (patrz orkiestracja).
+// Precheck: TANI, deterministyczny sygnal opt-in — oddzielony od ciezkiego env-up, zeby flake ciezkiego
+// agenta na projekcie opt-in NIE degradowal cicho E2E (patrz orkiestracja).
+// Od 2026-08-11 precheck czyta DWA niezalezne sygnaly: czy repo MA srodowisko (.env.e2e) i czy zadanie
+// go WYMAGA (checkboxy [E2E] w planie). Wczesniej pytal tylko o plik, wiec brak setupu byl nieodrozanialny
+// od swiadomej rezygnacji — regresja e3-core-loop: run przejechal 3 fazy i ~20h zanim ktokolwiek zauwazyl,
+// ze cztery scenariusze [E2E] fazy 3 nie maja gdzie sie wykonac.
 const E2E_PRECHECK = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    istnieje: { type: 'boolean', description: 'true = plik .env.e2e istnieje w korzeniu repo (projekt opt-in E2E)' },
+    istnieje: { type: 'boolean', description: 'true = plik .env.e2e istnieje w korzeniu repo (srodowisko E2E skonfigurowane)' },
+    zadanieWymagaE2E: { type: 'boolean', description: 'true = plan zadania ma co najmniej jeden NIEZAZNACZONY checkbox z markerem [E2E] (zadanie deklaruje E2E jako deliverable)' },
+    liczbaScenariuszy: { type: 'integer', description: 'ile niezaznaczonych checkboxow [E2E] znaleziono w planie zadania (0 gdy zadnego)' },
   },
-  required: ['istnieje'],
+  required: ['istnieje', 'zadanieWymagaE2E', 'liczbaScenariuszy'],
 }
 
 const E2E_ENV_RESULT = {
@@ -322,7 +328,7 @@ const VALIDATION_RESULT = {
     testy: { type: 'string', description: 'PASS/FAIL z liczbami X/Y (+ adnotacje flake-infra)' },
     expoDoctor: { type: 'string', enum: ['PASS', 'FAIL', 'n/a'] },
     testyZmodyfikowane: { type: 'array', items: { type: 'string' }, description: 'pliki *.test.* ze ZMIENIONYMI istniejacymi asercjami w commitach fix(...) — sygnal test-weakeningu' },
-    e2eNieuruchomione: { type: 'array', items: { type: 'string' }, description: 'tresci checkboxow [E2E] wciaz NIEZAZNACZONYCH przy istniejacym .env.e2e (opt-in E2E) — wymusza wynik=FAIL (completion-gate)' },
+    e2eNieuruchomione: { type: 'array', items: { type: 'string' }, description: 'tresci checkboxow [E2E] wciaz NIEZAZNACZONYCH w planie zadania — wymusza wynik=FAIL (completion-gate). Nie zalezy od istnienia .env.e2e: zrodlem prawdy o wymaganiu E2E jest plan, nie repo' },
     knownIssuesZamkniete: { type: ['integer', 'null'], description: 'ile wpisow known-issues.md przeniesiono do sekcji "Zamkniete" (higiena, NIE wplywa na wynik)' },
     wynik: { type: 'string', enum: ['PASS', 'FAIL'] },
     bledy: { type: 'array', items: { type: 'string' } },
@@ -437,10 +443,20 @@ ${BLOK_DLUGIE_KOMENDY}
 Poza wyjatkiem z kroku 2 NIE modyfikuj zadnych plikow. Zwroc {status, detal, czasZimnySek, czasKontrolnySek}.`
 }
 
-function e2ePrecheckPrompt() {
-  return `Jestes precheck-agentem E2E pipeline'u dev-autopilot. JEDNO zadanie: ustal czy projekt jest opt-in E2E.
-Uruchom \`test -f "$(git rev-parse --show-toplevel)/.env.e2e" && echo TAK || echo NIE\`.
-Zwroc {istnieje: true} gdy wynik to TAK, {istnieje: false} gdy NIE. Nic wiecej nie rob, nie czytaj zawartosci pliku.`
+function e2ePrecheckPrompt(sciezka) {
+  return `Jestes precheck-agentem E2E pipeline'u dev-autopilot. Zadanie: zebrac DWA niezalezne sygnaly.
+NIE interpretuj ich i NIE wyciagaj wnioskow — decyzje podejmuje orkiestrator.
+
+1. CZY SRODOWISKO ISTNIEJE: \`test -f "$(git rev-parse --show-toplevel)/.env.e2e" && echo TAK || echo NIE\`.
+   TAK -> istnieje:true, NIE -> istnieje:false. NIE czytaj zawartosci pliku (sekrety).
+
+2. CZY ZADANIE WYMAGA E2E: \`grep -cE '^- \\[ \\].*\\[E2E\\]' ${sciezka}/*-zadania.md\` (sumuj po plikach,
+   brak trafien = 0 — grep konczy sie wtedy kodem 1, to NIE jest blad). Marker [E2E] oznacza scenariusz,
+   ktory ma byc wykonany przez Maestro na realnym emulatorze. Liczysz WYLACZNIE niezaznaczone \`- [ ]\`;
+   pozycje juz odhaczone i pozycje z markerem [Manual] (swiadomie recznie przez operatora) sie NIE licza.
+   Wynik -> liczbaScenariuszy; zadanieWymagaE2E = (liczbaScenariuszy > 0).
+
+Zwroc {istnieje, zadanieWymagaE2E, liczbaScenariuszy}. Nic wiecej nie rob.`
 }
 
 function e2eEnvUpPrompt() {
@@ -779,13 +795,16 @@ a krok 6 jest higiena, ktorej pominiecie zostawia operatorowi nieaktualny obraz 
 dokladnie wtedy, gdy najbardziej go potrzebuje (przy zatrzymanym runie).
 
 KROK 5 — COMPLETION-GATE E2E (krytyczny — chroni przed cichym zamknieciem sprintu z pominietym E2E):
-Sprawdz czy w korzeniu repo istnieje \`.env.e2e\` (\`test -f "$(git rev-parse --show-toplevel)/.env.e2e"\`).
-- BRAK .env.e2e -> projekt nie opt-inowal E2E, pomin ten krok.
-- ISTNIEJE .env.e2e -> grepnij zadanie: \`grep -nE '^- \\[ \\].*\\[E2E\\]' ${sciezka}/*-zadania.md\`.
-  Jesli zostaly NIEZAZNACZONE checkboxy [E2E] -> wpisz ich tresci do e2eNieuruchomione[] i ustaw wynik=FAIL,
-  bledy[] += "E2E opt-in (.env.e2e istnieje), a N scenariuszy [E2E] nieuruchomionych — sprint NIE moze sie
-  zamknac z cicho pominietym E2E (regresja etap-11/12b). Operator musi je odpalic LUB usunac .env.e2e dla
-  swiadomego runu headless." NIE probuj sam odpalac Maestro — to gate raportujacy, blokuje archiwizacje.
+Grepnij zadanie: \`grep -nE '^- \\[ \\].*\\[E2E\\]' ${sciezka}/*-zadania.md\` (brak trafien = exit 1, to NIE blad).
+Jesli zostaly NIEZAZNACZONE checkboxy [E2E] -> wpisz ich tresci do e2eNieuruchomione[] i ustaw wynik=FAIL,
+bledy[] += "N scenariuszy [E2E] nieuruchomionych — sprint NIE moze sie zamknac z cicho pominietym E2E
+(regresja etap-11/12b). Operator musi je odpalic LUB przeniesc do Operator checklist ze zmiana markera
+[E2E] -> [Manual], jesli scenariusz ma byc swiadomie wykonany recznie."
+UWAGA (2026-08-11, regresja e3-core-loop): ten gate NIE zalezy juz od istnienia \`.env.e2e\`. Wczesniej brak
+pliku wylaczal bramke, wiec zadanie pelne scenariuszy [E2E] moglo zamknac sie cicho jako "OPERATOR" —
+dokladnie ten scenariusz, przed ktorym gate mial chronic. Zrodlem prawdy o tym, czy E2E jest wymagane,
+jest PLAN ZADANIA, a nie zawartosc repo.
+NIE probuj sam odpalac Maestro — to gate raportujacy, blokuje archiwizacje.
 
 KROK 6 — PRZEGLAD known-issues.md (higiena, nie bramka — nie zmienia wyniku PASS/FAIL):
 Jesli ${sciezka}/known-issues.md istnieje, zweryfikuj KAZDY wpis wzgledem AKTUALNEGO kodu (nie wzgledem tego,
@@ -982,7 +1001,9 @@ async function zapiszStan() {
 // zanim zaplacimy za rozgrzewke cache. Metro hot-reloaduje working tree, wiec stawiamy raz per run.
 //
 // BRAMKA OPT-IN (2026-06-16, regresja etap-11): status decyduje czy run leci dalej.
-//   'pominieto'     = brak .env.e2e -> projekt nie chce E2E -> cicha degradacja do OPERATOR (status quo).
+//   'pominieto'     = brak .env.e2e I zadanie nie ma zadnego [E2E] -> projekt faktycznie nie chce E2E ->
+//                     degradacja do OPERATOR. Gdy zadanie MA [E2E], run nie dochodzi tutaj — zatrzymuje
+//                     go bramka setupu wyzej (brak srodowiska != swiadoma rezygnacja).
 //   'niepowodzenie' = .env.e2e ISTNIEJE, ale srodowisko nie gotowe LUB canary nie przeszedl
 //                     -> HARD STOP w bootstrapie, PRZED jakakolwiek faza (E2E nie znika cicho do OPERATOR).
 //   'gotowe'        = Metro + emulator z dev-clientem + canary PASS -> E2E aktywne (DOWIEDZIONE, nie zadeklarowane).
@@ -990,8 +1011,20 @@ async function zapiszStan() {
 // PRECHECK: tani, deterministyczny sygnal opt-in ODDZIELONY od ciezkiego env-up. Bez niego flake env-up
 // (null) na projekcie opt-in degradowalby cicho E2E — a completion-gate wylapalby to dopiero na KONCU runu
 // (najdrozszy moment). Z precheckiem: opt-in potwierdzony -> null env-up = STOP, nie degradacja.
-const precheck = await agent(e2ePrecheckPrompt(), { schema: E2E_PRECHECK, label: 'e2e:precheck', model: 'haiku', phase: 'Bootstrap' })
+const precheck = await agent(e2ePrecheckPrompt(sciezka), { schema: E2E_PRECHECK, label: 'e2e:precheck', model: 'haiku', phase: 'Bootstrap' })
 const optIn = precheck ? precheck.istnieje : null // null = precheck padl (nie wiemy — env-up ma self-skip)
+
+// BRAMKA SETUPU (2026-08-11, regresja e3-core-loop): zadanie DEKLARUJE scenariusze [E2E], a repo nie ma
+// srodowiska. Wczesniej ta kombinacja byla nieodrozanialna od "projekt nie chce E2E" i degradowala sie
+// cicho do OPERATOR — run jechal przez wszystkie fazy, a brak srodowiska wychodzil dopiero na
+// completion-gate, czyli po zaplaceniu za CALA prace. Teraz STOP przed faza 1, gdy jest najtaniej.
+if (optIn === false && precheck.zadanieWymagaE2E) {
+  return await stopRun({
+    powod: `zadanie deklaruje ${precheck.liczbaScenariuszy} scenariuszy [E2E], a repo nie ma .env.e2e — srodowisko E2E nie jest skonfigurowane. Run zatrzymany PRZED faza 1: bez srodowiska te scenariusze i tak nie zostana wykonane, a etap nie domknie sie na completion-gate.`,
+    naprawa: 'Odpal `/e2e-setup` — skill przeprowadzi przez one-time setup (dedykowany projekt Supabase, .env.e2e, migracje, konto testowe, dev-client, canary jako DOWOD). Recznie: .claude/templates/e2e-env/README.md. Swiadomy opt-out (scenariusz wykonasz recznie): przenies te pozycje do "Operator checklist" i zmien marker [E2E] na [Manual] w pliku zadania. Po setupie odpal SWIEZY run (te same args, BEZ resumeFromRunId).',
+    stan,
+  })
+}
 
 if (optIn !== false) {
   // Opt-in TAK lub nieznany -> odpal env-up (ma wlasny self-skip gdy .env.e2e faktycznie nie ma).
@@ -1010,7 +1043,7 @@ if (optIn !== false) {
     }
   }
 }
-log(`E2E env: ${e2eEnv ? `${e2eEnv.status} (platforma: ${e2eEnv.platforma}, metro: ${e2eEnv.metro}, emulator: ${e2eEnv.simulator}, swap: ${e2eEnv.swap}, canary: ${e2eEnv.canary}/${e2eEnv.canaryTyp}, dev-client: ${e2eEnv.devClient}) — ${e2eEnv.detal}` : `pomijam E2E (${optIn === false ? 'brak .env.e2e — projekt nie opt-in' : 'precheck padl i env-up null — infra'})`}`)
+log(`E2E env: ${e2eEnv ? `${e2eEnv.status} (platforma: ${e2eEnv.platforma}, metro: ${e2eEnv.metro}, emulator: ${e2eEnv.simulator}, swap: ${e2eEnv.swap}, canary: ${e2eEnv.canary}/${e2eEnv.canaryTyp}, dev-client: ${e2eEnv.devClient}) — ${e2eEnv.detal}` : `pomijam E2E (${optIn === false ? 'brak .env.e2e, a zadanie nie deklaruje zadnego scenariusza [E2E] — projekt nie opt-in' : 'precheck padl i env-up null — infra'})`}`)
 // Canary launch-only przechodzi, ale niczego nie dowodzi poza tym, ze apka wstaje — ostrzegamy glosno,
 // bo to dokladnie ten wariant, ktory dwa razy wpuscil zepsute srodowisko do runu.
 if (e2eEnv && e2eEnv.status === 'gotowe' && e2eEnv.canaryTyp === 'launch') {
