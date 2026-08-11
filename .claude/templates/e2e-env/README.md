@@ -105,6 +105,21 @@ bojowy tej fazy.
 - **Re-seed per flow** (izolacja stanu): każdy flow zaczyna od czystego, znanego stanu —
   seed idempotentny aplikuj przed KAŻDYM flow, nie raz na całą fazę. Łap świeże `TOURNAMENT_UUID`
   z `RAISE NOTICE` seeda i przekaż do inject przez `env:` w YAML.
+- **Wyegzekwuj re-seed skryptem, nie zdaniem w dokumencie**: jeśli seedy etapu resetują ten sam
+  rekord/konto (typowo: `delete from … where user_id = <konto e2e>`), to są **wzajemnie
+  destrukcyjne** — po zbiorczym db-sync stan spełnia warunek wstępny najwyżej JEDNEGO flow i „N/N
+  PASS" jest nieosiągalne, choć każdy flow osobno przechodzi. Dołóż do etapu runner
+  `.maestro/<etap>-run-all.sh` przeplatający `psql -v ON_ERROR_STOP=1 -f <seed>` z
+  `maestro test <flow>` para po parze i wskaż go w checkboxach `Weryfikacja: [E2E]` oraz w Operator
+  checklist. Wzór: `.maestro/e3-run-all.sh` w repo Nawykometr (etap E3).
+- **Seedy aplikuj `psql`, nie `supabase db query -f`**: `db query` wysyła plik jako JEDNO prepared
+  statement, więc seed z `begin; do $$ … $$; commit;` pada na `cannot insert multiple commands into
+  a prepared statement (42601)`. CLI nadaje się do jednozdaniowych sprawdzeń, nie do seedów.
+- **Pozytywna identyfikacja bazy w każdym destrukcyjnym seedzie**: guard „konto testowe istnieje"
+  NIE chroni — zawodzi dokładnie wtedy, gdy konto o tym mailu istnieje na dev/prod. Wymagaj tabeli
+  markera zakładanej ręcznie WYŁĄCZNIE na bazie e2e (poza migracjami, żeby `db push` nie mógł jej
+  przynieść na dev/prod) i zaczynaj seed od:
+  `if to_regclass('public.e2e_env_marker') is null then raise exception '…' end if;`
 
 ## Pułapki
 
