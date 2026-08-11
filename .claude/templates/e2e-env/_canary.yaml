@@ -15,12 +15,84 @@
 # - Konto leci przez `-e` z env-up (E2E_TEST_EMAIL / E2E_TEST_PASSWORD z .env.e2e) — NIGDY na sztywno.
 # - Plik jest wersjonowany w repo (w przeciwieństwie do fallbacku w /tmp) — ma nadążać za UI.
 #   Gdy canary zacznie padać po zmianie ekranu logowania, to jest sygnał do aktualizacji TEGO pliku.
+# - Po każdej zmianie: `maestro check-syntax .maestro/_canary.yaml` (łapie nieistniejące komendy
+#   i nieistniejące właściwości — tanie, nie wymaga urządzenia).
+#
+# DEV-CLIENT: DWA EKRANY PRZED APKĄ (najczęstsza przyczyna „canary pada na pierwszej asercji")
+# Na dev-cliencie (`expo run:ios` / `run:android`) `launchApp` NIE ląduje w JS apki:
+#   1. ekran expo-dev-launcher („DEVELOPMENT SERVERS") — trzeba wejść w dev server deep linkiem
+#      `<scheme>://expo-development-client/?url=<percent-encoded adres Metro>` (`scheme` z app.json);
+#      `127.0.0.1:8081` dla symulatora iOS, `10.0.2.2:8081` dla emulatora Androida, IP hosta
+#      z wydruku `expo start` dla urządzenia fizycznego;
+#   2. onboardingowy sheet expo-dev-menu („This is the developer menu…" + „Continue") — zasłania
+#      apkę, a `clearState: true` czyści flagę „sheet widziany", więc wraca przy KAŻDYM przebiegu.
+#      Zamknięcie wymaga DWÓCH kroków: „Continue" gasi onboarding, ale zostawia otwarte samo dev
+#      menu („Reload" / „Go home" / „TOOLS"), które zamyka tap poza panelem.
+# Oba kroki niżej są warunkowe, więc nie przeszkadzają, gdy apka jest buildem `preview`
+# z wbudowanym bundlem (bez launchera i bez dev-menu). Warunkujemy je po tekstach „Continue"
+# i „Reload": upewnij się, że TWOJE UI ich nie zawiera — inaczej podmień dyskryminator.
+#
+# ALE: `preview` nie jest uniwersalnym obejściem launchera. Jeśli Twoja ścieżka logowania e2e
+# jest bramkowana wariantem bundla (`__DEV__`), to w `preview` przycisk logowania NIE POWSTANIE
+# i wszystkie flow padną na pierwszym `tapOn`. Wtedy dev-client + `openLink` do dev servera to
+# jedyna działająca ścieżka. Sprawdź bramkę w swoim kodzie auth przed wyborem wariantu buildu.
+#
+# ZAKAZ `launchApp` BEZPOŚREDNIO PRZED `openLink` (dev-client, potwierdzone empirycznie)
+# `launchApp` — z JAKĄKOLWIEK flagą, także `stopApp: true` i `clearState: true` — najpierw
+# STARTUJE apkę (na dev-cliencie: na ekranie launchera), więc następny `openLink` trafia w proces,
+# który JUŻ ŻYJE. To gorące wejście deterministycznie wywala runtime: EXC_BAD_ACCESS/SIGSEGV pod
+# 0x0 na wątku `com.facebook.react.runtime.JavaScript`, stos `EXJavaScriptObject .cxx_destruct`
+# → `jsi::Object::~Object()` (teardown JSI w expo-modules-core). Maestro NIE mówi „apka się
+# wywaliła" — zobaczysz nietrafioną asercję albo `Timed out snapshotting`.
+# Reguła: przed każdym `openLink` proces musi być ZATRZYMANY osobnym krokiem `- stopApp`
+# (odpowiednik `simctl terminate` + `simctl openurl`). Dotyczy też pierwszego wejścia po
+# `launchApp: {clearState: true}` — `clearState` nie jest ochroną, bo po czyszczeniu kontenera
+# apka zostaje podniesiona.
+# Pełna diagnostyka i sygnatura crashu (skopiuj do swojego docs/solutions/, jeśli trafisz na to
+# ponownie): docs/solutions/runtime-errors/2026-08-11-sigsegv-jsi-teardown-goracy-relaunch.md
+# w repo Nawykometr (etap E3, 2026-08-11).
 
 appId: com.example.app # <- bundle id / applicationId z app.json
 
 ---
 - launchApp:
     clearState: true # czysty start: dowodzi, że sesja powstaje TERAZ, a nie została z poprzedniego runu
+
+# --- Wejście w dev server + zamknięcie onboardingu dev-menu ----------------
+# Patrz nagłówek §DEV-CLIENT. Na buildzie z wbudowanym bundlem możesz ten blok usunąć.
+# `stopApp` PRZED `openLink` jest obowiązkowe: `launchApp` wyżej podniósł apkę na launcherze,
+# a deep link w żywy proces = gorący restart, który wywala runtime (nagłówek §ZAKAZ `launchApp`
+# BEZPOŚREDNIO PRZED `openLink`).
+- stopApp
+- openLink: "myapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081" # <- `scheme` z app.json
+# Gdy deep link idzie przez powierzchnię systemu, iOS pyta o potwierdzenie otwarcia apki.
+- tapOn:
+    text: "Otwórz|Open" # <- teksty systemowe: dopasuj do języka symulatora
+    optional: true
+# Sheet dev-menu pojawia się dopiero PO zbundlowaniu apki, więc budżet czekania musi pokrywać
+# zimny start + bundling (ten sam rząd wielkości co asercja za auth niżej).
+- extendedWaitUntil:
+    visible:
+      text: "Continue"
+    timeout: 40000
+    optional: true
+- runFlow:
+    when:
+      visible:
+        text: "Continue"
+    commands:
+      - tapOn:
+          text: "Continue"
+      - waitForAnimationToEnd
+# Po zgaszeniu onboardingu zostaje OTWARTE dev menu — zamykamy je tapem poza panelem.
+- runFlow:
+    when:
+      visible:
+        text: "Reload"
+    commands:
+      - tapOn:
+          point: "50%,15%"
+      - waitForAnimationToEnd
 
 # --- Logowanie ------------------------------------------------------------
 # Wariant A (preferowany): ekran dev/E2E sign-in, jeśli apka go ma.
@@ -43,14 +115,27 @@ appId: com.example.app # <- bundle id / applicationId z app.json
 # dopiero per faza, PO nim: asercja na liście turniejów/wiadomości padnie na czystej bazie e2e i będzie
 # wyglądać jak zepsute środowisko. Dobre cele: nagłówek z nickiem usera, awatar, tab bar dostępny po
 # zalogowaniu, pusty stan listy („Nie masz jeszcze turniejów"). Zły cel: konkretny rekord z seeda.
-- extendedWaitUntilVisible:
-    id: "home-greeting" # <- podmień
+- extendedWaitUntil:
+    visible:
+      id: "home-greeting" # <- podmień
     timeout: 30000
 
 # --- Dowód, że sesja PRZEŻYWA restart (łapie brak entitlements) ------------
 # Bez tego kroku build bez uprawnień do keychaina przechodzi canary: logowanie „działa",
 # ale sesja nie zostaje zapisana i każdy kolejny flow startuje wylogowany.
-- launchApp # bez clearState — ma odtworzyć sesję z bezpiecznego storage
-- extendedWaitUntilVisible:
-    id: "home-greeting" # <- ten sam element co wyżej
+# `- stopApp` + `- openLink`, NIGDY `launchApp` (nagłówek §ZAKAZ `launchApp` BEZPOŚREDNIO PRZED
+# `openLink`): sam `stopApp` nie startuje apki, więc deep link robi ZIMNE wejście — dokładnie to,
+# co ten krok ma sprawdzać (sesja odtworzona z bezpiecznego storage po świeżym starcie procesu).
+- stopApp
+# Wejście w dev server powtarzamy, bo po zatrzymaniu procesu deep link znów przechodzi przez
+# launcher. Onboardingu dev-menu tu już nie ma: kontener nie był czyszczony, więc flaga „sheet
+# widziany" przeżywa restart — dlatego bez czekania na „Continue" (canary jest bramką bootstrapu
+# i nie ma palić budżetu na krok bez skutku).
+- openLink: "myapp://expo-development-client/?url=http%3A%2F%2F127.0.0.1%3A8081" # <- jak wyżej
+- tapOn:
+    text: "Otwórz|Open"
+    optional: true
+- extendedWaitUntil:
+    visible:
+      id: "home-greeting" # <- ten sam element co wyżej
     timeout: 30000
