@@ -5,7 +5,7 @@ description: "Hub stack guidelines dla projektu Expo (React Native). Decision tr
 
 # Expo Overview — Mobile Stack Hub
 
-Ten skill jest **pierwszym przystankiem** gdy pracujesz w repo mobilnym (Expo). Pełni rolę indeksu / routera dla 13 stack-specific skilli Expo (upstream: [`expo/skills`](https://github.com/expo/skills), konwencja nazw `expo-*` = framework OSS, `eas-*` = płatny serwis EAS). Zaczynaj tu, potem deleguj do konkretnego skilla.
+Ten skill jest **pierwszym przystankiem** gdy pracujesz w repo mobilnym (Expo). Pełni rolę indeksu / routera dla 16 stack-specific skilli Expo (upstream: [`expo/skills`](https://github.com/expo/skills), konwencja nazw `expo-*` = framework OSS, `eas-*` = płatny serwis EAS). Zaczynaj tu, potem deleguj do konkretnego skilla.
 
 ## Detekcja stacku
 
@@ -21,7 +21,10 @@ Jesteś w projekcie Expo gdy:
 | Co budujesz / nad czym pracujesz | Skill |
 |---|---|
 | Struktura folderów NOWEGO projektu Expo, gdzie ma żyć plik | `expo-project-structure` |
-| Ekran, komponent UI, animacja, kontrolki, SF Symbols, media | `expo-native-ui` |
+| Ekran, komponent UI, kontrolki, SF Symbols, media, HIG styling | `expo-native-ui` |
+| **Komponent UI: sheet, picker, slider, toggle, menu, sekcja formularza** | **`expo-ui` (sprawdź PIERWSZY — patrz reguła niżej)** |
+| Animacja, gest, przejście między ekranami, haptics, „ruch tnie na urządzeniu" | `expo-animation` |
+| Design tokeny, motyw, spójność wizualna ekranów, audyt driftu | `expo-design-system` |
 | Nawigacja, routing, taby, modale, form sheets, headery | `expo-router` |
 | Setup Tailwinda / NativeWind / `className` w RN | `expo-tailwind-setup` |
 | Fetch z API, React Query, SWR, data loaders, offline cache | `expo-data-fetching` |
@@ -59,32 +62,59 @@ Jesteś w projekcie Expo gdy:
 | `aria-label` | `accessibilityLabel`, `accessibilityRole`, `accessibilityHint` |
 | Browser deep link `https://...` | App scheme `yourapp://...` (deep linking via `expo-router`) |
 
-## Mental model — kiedy native vs cross-platform
+## Reguła wyboru komponentu — `@expo/ui` najpierw
 
-**Domyślnie:** używaj cross-platform RN + NativeWind. To 90% UI. Spójność, jeden codebase, łatwiejsze utrzymanie.
+**Zanim sięgniesz po komponent UI — sheet, picker, slider, toggle, menu, segmented control, sekcję
+formularza, grouped rows — sprawdź `expo-ui`, czy `@expo/ui` ma natywny odpowiednik.** Dopiero gdy go
+nie ma, schodź do wbudowanych komponentów RN albo biblioteki community. Powód: `@expo/ui` renderuje
+prawdziwe SwiftUI / Jetpack Compose, a warstwa uniwersalna od SDK 56+ działa **w Expo Go**, bez
+custom builda.
 
-**Native (`@expo/ui`, skill `expo-ui`):** tylko gdy potrzebujesz **prawdziwego native feel** który cross-platform nie da:
-- Native pickers (data, czas, kontakty) — mają inne zachowanie per platforma
-- Haptyki specyficzne dla platformy
-- Dark mode platformy (automatyczny iOS dynamic colors)
-- Material You (Android 12+) z user theming
-- Liquid Glass (iOS 26+) — szkło z kontekstu wallpaperu
+Konkretnie — do tych rzeczy **nie** bierz Reanimated, `@gorhom/bottom-sheet` ani wbudowanych RN
+`Picker`/`Switch`:
 
-To **nie jest** "na wszystko" — to specjalistyczne narzędzie. Vendor lock realny: wyjście z Expo wymaga przepisania ekranów używających `@expo/ui`.
+| Potrzeba | Weź |
+|---|---|
+| Sheet wysuwany od dołu | `BottomSheet` z `@expo/ui` |
+| Toggle | `Switch` z `@expo/ui` |
+| Slider | `Slider` z `@expo/ui` |
+| Picker daty/czasu | `@expo/ui/community/datetimepicker` |
+| Menu | `Menu` z `@expo/ui` |
+| Sekcja formularza z labelem | `FieldGroup` z `@expo/ui` |
+| Grouped rows (ekran ustawień, panel szczegółów) | `List` + `ListItem` z `@expo/ui` |
 
-## Linki do 14 skilli (alfabetycznie)
+> **`List` z `@expo/ui` NIE jest listą wirtualizowaną.** Renderuje natywne grouped rows — wygląd ekranu
+> Ustawień iOS. Każdy `ListItem` to natywny węzeł na wątku JS, wiersze nie są recyklowane. Do list
+> o dużym lub nieznanym rozmiarze (feedy, wyniki wyszukiwania, katalogi) użyj `FlatList` albo
+> `FlashList`. `List` jest dobry do krótkich, stałych grup.
+
+> **`BottomSheet` sterujesz przez `isPresented` / `onDismiss`** — **nie** przez `isOpen`, `isOpened`,
+> `onIsOpenedChange` ani `onChange`. To propsy `@gorhom/bottom-sheet`; podane tutaj **cicho nic nie
+> zrobią**. Nie myl też uniwersalnego `BottomSheet` z drop-in zamiennikiem
+> `@expo/ui/community/bottom-sheet` (ten jest wyłącznie ścieżką migracji z gorhoma).
+
+**Reszta UI (layout, listy, własne komponenty, styling):** cross-platform RN + NativeWind, jak dotąd —
+patrz `expo-native-ui` i `expo-design-system`.
+
+**Vendor lock jest realny:** wyjście z Expo wymaga przepisania ekranów używających `@expo/ui`. To
+świadomy koszt tego szablonu, nie przeoczenie — ale nie jest powodem, żeby omijać regułę wyżej
+w pojedynczym komponencie.
+
+## Linki do 16 skilli (alfabetycznie)
 
 - **`eas-app-stores`** — build + submit do storeów (App Store / Google Play / TestFlight)
 - **`eas-hosting`** — deploy web bundle + API routes (`+api.ts`) na EAS Hosting
 - **`eas-update-insights`** — health metryki OTA updateów
 - **`eas-workflows`** — EAS workflow YAML (CI/CD)
+- **`expo-animation`** — animacje i gesty (Reanimated worklety, Gesture Handler, haptics, przejścia)
 - **`expo-data-fetching`** — networking, React Query, offline cache
+- **`expo-design-system`** — design tokeny, motyw, komponenty wielokrotnego użytku, audyt driftu
 - **`expo-dev-client`** — custom dev client przez EAS Build
 - **`expo-dom`** — web kod w webview na natywie
 - **`expo-module`** — natywne moduły (Swift/Kotlin/TS)
-- **`expo-native-ui`** — kompletny przewodnik UI (HIG, kontrolki, media, animacje)
+- **`expo-native-ui`** — przewodnik UI platformowego (HIG, semantic colors, kontrolki, media)
 - **`expo-project-structure`** — struktura folderów nowego projektu (Expo Router, src/)
 - **`expo-router`** — nawigacja i routing (stack, taby, modale, headery)
 - **`expo-tailwind-setup`** — TailwindCSS v4 + NativeWind v5 preview
-- **`expo-ui`** — natywne UI przez `@expo/ui` (SwiftUI / Jetpack Compose)
+- **`expo-ui`** — natywne UI przez `@expo/ui` (SwiftUI / Jetpack Compose) — **sprawdzaj pierwszy przy wyborze komponentu**
 - **`expo-upgrade`** — upgrade SDK Expo

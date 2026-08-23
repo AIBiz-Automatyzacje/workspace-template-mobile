@@ -285,7 +285,15 @@ Pattern Things 3, Apple Mail, Gmail.
 - ~80% width — full action commit (auto-execute)
 - Haptic feedback przy 80% threshold cross — sygnalizuje "release = commit"
 
-**Library: `ReanimatedSwipeable`** z `react-native-gesture-handler/ReanimatedSwipeable` (RNGH 3.x) — drop-in replacement dla legacy `Swipeable`, przepisany na Reanimated. Legacy `Swipeable` (import bezpośrednio z `react-native-gesture-handler`) nadal działa, ale nowe projekty powinny zaczynać od `ReanimatedSwipeable`.
+**Library: `ReanimatedSwipeable`** z `react-native-gesture-handler/ReanimatedSwipeable` (RNGH 3.x) — następca legacy `Swipeable`, przepisany na Reanimated.
+
+> **Legacy `Swipeable` został USUNIĘTY w RNGH 3.x.** `import { Swipeable } from 'react-native-gesture-handler'`
+> daje dziś `undefined` w runtime i błąd kompilacji w TS — w `index.d.ts` wersji 3.2.1 nie ma ani
+> jednego wystąpienia `Swipeable` (w 2.32.0 był eksportowany razem z `SwipeableProps`). To nie jest
+> deprecacja z okresem przejściowym: na 3.x jedyną drogą jest subpath
+> `react-native-gesture-handler/ReanimatedSwipeable`. Przy migracji z 2.x podmiana importu nie
+> wystarczy — `ReanimatedSwipeable` przekazuje do `renderRightActions` `SharedValue`, nie
+> `Animated.AnimatedInterpolation`.
 
 ```tsx
 import Swipeable from 'react-native-gesture-handler/ReanimatedSwipeable';

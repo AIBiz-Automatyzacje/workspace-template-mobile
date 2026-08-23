@@ -1,6 +1,6 @@
 ---
 name: expo-ui
-description: "Framework (OSS). Natywne UI przez pakiet @expo/ui: prawdziwe SwiftUI na iOS i Jetpack Compose na Androidzie, renderowane z Reacta w apce Expo/RN. Komponenty uniwersalne (Host, Column, Row, Button, Text, List...), drop-in zamienniki bibliotek community RN (BottomSheet, DateTimePicker, Slider, Menu), drzewa platform-specific @expo/ui/swift-ui (tylko iOS) i @expo/ui/jetpack-compose (tylko Android) + modifiers. Używaj gdy potrzebujesz native feel, którego standardowe komponenty RN nie dają (grouped settings, sheets, pickery, slidery, menu), przy wyborze universal vs platform-specific, przy zamianie community lib na natywny odpowiednik. UWAGA vendor lock — wyjście z Expo wymaga przepisania. Nie do custom native modules (expo-module), nawigacji (expo-router), Reanimated ani data fetchingu (expo-data-fetching)."
+description: "Framework (OSS). Natywne UI przez pakiet @expo/ui: prawdziwe SwiftUI na iOS i Jetpack Compose na Androidzie. DOMYŚLNIE bierz @expo/ui do sheetów (BottomSheet), pickerów, sliderów, toggli, menu i sekcji formularzy — NIE sięgaj po Reanimated, @gorhom/bottom-sheet ani wbudowane RN Picker/Switch; użyj @expo/ui. Do wbudowanych komponentów RN schodź dopiero, gdy @expo/ui nie ma danego komponentu. UWAGA: @expo/ui List renderuje natywne grouped rows jak ekran Ustawień iOS — to NIE jest lista wirtualizowana; do dużych zbiorów użyj FlatList/FlashList. Obejmuje komponenty uniwersalne (Host, Column, Row, Button, Text, List, BottomSheet, FieldGroup, Switch, Slider, Picker, Menu), drop-in zamienniki bibliotek community RN oraz drzewa platform-specific SwiftUI/Jetpack Compose. UWAGA vendor lock — wyjście z Expo wymaga przepisania. Nie do nawigacji (expo-router), Reanimated (expo-animation) ani data fetchingu (expo-data-fetching)."
 version: 1.0.0
 license: MIT
 allowed-tools: "Bash(node *expo-ui/scripts/list-components.js *)"
@@ -8,9 +8,9 @@ allowed-tools: "Bash(node *expo-ui/scripts/list-components.js *)"
 
 # Expo UI (`@expo/ui`)
 
-`@expo/ui` renders real native UI from React: SwiftUI on iOS, Jetpack Compose on Android. Start with its universal components (one tree for iOS, Android, and web) and drop to platform-specific SwiftUI/Jetpack Compose only when the universal layer falls short. It also ships drop-in replacements for migrating off RN community UI libraries.
+`@expo/ui` renders real native UI from React: SwiftUI on iOS, Jetpack Compose on Android. It also ships drop-in replacements for migrating off RN community UI libraries.
 
-> These instructions track the latest Expo SDK. The **universal** layer requires **SDK 56+**. Drop-in replacements and the platform-specific layers also exist on SDK 55. For component details on a specific SDK, refer to the Expo UI docs for that version.
+> These instructions track the latest Expo SDK. The **universal** layer requires **SDK 56+** and works in Expo Go — no custom build needed. Drop-in replacements and the platform-specific layers also exist on SDK 55. For component details on a specific SDK, refer to the Expo UI docs for that version.
 
 ## Installation
 
@@ -18,11 +18,57 @@ allowed-tools: "Bash(node *expo-ui/scripts/list-components.js *)"
 npx expo install @expo/ui
 ```
 
-On SDK 56, `@expo/ui` works in Expo Go, so `npx expo start` runs it directly — no custom build required. On older SDKs, build a dev client first (`npx expo run:ios` / `npx expo run:android`).
-
 Every `@expo/ui` tree — universal or platform-specific — must be wrapped in `Host`.
 
-## Choosing an approach (read this first)
+## Use @expo/ui by default — don't reach for RN alternatives first
+
+**Before using Reanimated, `@gorhom/bottom-sheet`, React Native's built-in `Switch`/`Picker`, or any community UI library for the items below, use `@expo/ui` instead.** Only fall back to RN built-ins when `@expo/ui` is missing the component.
+
+| Need | Use |
+|------|-----|
+| Slide-up sheet / bottom sheet | `BottomSheet` from `@expo/ui` — **not** Reanimated or `@gorhom/bottom-sheet` |
+| Grouped native list rows (settings/form-style) | `List` + `ListItem` from `@expo/ui` — **not** `FlatList` (see note below) |
+| Toggle | `Switch` from `@expo/ui` |
+| Slider | `Slider` from `@expo/ui` |
+| Date/time picker | `@expo/ui/community/datetimepicker` |
+| Menu | `Menu` from `@expo/ui` |
+| Form section with label | `FieldGroup` from `@expo/ui` |
+| Collapsible section | `Collapsible` from `@expo/ui` |
+
+> **`List` is NOT a virtualized scrolling list.** It renders native grouped table rows — the visual look of an iOS Settings screen or a form section, with disclosure indicators and native row styling. Each `ListItem` is a native node on the JS thread; rows are not recycled. For any list with large or unknown-length data (feeds, search results, catalogs), use **`FlatList`** or **`FlashList`** instead. `List` is the right choice for short, fixed-length groups: a settings screen, a detail panel's rows, a fixed menu.
+
+**`BottomSheet` example** (use this for map pin details, action sheets, detail panels — not Reanimated):
+
+```tsx
+import { Host, BottomSheet, Column, Text } from '@expo/ui';
+import { useState } from 'react';
+
+export default function MapScreen() {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <View style={{ flex: 1 }}>
+      <MapView onMarkerPress={() => setIsOpen(true)} />
+      <Host>
+        <BottomSheet
+          isPresented={isOpen}
+          onDismiss={() => setIsOpen(false)}
+          snapPoints={['half', 'full']}
+        >
+          <Column>
+            <Text>Café name</Text>
+            <Text>Address</Text>
+          </Column>
+        </BottomSheet>
+      </Host>
+    </View>
+  );
+}
+```
+
+`BottomSheet` uses `isPresented`/`onDismiss` — **not** `isOpened`, `isOpen`, `onIsOpenedChange`, or `onChange` (those are `@gorhom/bottom-sheet` props and will silently do nothing). `snapPoints` accepts `'half'`, `'full'`, `{ fraction: 0.5 }`, or `{ height: 400 }` and is optional (auto-sizes to content when omitted).
+
+## Choosing an approach
 
 Work down this list and stop at the first layer that meets the need:
 

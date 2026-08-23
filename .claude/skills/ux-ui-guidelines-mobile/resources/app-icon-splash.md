@@ -89,9 +89,11 @@ iOS 18 wprowadziło 3 warianty wymagane dla premium feel:
 
 **Tinted:** najtrudniejszy. Test: zrender ikonę w 100% white na transparentnym tle. Działa? OK. Nie działa? Tinted wariant będzie rozmazany.
 
-### iOS 26 Liquid Glass — obowiązkowe nowe zasady ikon
+### iOS 26/27 Liquid Glass — obowiązkowe nowe zasady ikon
 
-Apple na WWDC25 (sesja "Design app icons for Liquid Glass", 312K views, plus oficjalna dokumentacja) opublikował **zaktualizowane zasady ikonowe wymagane dla iOS 26**. Templates do pobrania na developer.apple.com (Figma + Sketch).
+Apple na WWDC25 (sesja "Design app icons for Liquid Glass", 312K views, plus oficjalna dokumentacja) opublikował **zaktualizowane zasady ikonowe wymagane dla iOS 26**. Zasady obowiązują dalej; **iOS 27 (WWDC26)** poszedł krok dalej — ikony dostały osobne warstwy Liquid Glass (ostrzejszy, lepiej zdefiniowany render), a użytkownik wybiera wygląd Clear/Tinted w customizacji Home Screen.
+
+**Pobieraj najnowsze Apple Design Resources** — design kits Figma/Sketch dla iOS/iPadOS/macOS **27**, wydane 23.06.2026 (aktualizacje Liquid Glass, rozszerzone komponenty i stany, nazewnictwo zbieżne z kodem, lepszy resizing). Starsze templates dla 26 nie mają tych zmian.
 
 **Reguły (oficjalne, nie sugestie):**
 
@@ -107,9 +109,9 @@ Apple na WWDC25 (sesja "Design app icons for Liquid Glass", 312K views, plus ofi
 
 **Praktyczne workflow:**
 
-1. Pobierz oficjalny template Apple z developer.apple.com (Figma lub Sketch)
+1. Pobierz oficjalny template Apple z developer.apple.com (Figma lub Sketch) — **kity dla 27, wydane 23.06.2026**
 2. Zaprojektuj **bez statycznych efektów** — material doda je przy renderowaniu
-3. Test w Apple's Liquid Glass simulator (część Xcode 26 + dostępny w preview Figma plugin)
+3. Test w **Icon Composer** — darmowej apce Apple dostarczanej z Xcode (od Xcode 26; aktualna wersja wymaga macOS Tahoe 26.4+). Jeden plik warstwowy, live preview trybów renderowania (Default / Dark / Mono, z wariantami Clear i Tinted) i przełączanie iPhone / iPad / Mac / Watch. Gotowy plik `.icon` wrzucasz do projektu Xcode — sam generuje wymagane rozmiary; da się też wyeksportować spłaszczoną wersję pod marketing. Nazwa „Liquid Glass simulator" nie istnieje jako narzędzie Apple
 4. Audyt: ikona wygląda OK statycznie? Material doda właściwą głębię. Wygląda już "głęboko" statycznie? **Usuń efekty** — będzie podwójnie głęboka po renderze
 
 **Wpływ na istniejące apki:** po rekompilacji z Xcode 26 stare ikony **nadal działają**, ale **nie zyskują pełnego efektu LG**. Jeśli adoptujesz Liquid Glass jako design language (patrz [[platform-conventions.md]] sekcja iOS 26), ikona wymaga redesignu pod nowe templates.
@@ -156,13 +158,15 @@ Android masks ikonę do shape ustawionej przez user / OEM (Pixel = circle, Samsu
 
 ### Monochrome (Android 13+)
 
-Android 13+ "themed icons" — system rendering w monochrome user-tint. Wymaga **3 warstwy:**
+Android 13+ "themed icons" — system rendering w monochrome user-tint. Pełny zestaw to **3 warstwy:**
 
 | Layer | Cel |
 |-------|-----|
 | Foreground | Color version |
 | Background | Color version |
 | Monochrome | **Single color silhouette** dla theme system |
+
+> **Warstwa `monochrome` jest formalnie opcjonalna.** Od **Android 16 QPR 2** system sam generuje themed icon dla aplikacji, które własnej warstwy nie dostarczają — ale wynik jest wygenerowany automatycznie i nie masz nad nim kontroli. Własny `monochrome` to jedyna droga do przewidywalnego wyglądu **i jedyna droga do themed icon na Android 13–16 (przed QPR 2)**. Themed icon i tak się nie pokaże, jeśli użytkownik nie włączy themed app icons albo launcher ich nie wspiera.
 
 ```json
 // app.json
@@ -218,12 +222,37 @@ PNG icons w mdpi/hdpi/xhdpi/xxhdpi/xxxhdpi sizes. Expo handle to automatycznie z
 
 **iOS 10.3+ alternate icons** API: user może zmienić icon w app settings. Nice-to-have feature dla premium apek.
 
-```tsx
-// React Native
-import { setAppIcon } from 'react-native-dynamic-app-icon';
+W Expo używaj `expo-alternate-app-icons` (latest 8.0.0, peer `expo >= 53`). Config plugin w `app.json`:
 
-await setAppIcon('darkVariant');
+```json
+["expo-alternate-app-icons", [
+  {
+    "name": "IconA",
+    "ios": "./assets/icon-a.png",
+    "android": {
+      "foregroundImage": "./assets/icon-a-foreground.png",
+      "backgroundColor": "#ffffff"
+    }
+  }
+]]
 ```
+
+```tsx
+import {
+  setAlternateAppIcon,
+  getAppIconName,
+  resetAppIcon,
+  supportsAlternateIcons,
+} from 'expo-alternate-app-icons';
+
+if (supportsAlternateIcons) {
+  await setAlternateAppIcon('IconA');
+}
+```
+
+**Wymaga** `npx expo install expo-alternate-app-icons` + `npx expo prebuild --clean`; **nie działa w Expo Go**.
+
+> ⚠️ **Nie używaj `react-native-dynamic-app-icon`** — pakiet stoi na 1.1.0 z 2019 (peer `react-native >= 0.41.2`), bez config plugina Expo i bez New Architecture. W projekcie Expo nie zadziała bez ręcznego patchowania natywnych projektów.
 
 ---
 

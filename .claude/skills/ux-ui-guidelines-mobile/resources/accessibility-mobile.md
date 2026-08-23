@@ -204,6 +204,10 @@ iOS Liquid Glass / Material You glass effects są piękne, ale nie-czytelne dla 
 
 `backdropFilter` (web CSS) **nie istnieje w `ViewStyle` React Native** — nie renderuje blur, tylko cicho nic nie robi. Blur na natywie idzie przez `expo-blur` (`BlurView`), które renderuje prawdziwy natywny blur i (jak w tabeli niżej) samo respektuje Reduce Transparency.
 
+> **Powierzchnie Liquid Glass ≠ zwykły blur.** Od iOS 26 dedykowanym modułem SDK jest **`expo-glass-effect`** (`GlassView`, `GlassContainer` do łączenia wielu szklanych warstw w jeden efekt) — natywny efekt szkła z automatycznym fallbackiem do zwykłego `View` na iOS < 26 i na platformach bez wsparcia. Dostępność sprawdzasz przez `isLiquidGlassAvailable()` (czy Liquid Glass jest wkompilowany w apkę) oraz `isGlassEffectAPIAvailable()` (czy API jest dostępne w runtime — zabezpieczenie przed crashem na części bet iOS 26). Wspierane: iOS, tvOS, Expo Go. `expo-blur` zostaje dla zwykłego blur cross-platform (Android: RenderNode od SDK 31 przez `experimentalBlurMethod`).
+>
+> Pamiętaj o drugim wektorze a11y obok Reduce Transparency: **od iOS 27 użytkownik sam reguluje intensywność przezroczystości Liquid Glass suwakiem** (Settings → Appearance → Liquid Glass). Nie zakładaj domyślnego ustawienia — czytelność testuj w obu skrajnościach suwaka.
+
 ```tsx
 import { AccessibilityInfo } from 'react-native';
 import { BlurView } from 'expo-blur';
@@ -456,4 +460,4 @@ export function AccessibleButton({
 
 ---
 
-*Źródła: Apple Accessibility Programming Guide (developer.apple.com/accessibility), Android Accessibility Developer Guide (developer.android.com/guide/topics/ui/accessibility), React Native Accessibility (reactnative.dev/docs/accessibility), W3C WCAG 2.2 (w3.org/WAI/WCAG22), Apple Dynamic Type usage stats (WWDC 2023, 2024). Update: 2026-05-10.*
+*Źródła: Apple Accessibility Programming Guide (developer.apple.com/accessibility), Android Accessibility Developer Guide (developer.android.com/guide/topics/ui/accessibility), React Native Accessibility (reactnative.dev/docs/accessibility), W3C WCAG 2.2 (w3.org/WAI/WCAG22 — nadal aktualna W3C Recommendation z 12.12.2024), Apple Dynamic Type usage stats (WWDC 2023, 2024), WWDC 2026 / iOS 27 (rewizja Liquid Glass + użytkowniczy suwak przezroczystości), expo-glass-effect docs (docs.expo.dev/versions/latest/sdk/glass-effect). Update: 2026-08-23.*

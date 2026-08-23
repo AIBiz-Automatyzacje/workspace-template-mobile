@@ -450,9 +450,9 @@ Każdy Implementation Unit MUSI mieć zadeklarowany `Delegate to:` — nazwa sub
 
 | Ścieżki w `Pliki:` | Subagent | Skille (mirror dla `Skills in play:`) |
 |---|---|---|
-| Tylko `*.tsx` w `app/`, `components/`, `screens/`, lub native config (`app.json`, `app.config.ts`) | `feature-builder-mobile-ui` | expo-overview, expo-native-ui, expo-router, expo-tailwind-setup, figma:figma-use, figma-design-to-code |
+| Tylko `*.tsx` w `app/`, `components/`, `screens/`, lub native config (`app.json`, `app.config.ts`) | `feature-builder-mobile-ui` | expo-overview, expo-native-ui, expo-ui, expo-animation, expo-design-system, expo-router, expo-tailwind-setup, figma:figma-use, figma-design-to-code |
 | Tylko `*.ts` w `lib/`, `hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-mobile-data` | expo-overview, expo-data-fetching, supabase-dev-guidelines, security, sentry-integration |
-| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-native-ui, expo-router, expo-tailwind-setup, expo-data-fetching, supabase-dev-guidelines, security, sentry-integration, figma:figma-use, figma-design-to-code |
+| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-native-ui, expo-ui, expo-animation, expo-design-system, expo-router, expo-tailwind-setup, expo-data-fetching, supabase-dev-guidelines, security, sentry-integration, figma:figma-use, figma-design-to-code |
 
 **Reguła praktyczna:** jeśli da się rozsądnie podzielić na dwa osobne IU (jeden UI, drugi data) — podziel. `feature-builder-mobile-fullstack` używaj **tylko** gdy podział byłby sztuczny (np. ekran logowania z OAuth, gdzie UI bez auth call lub auth call bez ekranu są bezużyteczne).
 

@@ -133,10 +133,14 @@ USING ((SELECT auth.uid()) = user_id);
 
 Od `supabase-js >= v2.44.0` dostępna jest autoryzacja kanałów Realtime przez RLS na tabeli `realtime.messages`.
 
-> **Ważne:** dla kanałów prywatnych (`config: { private: true }`) wyłącz w Dashboardzie
-> **Database → Replication → Realtime → „Allow public access"** (domyślnie może być włączone) —
-> inaczej RLS na `realtime.messages` nie jest wymuszane i każdy klient dostanie dostęp do kanału
-> niezależnie od policy.
+> **Ważne:** dla kanałów prywatnych (`config: { private: true }`) wyłącz **„Allow public access"**
+> (Channel Restrictions) na ekranie **Realtime Settings** —
+> `https://supabase.com/dashboard/project/_/realtime/settings`. Dopóki jest włączone, RLS na
+> `realtime.messages` nie jest wymuszane przy joinie, więc każdy z anon key może subskrybować
+> i nadawać na dowolnym kanale.
+>
+> *(Ustawienie NIE leży już w Database → Replication — ma dedykowany ekran Realtime Settings.
+> Operator idący starą ścieżką nie znajdzie przełącznika i zostawi kanał prywatny z publicznym dostępem.)*
 
 ### Konfiguracja
 

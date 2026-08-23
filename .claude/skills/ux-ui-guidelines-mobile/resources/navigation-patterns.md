@@ -210,21 +210,21 @@ export default function ModalLayout() {
 
 ### Bottom sheet z detents (iOS native)
 
-iOS supports natively `formSheet` + detents (medium/large) od iOS 15+. Expo Router wspiera od SDK 51+.
+iOS supports natively `formSheet` + detents od iOS 15+. Po stronie Expo Routera propsy `sheet*` są od **SDK 51**, ale tam (react-native-screens 3.31) działają **tylko na iOS** i wyłącznie ze stringowymi detentami (`'medium' | 'large' | 'all'`). **Detenty numeryczne** (`[0.5, 1]`, `'fitToContents'`) oraz **`formSheet` na Androidzie** wymagają RNS 4.0, czyli **Expo SDK 52+**. `flex: 1` w sheecie z numerycznymi detentami działa poprawnie na iOS dopiero od **SDK 55** (i nie działa z `fitToContents` — tam podaj jawny rozmiar treści, bo sheet musi znać realną wysokość contentu).
 
 ```tsx
 <Stack.Screen
   name="filter"
   options={{
     presentation: "formSheet",
-    sheetAllowedDetents: [0.5, 1], // iOS 15+ — liczby 0-1 (lub 'fitToContents'), NIE stringi 'medium'/'large'
-    sheetGrabberVisible: true, // pokaż grabber u góry
+    sheetAllowedDetents: [0.5, 1], // SDK 52+ (RNS 4.0) — liczby 0-1 lub 'fitToContents'; stringi 'medium'/'large' to legacy z RNS 3.x
+    sheetGrabberVisible: true, // pokaż grabber u góry — iOS-only
     sheetCornerRadius: 16,
   }}
 />
 ```
 
-Android obsługuje maks. 3 detenty, iOS dowolną liczbę. Detenty muszą być posortowane rosnąco.
+Android obsługuje maks. 3 detenty (dotyczy SDK 52+, gdzie `formSheet` w ogóle działa na Androidzie), iOS dowolną liczbę. Detenty muszą być posortowane rosnąco.
 
 **Kiedy `0.5` (medium) first:**
 - Selekcja z listy 3-7 opcji
@@ -235,7 +235,7 @@ Android obsługuje maks. 3 detenty, iOS dowolną liczbę. Detenty muszą być po
 - Form który może wymagać scroll
 - Preview z możliwością edit
 
-**Android equivalent:** `@gorhom/bottom-sheet` (najpopularniejsza biblioteka, snap points zamiast detents).
+**Android equivalent:** `BottomSheet` z `@expo/ui` — natywny Jetpack Compose, `snapPoints` zamiast detents, jeden komponent na obie platformy (patrz skill `expo-ui`). `@gorhom/bottom-sheet` dopiero jako fallback — kryteria w `sheets-modals.md`.
 
 ---
 

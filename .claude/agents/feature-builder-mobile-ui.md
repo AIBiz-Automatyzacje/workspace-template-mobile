@@ -4,6 +4,9 @@ description: "Implementuje warstwę UI mobile (komponenty React Native, Expo Rou
 skills:
   - expo-overview
   - expo-native-ui
+  - expo-ui
+  - expo-animation
+  - expo-design-system
   - expo-router
   - expo-tailwind-setup
   - ux-ui-guidelines-mobile

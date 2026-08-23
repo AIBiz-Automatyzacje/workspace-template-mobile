@@ -149,12 +149,17 @@ Cytat z 472 głosami: *"It un-'pro'd my phone."* Inny (143 głosów): *"The glas
 
 **Implikacja dla buildera:** jeśli sam Apple nie potrafi zoptymalizować Liquid Glass na flagowcu, **custom implementacja w indie apce będzie jeszcze gorsza**. Solid surfaces wygrywają na trzech wymiarach: accessibility, performance, longevity (trend już dziś "feels dated").
 
+> **Stan na 08.2026 — zarzut o czytelność Apple zaadresował systemowo.** iOS 26.1 (listopad 2025) dał użytkownikowi wybór Liquid Glass **Clear / Tinted** (Settings → Display & Brightness → Liquid Glass; „Tinted" podbija opacity i kontrast), a iOS 27 (WWDC26) przebudował sam materiał — lepsza dyfuzja treści pod szkłem, większa głębia i separacja, mniej przezroczyste domyślne ustawienie oraz **suwak intensywności przezroczystości** (Settings → Appearance → Liquid Glass), aż do pełnej nieprzezroczystości.
+>
+> Co z tego wynika: argument „Liquid Glass = trwale nieczytelny" jest **nieaktualny**. Ale Twoja apka nadal wymaga własnego audytu kontrastu — **nie zakładaj, że użytkownik siedzi na „Tinted" albo na wysokim ustawieniu suwaka**. Testuj tekst na warstwach glass w **obu skrajnościach suwaka**, nie tylko w domyślnej. Zarzuty wydajnościowe z tabeli wyżej to osobna oś i one nie zniknęły wraz z poprawkami czytelności.
+
 **Cross-platform implementacje Liquid Glass** (jeśli mimo wszystko chcesz):
 
 | Biblioteka | Platforma | Status |
 |------------|-----------|--------|
-| **Expo UI** (Liquid Glass modifier) | iOS | Oficjalne wsparcie od zespołu Expo, najbezpieczniejsza ścieżka |
-| `@callstack/liquid-glass` + Reanimated | iOS (RN) | Działa, kontrolowane efekty (277↑) |
+| **`expo-glass-effect`** (oficjalny pakiet SDK, 57.0.1, od SDK 54) | iOS / tvOS (+ Expo Go) | **DOMYŚLNY WYBÓR w projektach Expo** — natywny `UIVisualEffectView` z iOS 26: `GlassView` / `GlassContainer`, `glassEffectStyle` `'clear' \| 'regular' \| 'none'` (lub obiekt `{ animate, animationDuration }`), guardy `isLiquidGlassAvailable()` / `isGlassEffectAPIAvailable()`, auto-fallback do zwykłego `View` poniżej iOS 26. **Uwaga:** `opacity: 0` na `GlassView` lub na dowolnym rodzicu wyłącza efekt — do fade używaj wbudowanych propsów animacji |
+| **Expo UI** (Liquid Glass modifier) | iOS | Oficjalne wsparcie od zespołu Expo, najbezpieczniejsza ścieżka na poziomie komponentu |
+| `@callstack/liquid-glass` + Reanimated | iOS (RN) | Żyje (0.8.1), kontrolowane efekty (277↑) — opcja dla bare RN / zaawansowanych animacji z Reanimated |
 | `expo-liquid-glass-view` | iOS (RN) | Demo wygląda jak "LSD trip" wg autora — komentarze 208↑ jednoznacznie negatywne |
 | `Liquid` (Jetpack Compose) | Android | Od 1.0.0 z Compose Multiplatform support |
 
@@ -408,4 +413,4 @@ Nigdy nie definiuj kolorów inline w komponentach.
 - [[resources/polish-checklist.md]] — image outline / border zamiast drop-shadow (Component patterns polish)
 - [[resources/ai-pitfalls.md]] — chaotyczny system kolorów jako AI signature
 
-*Źródła: Apple HIG Color (developer.apple.com/design/human-interface-guidelines/color), Material 3 Color (m3.material.io/styles/color), oklch.com, contrast-ratio.com, accessible-colors.com, WCAG 2.2 (w3.org/TR/WCAG22), wiki/kolory-i-dark-mode. Ostatni update: 2026-05-10.*
+*Źródła: Apple HIG Color (developer.apple.com/design/human-interface-guidelines/color), Material 3 Color (m3.material.io/styles/color), oklch.com, contrast-ratio.com, accessible-colors.com, WCAG 2.2 (w3.org/TR/WCAG22 — nadal aktualna W3C Recommendation z 12.12.2024), wiki/kolory-i-dark-mode, WWDC 2026 / iOS 27. Ostatni update: 2026-08-23.*

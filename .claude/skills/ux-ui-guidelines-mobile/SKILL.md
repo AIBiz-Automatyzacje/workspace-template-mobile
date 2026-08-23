@@ -184,12 +184,24 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 
 ## Powiązane Skills
 
+Ten skill mówi **co i dlaczego** (pryncypia UX, platform conventions, wzorce wizualne). O tym, **czym
+to zaimplementować**, decydują skille Expo — i to one są źródłem prawdy przy rozbieżności:
+
 - **expo-overview** — hub stack guidelines (decision tree który expo-* skill kiedy)
-- **expo-native-ui** — implementacja UI w Expo Router (native tabs, animacje, SF Symbols, blur)
+- **expo-ui** — **sprawdzaj pierwszy przy wyborze komponentu**: sheet, picker, slider, toggle, menu,
+  sekcja formularza, grouped rows. Natywne SwiftUI / Jetpack Compose, od SDK 56+ w Expo Go.
+  Wbudowane komponenty RN i biblioteki community dopiero, gdy `@expo/ui` nie ma odpowiednika
+- **expo-animation** — implementacja ruchu i gestów (Reanimated worklety, Gesture Handler, haptics,
+  przejścia ekranów). Tutejszy `motion-microinteractions.md` mówi *kiedy i co animować*; tamten skill
+  mówi *jak to napisać, żeby nie tnęło na urządzeniu*
+- **expo-design-system** — gdzie żyją tokeny (kolor, spacing, typografia, radius, shadow, motion),
+  konwencje wariantów komponentów, audyt driftu. Tutejsze pliki dają wartości i uzasadnienie, tamten
+  skill — strukturę, w której mają mieszkać
+- **expo-native-ui** — platformowe UI w Expo Router (native tabs, semantic colors, SF Symbols, blur)
 - **expo-tailwind-setup** — TailwindCSS v4 + NativeWind v5 setup
 - **ux-ui-guidelines** — webowy odpowiednik (React 19 + Tailwind v4 web)
 - **mobile-e2e-maestro** — automatyzacja testów E2E mobile
 
 ---
 
-*Skill universal pod każdą aplikację mobilną. 18 plików w `resources/`, ~6400 linii. Ostatni update: 2026-05-15 (iOS 26 Liquid Glass + M3 Expressive 18K data + concentric shapes 3 typy + thumb zone myth busted + Duolingo retention case + Christine Rode platform-native).*
+*Skill universal pod każdą aplikację mobilną. 18 plików w `resources/`, ~6400 linii. Ostatni update: 2026-08-23 (iOS 27 — rewizja Liquid Glass pod czytelność + użytkownicki suwak przezroczystości, WWDC 2026-06-08; Android 17 stabilny 16.06.2026/API 37 — M3 Expressive z blur/translucencją w menu, sliderach i quick settings; Apple Design Resources dla iOS/iPadOS/macOS 27 (23.06.2026) + Icon Composer zamiast nieistniejącego „Liquid Glass simulatora"; `expo-glass-effect` dla powierzchni szklanych; monochrome opcjonalny od Android 16 QPR 2; odświeżone wersje bibliotek — Reanimated 4, RNGH 3, gorhom 5.2.x, SF Symbols 7000+, Lucide ISC/1776; wcześniej: iOS 26 Liquid Glass + M3 Expressive 18K data + concentric shapes 3 typy + thumb zone myth busted + Duolingo retention case + Christine Rode platform-native).*

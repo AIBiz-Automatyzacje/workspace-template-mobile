@@ -1,6 +1,27 @@
 # Sheets & modals — overlays mobile
 
-Bottom sheety, modale, popovery, alerty, toasty. Decision tree który overlay kiedy + implementation w Expo (native iOS sheets, Gorhom, sonner-native).
+Bottom sheety, modale, popovery, alerty, toasty. Decision tree który overlay kiedy + implementation w Expo (`@expo/ui`, native iOS sheets, Gorhom, sonner-native).
+
+---
+
+## Czym to zaimplementować — kolejność wyboru
+
+Ten dokument mówi **który overlay** i **jak ma się zachowywać** (to jest warstwa UX). O tym, **jakim
+komponentem** go zbudować, decyduje skill **`expo-ui`** — i tam jest źródło prawdy:
+
+1. **`BottomSheet` z `@expo/ui`** — domyślny wybór dla sheetów. Prawdziwe SwiftUI / Jetpack Compose,
+   od SDK 56+ działa w Expo Go bez custom builda. Sterowanie: `isPresented` / `onDismiss`,
+   `snapPoints` przyjmuje `'half'`, `'full'`, `{ fraction }`, `{ height }`.
+2. **Native iOS sheet przez `expo-router`** — gdy sheet jest ekranem w nawigacji (detents, routing).
+3. **`@gorhom/bottom-sheet`** — dopiero gdy potrzebujesz czegoś, czego `@expo/ui` nie daje (patrz
+   sekcja „Gorhom Bottom Sheet" niżej), albo gdy migrujesz istniejącą integrację.
+
+> **Nie buduj sheeta od zera na Reanimated.** Jeśli `@expo/ui` ma komponent, ręczna implementacja to
+> praca wyrzucona i gorszy platform fit.
+
+> **Pułapka przy przechodzeniu z gorhoma:** `BottomSheet` z `@expo/ui` **nie** przyjmuje `isOpen`,
+> `isOpened`, `onIsOpenedChange` ani `onChange`. Podane tam **cicho nic nie zrobią** — sheet po prostu
+> się nie otworzy, bez błędu. Używaj `isPresented` / `onDismiss`.
 
 ---
 
@@ -57,7 +78,7 @@ Test: otwórz bottom sheet z TextInputem, focus inputa.
 
 **Dwa zachowania:**
 
-1. **Sheet pushes up:** sheet expanduje się powyżej klawiatury (Gorhom default z `keyboardBehavior="extend"`)
+1. **Sheet pushes up:** sheet expanduje się powyżej klawiatury. Uwaga na default: w `@gorhom/bottom-sheet` domyślne `keyboardBehavior` to **`'interactive'`**, nie `'extend'` — rozciągnięcie do max snap pointa (`'extend'`) trzeba podać **jawnie** (trzecia opcja: `'fillParent'`). Na Androidzie do płynnego push-up ustaw `android_keyboardInputMode="adjustResize"` — default to `'adjustPan'`. Powiązany default: `keyboardBlurBehavior: 'none'`
 2. **Sheet resize:** sheet zostaje na miejscu, content się skraca (gdy sheet ma scroll)
 
 Test oba — jeden zwykle wygląda lepiej dla konkretnego content. Form heavy → resize. Quick input → push up.
@@ -92,20 +113,26 @@ export const unstable_settings = {
 />
 ```
 
-**Limitacje:** iOS-only behavior, na Androidzie expo-router renderuje full-screen modal. Akceptowalne — bottom sheet to nie native Android pattern.
+**Limitacje:** `formSheet` działa natywnie na **obu** platformach — na Androidzie od SDK 52 / RNS 4.0 przez `BottomSheetBehavior` (na iOS `UIModalPresentationFormSheet`). Ograniczenia Androida: maks. 3 detenty, brak wsparcia dla nagłówków native-stacka i zagnieżdżonych stacków wewnątrz form sheetu (`headerShown`, `title`, przyciski nagłówka nie wyrenderują się w sheecie). `sheetGrabberVisible` to opcja **iOS-only**.
 
 ---
 
 ## Gorhom Bottom Sheet
 
-**Kiedy preferować:**
-- Cross-platform identical experience
-- Custom animacje (np. crossfade content między snap pointami)
-- Custom backdrop (blur, gradient, interactive elements)
-- 3+ snap pointów
-- Sheet jako część layoutu strony (nie modal navigation)
+> **To jest ścieżka fallback, nie domyślna.** Najpierw sprawdź `BottomSheet` z `@expo/ui` (skill
+> `expo-ui`). Do gorhoma schodź tylko z konkretnego powodu z listy niżej — a przy istniejącej
+> integracji rozważ drop-in `@expo/ui/community/bottom-sheet` zamiast pełnej zależności.
 
-**Performance:** Reanimated 3 backbone, native driver, 60fps. Główny narzut: setup boilerplate + provider w roocie.
+**Kiedy zejść do gorhoma:**
+- Custom animacje, których uniwersalny `BottomSheet` nie wyraża (np. crossfade content między snap pointami)
+- Custom backdrop (blur, gradient, interaktywne elementy w backdropie)
+- Precyzyjne, procentowe snap pointy (3+) poza `'half'` / `'full'` / `{ fraction }` / `{ height }`
+- Sheet jako trwała część layoutu strony, nie modal navigation
+- Projekt na SDK < 56, gdzie warstwa uniwersalna `@expo/ui` jeszcze nie istnieje
+
+**Performance:** backbone na Reanimated, native driver, 60fps. Główny narzut: setup boilerplate + provider w roocie.
+
+> **Wersje:** `@gorhom/bottom-sheet` (5.2.14 na 08.2026) deklaruje peer `react-native-reanimated: ">=3.16.0 || >=4.0.0-"` oraz `react-native-gesture-handler >=2.16.1` — czyli wspiera **zarówno Reanimated 3.16+, jak i 4.x** (wsparcie dla v4 doszło w v5.1.8, 27.07.2025). Na projektach z New Architecture / Reanimated 4 trzymaj `@gorhom/bottom-sheet >= 5.1.8`.
 
 **Boilerplate:**
 

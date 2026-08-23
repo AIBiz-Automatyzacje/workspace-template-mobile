@@ -4,6 +4,9 @@ description: "Implementuje feature mobile dotykający równolegle UI i warstwy d
 skills:
   - expo-overview
   - expo-native-ui
+  - expo-ui
+  - expo-animation
+  - expo-design-system
   - expo-router
   - expo-tailwind-setup
   - ux-ui-guidelines-mobile

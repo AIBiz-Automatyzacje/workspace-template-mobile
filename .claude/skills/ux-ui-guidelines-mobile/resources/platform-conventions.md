@@ -22,9 +22,13 @@ W 2026 Apple zaostrza review — apki ignorujące HIG (custom hamburger menu na 
 
 ---
 
-## iOS 26 — Liquid Glass jako nowy design language
+## iOS 26/27 — Liquid Glass jako nowy design language
 
-W 2025 Apple wprowadził **Liquid Glass** — translucentny język wizualny zastępujący solid surfaces na wszystkich platformach Apple. Pełna oficjalna specyfikacja: WWDC25 sesje "Meet Liquid Glass" + "Get to know the new design system" + dokumentacja na developer.apple.com.
+W 2025 (WWDC25, iOS 26) Apple wprowadził **Liquid Glass** — translucentny język wizualny zastępujący solid surfaces na wszystkich platformach Apple. Na **WWDC26 (czerwiec 2026, iOS 27)** Apple przebudował jego fundamenty, reagując na feedback: szkło **skuteczniej dyfunduje złożoną treść pod spodem**, daje **większą głębię i separację** (czytelność), a użytkownik dostał **suwak intensywności przezroczystości** (Settings → Appearance → Liquid Glass; pojawia się też na ekranie setupu, z podglądem czytelności) — do pełnej nieprzezroczystości włącznie. Domyślne szkło w iOS 27 jest mniej przezroczyste niż w iOS 26. Ikony aplikacji dostały osobne warstwy Liquid Glass (ostrzejsze) plus wybór Clear/Tinted w customizacji Home Screen.
+
+**Co to znaczy dla buildera:** większość zmian aplikuje się automatycznie do apek używających komponentów systemowych po rekompilacji — ale **nie zakładaj konkretnego ustawienia suwaka**; kontrast testuj w obu skrajnościach (patrz [[color-darkmode.md]]).
+
+Pełna oficjalna specyfikacja: sesje WWDC25 ("Meet Liquid Glass", "Get to know the new design system") + WWDC26, dokumentacja na developer.apple.com oraz **Apple Design Resources** — design kits Figma/Sketch dla iOS/iPadOS/macOS **27** wydane 23.06.2026 (aktualizacje Liquid Glass, rozszerzone komponenty i stany, nazewnictwo zbieżne z kodem, lepszy resizing).
 
 **Co to jest mechanicznie:** soczewka zaginająca i koncentrująca światło zamiast rozpraszania (klasyczny blur). Dotyk podświetla powierzchnię od miejsca tapnięcia na zewnątrz, ruch urządzenia przesuwa wirtualne źródła światła. Dwa warianty:
 - **Regular** — adaptacyjny, auto-flips light/dark, działa wszędzie. Default.
@@ -39,18 +43,24 @@ W 2025 Apple wprowadził **Liquid Glass** — translucentny język wizualny zast
 | Strategia | Pros | Cons | Kiedy wybrać |
 |-----------|------|------|--------------|
 | **Pełna adopcja Liquid Glass** | "Modern iOS 26 native feel", App Store featuring boost | Krzywa nauki, wymaga audytu kontrastu na każdym ekranie | Apka z dużym budżetem i zespołem QA |
-| **Świadome odrzucenie** (solid surfaces) | Defensible jako accessibility-first, czytelność, brand identity | Może wyglądać "dated" za 2-3 lata na iOS | Apki z silnym brand color (np. burgundowy heritage), apki accessibility-critical |
+| **Świadome odrzucenie** (solid surfaces) | Defensible jako accessibility-first, czytelność, brand identity | Może wyglądać "dated" za 2-3 lata na iOS. **Nie da się utrzymać systemowym opt-outem** — `UIDesignRequiresCompatibility` jest ignorowany od SDK 27+. Realne odrzucenie = własne solid surfaces w warstwie CONTENTU + akceptacja, że chrome systemowy będzie szklany | Apki z silnym brand color (np. burgundowy heritage), apki accessibility-critical |
 | **Hybryda** | Best of both — premium feel tylko gdzie ma sens | Wymaga dyscypliny: glass tylko w warstwach z kontrolowanym tłem | Większość premium apek 2026 |
 
 **Praktyczna reguła z migracji wczesnych adopters:** nie mieszaj Liquid Glass z flat design w jednym ekranie. Albo cały ekran jest "glassy" (z kontrolą kontrastu), albo cały solid.
 
 ### Migracja techniczna (escape hatch Apple)
 
-Glass aktywuje się **tylko po rekompilacji z Xcode 26** — sam update iOS nie zmienia apki. `UIDesignRequiresCompatibility = YES` w Info.plist to oficjalny escape hatch — apka pozostaje w starym design language. Po rekompilacji wszystkie buttony auto-capsulify, **tylko vibrant tinty przetrwają szklane overlaye** (pastele znikają). Unikaj ikon circle-in-circle — kontener już zapewnia zaokrąglenie.
+Glass aktywuje się **tylko po rekompilacji z Xcode 26** — sam update iOS nie zmienia apki. `UIDesignRequiresCompatibility = YES` w Info.plist to oficjalny escape hatch — apka pozostaje w starym design language.
+
+> ⚠️ **UWAGA — hatch ma datę ważności.** Apple: *„The system ignores this key when you build for iOS 27 or later, iPadOS 27 or later, Mac Catalyst 27 or later, macOS 27 or later, or tvOS 27 or later."* (klucz jest dostępny od iOS/iPadOS/macOS/tvOS 26.0). Działa **wyłącznie w buildach z SDK 26**; po przejściu na SDK 27 jest cicho ignorowany — bez ostrzeżenia kompilatora. Traktuj go jako bufor na jeden cykl, nie jako strategię. Bywa nieszczelny już na iOS 26 (por. `dotnet/maui#32814`).
+>
+> **Próg SDK w App Store:** potwierdzony jest próg *od 28.04.2026 uploady muszą być budowane min. z SDK 26*. Analogiczny próg dla SDK 27 należy zaplanować, ale **nie cytuj konkretnej daty jako faktu** — nie było oficjalnego ogłoszenia.
+
+Po rekompilacji wszystkie buttony auto-capsulify, **tylko vibrant tinty przetrwają szklane overlaye** (pastele znikają). Unikaj ikon circle-in-circle — kontener już zapewnia zaokrąglenie.
 
 → Patrz [[resources/accessibility-mobile.md]] dla Reduce Transparency i fallback strategies.
 
-→ Patrz [[resources/app-icon-splash.md]] dla nowych zasad ikon Apple iOS 26.
+→ Patrz [[resources/app-icon-splash.md]] dla nowych zasad ikon Apple iOS 26/27.
 
 ---
 
@@ -61,12 +71,22 @@ W 2025 Google przed projektowaniem M3 Expressive przeprowadził **46 badań z 18
 - Elementy UI w wersjach Expressive są znajdowane **do 4× szybciej** niż w nie-Expressive ekranach
 - **87% userów w grupie 18-24 preferuje** Expressive nad standardowym MD3
 
-**Kluczowe zmiany architektoniczne (Compose Material3 1.4):**
-- **Physics-based spring motion tokens** zastępują krzywe easingowe — wybierasz `standard` lub `expressive` motion scheme zamiast ręcznie dobierać parametry
+**Android 17 (stabilny 16.06.2026, API 37) rozszerza M3 Expressive** — blur i translucencja wychodzą poza notyfikacje/quick settings (dodane w Android 16 QPR1) na suwak i panel głośności, power menu, widget picker, menu launchera oraz przejścia startu aplikacji. Kierunek jest ten sam co u Apple (warstwy przepuszczające treść), więc te same zasady kontrastu obowiązują po obu stronach.
+
+**Kluczowe zmiany architektoniczne (Compose Material3 1.4 stable — API expressive nadal za `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`):**
+- **Physics-based spring motion tokens** zastępują krzywe easingowe — wybierasz `standard` lub `expressive` motion scheme zamiast ręcznie dobierać parametry (status API — patrz ramka pod listą)
 - **Shape morphing wbudowany w buttony** — koło transformuje się w kwadrat przy nacisku przez parametr `shapes`
 - **Bouncy animations** — powiadomienia reagują na odrzucenia
 - **Variable fonts** i personalizowalne palety
 - Navigation rail zastępuje drawer jednym adaptywnym komponentem reagującym na szerokość ekranu
+
+> ⚠️ **Status API, nie tylko nazwy.** Schematy `standard` / `expressive` są poprawne, ale w stabilnym
+> `androidx.compose.material3` **1.4.0** API expressive (`MotionScheme`, `MaterialExpressiveTheme`,
+> `expressiveLightColorScheme`) są **wciąż eksperymentalne** — w kodzie produkcyjnym każdy komponent
+> i motion scheme Expressive wymaga adnotacji `@OptIn(ExperimentalMaterial3ExpressiveApi::class)`.
+> Graduacja idzie dopiero w linii `1.5.0-alpha`: `MotionScheme` od alpha15 (25.02.2026),
+> `MaterialExpressiveTheme` / `expressiveLightColorScheme` od alpha19 (06.05.2026), `FloatingToolbar`
+> od alpha22. Linia 1.5.0 na 12.08.2026 wciąż jest w alpha (`1.5.0-alpha26`).
 
 ### Co to znaczy dla cross-platform buildera
 
@@ -96,7 +116,7 @@ W 2025 Google przed projektowaniem M3 Expressive przeprowadził **46 badań z 18
 | **Typography** | SF Pro / SF Display / SF Mono | Roboto / Roboto Flex |
 | **Touch target** | 44pt minimum | 48dp minimum |
 | **Animations** | Spring physics, easing-out, ~250ms | Material motion, 200-300ms, emphasized easing |
-| **Haptics** | UIImpactFeedbackGenerator (light/medium/heavy) | HapticFeedback API (Android 8+) |
+| **Haptics** | UIImpactFeedbackGenerator (light/medium/heavy) | `View.performHapticFeedback()` + `HapticFeedbackConstants` (od API 3); bogatsze efekty przez `VibrationEffect` (API 26+), predefiniowane `EFFECT_CLICK`/`EFFECT_TICK` od Android 10 (API 29, wymaga `VIBRATE`); w Compose `LocalHapticFeedback` |
 | **Status bar** | Część designu, transparent overlay | Często solid color matching app bar |
 
 ---
@@ -195,10 +215,12 @@ import { Button } from "./button"; // resolver wybiera odpowiedni
 
 Oficjalny moduł od zespołu Expo (Brent Vatne) eksponuje **natywne komponenty SwiftUI bezpośrednio w RN**. To zmienia kalkulację cross-platform: dotąd custom screen replikujący iOS-native pattern w RN = setki linii (np. NavigationSplitView na iPadzie = ~1000 linii w RN, "design system za darmo" w SwiftUI). Z Expo UI dostajesz natywne `Form`, `List`, picker, sheet detents i **Liquid Glass modifier out of the box** — bez przepisywania apki.
 
-**Status (Q2 2026):**
-- ✅ iOS — pełne wsparcie natywnych SwiftUI primitives
-- 🟡 Android (Jetpack Compose) — w roadmapie, na razie trzeba osobny komponent
-- ❌ Web — niewspierany (priorytet zespołu: native bez kompromisów najpierw)
+**Status (SDK 56+ — Expo UI jest STABILNE, production-ready):**
+- ✅ **iOS** — `@expo/ui/swift-ui` (SwiftUI); też tvOS
+- ✅ **Android** — `@expo/ui/jetpack-compose` (Jetpack Compose). **Nie potrzebujesz już osobnego komponentu** — od SDK 56 jest warstwa uniwersalna `@expo/ui`: jeden import, który na iOS renderuje wersję SwiftUI, a na Androidzie Compose (`Host`, `Row`, `Column`, `ScrollView`, komponenty tekstowe, kontrolki `Switch` / `Slider`, sheety)
+- 🟡 **Web** — wspierany, ale **eksperymentalnie** („not at the same quality bar as native yet") — weryfikuj wizualnie
+- ✅ **Expo Go** — Expo UI jest bundlowane w Expo Go i w domyślnym szablonie `create-expo-app`
+- Komponenty spoza warstwy uniwersalnej (drop-iny za popularne pakiety) żyją pod `@expo/ui/community/*`
 
 **Kiedy używać:**
 - Form-heavy ekrany (settings, profile, preferences) — natywny SwiftUI Form == "natywny feel" za darmo
@@ -206,13 +228,16 @@ Oficjalny moduł od zespołu Expo (Brent Vatne) eksponuje **natywne komponenty S
 - Kiedy chcesz Liquid Glass świadomie i bezpiecznie (oficjalny modifier, fallback przez Reduce Transparency)
 
 **Kiedy NIE używać:**
-- Apka MVP cross-platform z silnym brandem — Expo UI to platform-divergence (potrzebujesz Android equivalent)
-- Custom design language gdzie SwiftUI defaults Ci ciążą
+- Custom design language, w którym natywne defaults (SwiftUI / Compose) Ci ciążą
+- Świadoma platform-divergence, gdy chcesz jeden identyczny wygląd brandowy na obu platformach — warstwa uniwersalna renderuje natywnie per platforma, więc iOS i Android BĘDĄ się różnić
 
 **Inne biblioteki w ekosystemie 2026** (copy-paste shadcn-style w RN):
 - **NativeMotion** (164↑) — animowane komponenty, Reanimated 3 + RNGH, **świadomie bez NativeWind**
-- **GLOW UI** (233↑), **BNA UI** (227↑), **React Native Reusables** (104↑) — shadcn-inspired
+- **BNA UI** (227↑) — shadcn-inspired
+- **React Native Reusables** (104↑) — kanoniczny port shadcn/ui do RN, dziś pod organizacją **founded-labs** (`github.com/founded-labs/react-native-reusables`, ~8.6k⭐; stare linki do `mrzachnugent/*` nie są już kanoniczne). Komponenty copy-paste przez CLI, stylowanie do wyboru: **NativeWind lub Uniwind**
 - **Neobrutalist for RN** (288↑) — neobrutalist style
+
+**Nie myl z tym zestawem:** **GLOW UI** = pakiet `react-native-animated-glow` (v3.1.0) — to **nie** biblioteka komponentów shadcn-style, tylko biblioteka jednego efektu wizualnego (animowany glow/neon na Skia + Reanimated; peery: `@shopify/react-native-skia`, `react-native-reanimated >=3`, RNGH). Instalujesz ją jako zwykłą zależność, nie kopiujesz kodu przez CLI. Uwaga: domena `reactnativeglow.com` z package.json nie działa (parking) — dokumentacja jest w README na npm/GitHubie (`realimposter/react-native-animated-glow`).
 
 Trend: zamiast instalować dependency, **kopiujesz kod komponentu** i dostajesz pełną kontrolę. Sprawdź compatybilność z aktualnym stabilnym SDK Expo w projekcie.
 
@@ -398,7 +423,7 @@ components/
 - [ ] Nawigacja używa platform-specific patternu (tab bar iOS, bottom nav lub drawer Android)
 - [ ] Back button respektuje platform conventions (iOS — swipe + nav bar back; Android — hardware + nav bar)
 - [ ] Alerts używają native — `Alert` z RN, nie custom modal
-- [ ] Form controls (Switch, Picker) używają natives lub platform-mimicking libs
+- [ ] Form controls (Switch, Picker, Slider, Menu) idą z `@expo/ui` (skill `expo-ui`) — wbudowane RN lub platform-mimicking libs tylko gdy `@expo/ui` nie ma odpowiednika
 - [ ] Animacje w nawigacji są per platforma (`Platform.select`)
 - [ ] Cienie używają `shadow-*` na iOS, `elevation` na Androidzie
 - [ ] Haptyki świadomie — tylko świadome akcje, nie każdy tap

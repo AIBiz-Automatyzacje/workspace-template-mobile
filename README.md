@@ -28,7 +28,7 @@ podsumuj co wylądowało (skille/agenci/hooki/workflowy).
 Co dostajesz:
 
 - **Pipeline `dev-*`** — od ideacji, przez plan, po autonomiczną implementację z review i naprawami (`dev-autopilot-wf`).
-- **Skille `expo-*` / `eas-*`** — 13 oficjalnych skilli Expo (upstream: [`expo/skills`](https://github.com/expo/skills), konwencja `expo-*` = framework OSS, `eas-*` = płatny serwis EAS) + hub `expo-overview` z decision tree.
+- **Skille `expo-*` / `eas-*`** — 16 oficjalnych skilli Expo (upstream: [`expo/skills`](https://github.com/expo/skills), konwencja `expo-*` = framework OSS, `eas-*` = płatny serwis EAS) + hub `expo-overview` z decision tree.
 - **Skille techniczne** pod stack — Supabase, UX/UI mobile (iOS HIG vs Material 3), bezpieczeństwo (OWASP + Mobile Top 10), Sentry, Maestro E2E, EAS Update.
 - **15 wyspecjalizowanych agentów** — buildery warstw mobile, reviewerzy, tester E2E, research.
 - **Knowledge compounding** — rozwiązane problemy (`docs/solutions/`), reguły (`learned-patterns.md`) i żywy słownik domenowy (`docs/CONCEPTS.md`).
@@ -145,9 +145,11 @@ Deterministyczne orkiestratory w JavaScript w `.claude/workflows/*.js` (suffix `
 
 ### Skille `expo-*` / `eas-*` (upstream-owned)
 
-14 skilli z oficjalnego repo **[`expo/skills`](https://github.com/expo/skills)** (stan po reorganizacji upstream 2026-07-07: `expo-*` = framework OSS, `eas-*` = płatny serwis EAS) + polskie opisy we frontmatter (nasza jedyna lokalna warstwa). **Nie modyfikujemy ich treści własnoręcznie** — aktualizacja wyłącznie przez sync diff z upstreamem (pomijamy katalogi `agents/` i sekcje „Submitting Feedback" z telemetrią upstreamu).
+16 skilli z oficjalnego repo **[`expo/skills`](https://github.com/expo/skills)** (stan po syncu 2026-08-23, upstream HEAD `472d040`: `expo-*` = framework OSS, `eas-*` = płatny serwis EAS) + polskie opisy we frontmatter (nasza jedyna lokalna warstwa). **Nie modyfikujemy ich treści własnoręcznie** — aktualizacja wyłącznie przez sync diff z upstreamem (pomijamy katalogi `agents/` i sekcje „Submitting Feedback" z telemetrią upstreamu).
 
-Hub: **`expo-overview`** (decision tree: który skill wybrać) → `expo-project-structure`, `expo-native-ui`, `expo-router`, `expo-tailwind-setup`, `expo-data-fetching`, `expo-ui`, `expo-dev-client`, `expo-module`, `expo-dom`, `expo-upgrade`, `eas-app-stores`, `eas-workflows`, `eas-hosting`, `eas-update-insights`.
+Hub: **`expo-overview`** (decision tree: który skill wybrać) → `expo-project-structure`, `expo-native-ui`, `expo-ui`, `expo-animation`, `expo-design-system`, `expo-router`, `expo-tailwind-setup`, `expo-data-fetching`, `expo-dev-client`, `expo-module`, `expo-dom`, `expo-upgrade`, `eas-app-stores`, `eas-workflows`, `eas-hosting`, `eas-update-insights`.
+
+> **Reguła wyboru komponentu:** przy sheetach, pickerach, sliderach, togglach, menu i sekcjach formularzy **najpierw `expo-ui`** (`@expo/ui` = natywne SwiftUI / Jetpack Compose, od SDK 56+ działa w Expo Go). Wbudowane komponenty RN, Reanimated i `@gorhom/bottom-sheet` dopiero, gdy `@expo/ui` nie ma odpowiednika. Przy rozbieżności między skillami Expo a `ux-ui-guidelines-mobile` **źródłem prawdy są skille Expo**.
 
 W upstreamie są też skille nie zaimportowane (nisza poza core flow): `expo-brownfield`, `expo-app-clip`, `expo-web-to-native`, `expo-examples`, `eas-simulator`, `eas-observe`, `expo-skill-feedback` oraz plugin `expo-experiments` (m.in. `expo-migrate-module`).
 

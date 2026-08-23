@@ -321,7 +321,7 @@ function SafeComponent({ userInput }: { userInput: string }) {
 
 Kazde wstawianie surowego HTML od uzytkownika do DOM jest niebezpieczne -- zarowno przez React API (`__html`), jak i natywne DOM API. Zawsze sanityzuj przez DOMPurify.
 
-> ⚠️ **React Native: DOMPurify bez DOM to CICHY NO-OP** -- `isSupported === false`, a `sanitize()` zwraca input BEZ ZMIAN. NIGDY nie sanityzuj DOMPurify w runtime RN; sanityzacja user-HTML wylacznie server-side (Edge Function) albo nie renderuj HTML w ogole; tresc do WebView traktuj wg kroku 3 SKILL.md.
+> ⚠️ **React Native: DOMPurify nie dziala bez DOM** -- w RN `global.window` istnieje, ale `window.document` nie, wiec `createDOMPurify()` konczy sie wczesnym returnem (ustawia `isSupported = false` i zwraca obiekt PRZED przypisaniem metody `sanitize`). Wywolanie `DOMPurify.sanitize(...)` rzuca wtedy **TypeError** -- to nie jest cichy no-op. (Pass-through zwracajacy input bez zmian dotyczy tylko srodowisk, ktore maja `window`/`document`, ale nie pelne DOM API -- nie RN.) Referencja: DOMPurify 3.4.14, `src/purify.ts` -- wczesny return w bloku `if (!window || !window.document || ...)` vs pozniejsza definicja `DOMPurify.sanitize`. NIGDY nie sanityzuj DOMPurify w runtime RN; sanityzacja user-HTML wylacznie server-side (Edge Function) albo nie renderuj HTML w ogole; tresc do WebView traktuj wg kroku 3 SKILL.md.
 
 ```typescript
 // BEZPIECZNE -- tylko web/server-side (DOM dostepny); w RN patrz ostrzezenie wyzej -- sanityzacja DOMPurify przed renderowaniem HTML

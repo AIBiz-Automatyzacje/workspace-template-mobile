@@ -56,8 +56,8 @@ import * as Haptics from 'expo-haptics';
 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);    // delikatny
 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);   // standard confirm
 Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);    // mocny — używaj rzadko
-Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft);     // iOS 13+ tłumiony
-Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);    // iOS 13+ ostry
+Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft);     // tłumiony — Android/iOS/Web
+Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);    // ostry — Android/iOS/Web
 
 // Notification — outcome async operacji
 Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -383,4 +383,4 @@ export function BottomSheet({ children }: { children: React.ReactNode }): React.
 
 ---
 
-*Źródła: Apple HIG Haptics (developer.apple.com/design/human-interface-guidelines/playing-haptics), expo-haptics docs (docs.expo.dev/versions/latest/sdk/haptics), react-native-gesture-handler 2 docs (docs.swmansion.com/react-native-gesture-handler), Things 3 haptic teardown (Cultured Code blog), Linear Mobile UX patterns. Update: 2026-05-10.*
+*Źródła: Apple HIG Haptics (developer.apple.com/design/human-interface-guidelines/playing-haptics), expo-haptics docs (docs.expo.dev/versions/latest/sdk/haptics), react-native-gesture-handler 3 docs (docs.swmansion.com/react-native-gesture-handler — domyślna wersja docs to 3.x; 2.x i 1.x są w archiwum pod `/docs/2.x/` i `/docs/1.x/`; migracja: guide *Upgrading to the new API introduced in Gesture Handler 3*, `/docs/guides/upgrading-to-3` — konfiguracja obiektem zamiast builderów, `onStart`→`onActivate`, `onEnd`→`onDeactivate`, relacje przez hooki `useSimultaneousGestures()`), Things 3 haptic teardown (Cultured Code blog), Linear Mobile UX patterns. Update: 2026-08-23.*

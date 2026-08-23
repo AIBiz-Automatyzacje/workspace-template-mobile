@@ -40,10 +40,11 @@ Kompleksowy przewodnik dla pracy z Supabase w aplikacjach Expo (React Native) - 
 ### Checklist Edge Function
 
 - [ ] Utwórz katalog `supabase/functions/function-name/`
-- [ ] Użyj `Deno.serve()` (nie importuj serve)
-- [ ] Importy: `jsr:@supabase/supabase-js@2`, `npm:stripe@22`
-- [ ] CORS headers w `_shared/cors.ts`
-- [ ] Zweryfikuj JWT jeśli wymagana autentykacja
+- [ ] `export default { fetch: withSupabase({ auth }, handler) }` — NIGDY `Deno.serve()`
+- [ ] Importy: `npm:@supabase/server@^1`, `npm:stripe@22` (zawsze z wersją)
+- [ ] Dobierz tryb `auth` do wywołującego; inny niż `'user'` → `verify_jwt = false` w `config.toml`
+- [ ] Klienty bierz z `ctx` (`ctx.supabase` / `ctx.supabaseAdmin`) — bez ręcznego `createClient`
+- [ ] CORS zostaw wrapperowi (bez `_shared/cors.ts`)
 - [ ] Loguj błędy (bez wrażliwych danych)
 - [ ] Przetestuj lokalnie: `supabase functions serve`
 - [ ] Deploy: `supabase functions deploy function-name`
@@ -171,10 +172,11 @@ const { data, error } = await supabase.rpc('ensure_user_profile');
 - Operacje wymagające service_role
 
 **Wzorce 2026:**
-- `Deno.serve()` (wbudowane, bez importu)
-- `jsr:@supabase/supabase-js@2` (nie esm.sh)
-- `npm:stripe@22` (nie esm.sh)
-- `constructEventAsync` dla Stripe webhooks
+- `export default { fetch: withSupabase(...) }` z `npm:@supabase/server@^1` — `Deno.serve()` wycofane
+- Tryb `auth` (`user` / `secret` / `publishable` / `none`) zamiast ręcznej weryfikacji JWT
+- Klienty z kontekstu: `ctx.supabase` (RLS) i `ctx.supabaseAdmin` (omija RLS)
+- CORS i preflight obsługuje wrapper — `_shared/cors.ts` niepotrzebny
+- `npm:stripe@22` (nie esm.sh) + `constructEventAsync` dla Stripe webhooks
 - Runtime: **Deno 2.x** (upgrade z 1.45.2)
 - `deno.json` preferowany nad import maps
 
@@ -242,9 +244,12 @@ Prefix `EXPO_PUBLIC_` jest wymagany, żeby Expo zbundlował zmienną do klienta 
 Mobile niżej — `VITE_*` nie istnieje w tym środowisku, to pozostałość po szablonie webowym).
 
 ### Edge Functions
+
+`SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEYS` i `SUPABASE_SECRET_KEYS` (mapy JSON nazwanych kluczy)
+są pre-populowane przez platformę i czyta je `withSupabase` — nie ustawiasz ich ręcznie. Własne
+sekrety wrzucasz przez `supabase secrets set`:
+
 ```env
-SUPABASE_URL=...
-SUPABASE_SERVICE_ROLE_KEY=...  # NIGDY nie commituj!
 STRIPE_SECRET_KEY=...          # NIGDY nie commituj!
 STRIPE_WEBHOOK_SECRET=...      # NIGDY nie commituj!
 ```
@@ -270,6 +275,9 @@ console.error('DB error:', error);  // Wycieka info o strukturze DB
 // ❌ Stary import w Edge Functions
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 
+// ❌ Deno.serve w Edge Functions — wycofane przez Supabase
+Deno.serve(async (req) => { ... });
+
 // ❌ getSession() do autoryzacji server-side
 const { data: { session } } = await supabase.auth.getSession();
 if (session) { /* autoryzacja */ }  // Token nie jest zweryfikowany!
@@ -290,7 +298,10 @@ const { data } = await supabase.from('posts').select('*');  // data: Tables[]
 logger.error('Błąd operacji', error);
 
 // ✅ Nowy standard Edge Functions
-Deno.serve(async (req) => { ... });
+import { withSupabase } from 'npm:@supabase/server@^1';
+export default {
+    fetch: withSupabase({ auth: 'user' }, async (req, ctx) => { ... }),
+};
 
 // ✅ getUser() lub getClaims() do autoryzacji
 const { data: { user } } = await supabase.auth.getUser();

@@ -215,7 +215,7 @@ import { KeyboardAvoidingView, Platform, ScrollView } from "react-native";
 
 **Kiedy NIE używać:**
 - Modal full-screen — masz natywny system handling
-- Bottom sheet — `@gorhom/bottom-sheet` ma własny `BottomSheetTextInput`
+- Bottom sheet — sheet obsługuje klawiaturę sam: `BottomSheet` z `@expo/ui` (domyślny wybór, patrz `expo-ui`) robi to natywnie, a `@gorhom/bottom-sheet` ma własny `BottomSheetTextInput`
 
 ### Alternative: `react-native-keyboard-controller`
 
@@ -366,13 +366,17 @@ User zamknął apkę w połowie formularza. Progress musi się zapisać. Persist
 
 Standard stack dla form management w RN. Type-safe walidacja, minimal re-renders, integration ze zod schema.
 
+> **Zod 4:** formaty stringów są top-level — `z.email()`, `z.url()`, `z.uuid()`. Formy metodowe
+> (`z.string().email()`) nadal działają, ale są **deprecated** (changelog Zod 4) i gorzej się
+> tree-shake'ują. W nowym kodzie używaj wyłącznie top-level.
+
 ```tsx
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 
 const schema = z.object({
-  email: z.string().email("Wpisz poprawny email"),
+  email: z.email("Wpisz poprawny email"),
   password: z.string().min(8, "Minimum 8 znaków"),
 });
 

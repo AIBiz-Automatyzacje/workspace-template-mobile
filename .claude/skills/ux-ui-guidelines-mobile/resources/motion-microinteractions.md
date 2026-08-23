@@ -4,7 +4,12 @@ Animacje na mobile nie są dekoracją — komunikują zmianę stanu, kierunek na
 
 Stack referencyjny: `react-native-reanimated` + `Easing` z `react-native`. Pryncypia są platform-agnostic.
 
-> **Wersja:** aktualny major to **Reanimated 4.x** — wymaga New Architecture (Fabric). **3.x to legacy linia** (Old Architecture, wciąż wspierana dla projektów które jeszcze nie migrowały). API animacji poniżej (`withTiming`, `withSpring`, `Easing`, `useSharedValue`) jest stabilne między 3.x i 4.x — przykłady w tym pliku działają na obu, poza sekcją Shared Element Transitions niżej.
+> **Ten plik odpowiada na „czy i co animować".** Gdy wiesz już, że animujesz — implementację prowadzi
+> skill **`expo-animation`** (wybór wątku, worklety, handoff gestu, degradacja na słabszym
+> urządzeniu). A jeśli animacja miałaby być sheetem, pickerem, sliderem albo togglem — **nie pisz jej
+> ręcznie**: sprawdź `expo-ui`, bo `@expo/ui` daje gotowy komponent natywny.
+
+> **Wersja:** aktualny major to **Reanimated 4.x** — wymaga New Architecture (Fabric; docs: *„Reanimated 4 works only with the React Native New Architecture"*). **3.x to linia legacy** (Old Architecture) — wg oficjalnej dokumentacji **nie jest już aktywnie utrzymywana** (*„you can use Reanimated in version 3 (which is no longer actively maintained)"*); używaj jej wyłącznie w projektach przed migracją na New Architecture, a samą migrację na 4.x traktuj jako domyślny kierunek. Stan npm: `latest` = 4.6.0, tag `reanimated-3` = 3.19.5. API animacji poniżej (`withTiming`, `withSpring`, `Easing`, `useSharedValue`) jest stabilne między 3.x i 4.x — przykłady w tym pliku działają na obu, poza sekcją Shared Element Transitions niżej.
 
 ---
 
@@ -81,6 +86,15 @@ withSpring(targetValue, { damping: 18, stiffness: 150 });
 // Bouncy (use rzadko — np. success celebration)
 withSpring(targetValue, { damping: 8, stiffness: 100 });
 ```
+
+### Android 17 — rozszerzenie Material 3 Expressive
+
+Android 17 (stabilny 16.06.2026, API 37) pcha M3 Expressive dalej: obok spring-based motion tokens (`standard` / `expressive` motion scheme zamiast ręcznego doboru krzywych) system rozlewa **blur i translucencję** poza notyfikacje i quick settings (dodane w Android 16 QPR1) — na suwak i panel głośności, power menu, widget picker, menu launchera oraz **przejścia startu aplikacji**.
+
+Co z tego wynika dla ruchu w Twojej apce:
+- **Przejścia wchodzące na Androidzie mają dziś systemowe tło z blur** — jeśli sam animujesz własny overlay pod launch/menu, uważaj, żeby nie dublować efektu (ten sam błąd co statyczne cienie na ikonie Liquid Glass — patrz [[app-icon-splash.md]])
+- **Kontrast tekstu na animowanych warstwach półprzezroczystych** to teraz problem po obu stronach, nie tylko na iOS — patrz [[color-darkmode.md]]
+- Nazwy schematów `standard` / `expressive` są poprawne, ale w stabilnym `androidx.compose.material3` 1.4.0 API expressive żyją jeszcze za opt-inem — szczegóły w [[platform-conventions.md]]
 
 ---
 
@@ -338,4 +352,4 @@ export function PressableButton({
 
 ---
 
-*Źródła: Apple HIG Motion (developer.apple.com/design/human-interface-guidelines/motion), Material 3 Motion (m3.material.io/styles/motion), react-native-reanimated 3 docs (docs.swmansion.com/react-native-reanimated), Rauno Freiberg (rauno.me/craft), Things 3 / Linear Mobile teardown observations. Update: 2026-05-10.*
+*Źródła: Apple HIG Motion (developer.apple.com/design/human-interface-guidelines/motion), Material 3 Motion (m3.material.io/styles/motion), react-native-reanimated 4 docs (docs.swmansion.com/react-native-reanimated — bieżąca dokumentacja opisuje 4.x, npm latest 4.6.0 na 08.2026; 3.x to linia archiwalna), Rauno Freiberg (rauno.me/craft), Things 3 / Linear Mobile teardown observations, Android 17 / Material 3 Expressive (android-developers.googleblog.com). Update: 2026-08-23.*

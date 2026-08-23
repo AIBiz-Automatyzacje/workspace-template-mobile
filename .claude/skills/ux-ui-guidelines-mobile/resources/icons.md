@@ -8,15 +8,26 @@ Wybór biblioteki, sizing, optical alignment, semantic vs decorative, rules dla 
 
 | Biblioteka | Kiedy wybrać | Plusy | Minusy |
 |------------|--------------|-------|--------|
-| **SF Symbols** (`expo-symbols`) | iOS-only app, native feel, premium | 5000+ ikon, hierarchical/multicolor variants, scaluje się z Dynamic Type, free, instant | iOS only — Android wymaga fallbacku |
-| **Lucide React Native** | Cross-platform default | 1400+ ikon, jeden style, stroke-based, mały bundle, MIT | Dodatkowy paint cycle (SVG), brak hierarchical |
+| **SF Symbols / Material Symbols** (`expo-symbols`) | Uniwersalny native feel — iOS/tvOS: SF Symbols, Android/web: Material Symbols (moduł sam mapuje) | 7000+ ikon (SF Symbols 7 stable / 8 beta), jedna abstrakcja na wszystkie platformy, hierarchical/palette/multicolor + `animationSpec` na iOS, scaluje się z Dynamic Type, działa w Expo Go, free | Brak parytetu 1:1 katalogów — mapuj `name={{ ios, android, web }}`; waga na Androidzie/webie przez `expo-symbols/androidWeights/{weight}`; moduł oznaczony w docs jako **beta** (breaking changes) |
+| **Lucide React Native** | Cross-platform default | 1700+ ikon (1776 na 08.2026), jeden style, stroke-based, mały bundle, licencja **ISC** | Dodatkowy paint cycle (SVG), brak hierarchical |
 | **Heroicons** | Tailwind ecosystem, prosty styl | Zsynchronizowane z Tailwind, outline + solid pairs | Mniejszy zestaw (~300), mniej semantycznych odpowiedników |
 | **Material Symbols** | Android-first, Material 3 brand | Variable axes (fill/weight/grade/opsz), spójne z system Android | Większy bundle, mniej dopasowane do iOS |
 | **Custom set** | Brand wymaga unikalnego stylu | Pełna kontrola | Drogie utrzymanie, brak nowych ikon "za darmo" |
 
 **Pryncypium:** jedna biblioteka per app. Mieszanie Lucide + Heroicons w jednym ekranie = wizualny chaos (różny stroke, różny rounding, różne proporcje).
 
-**Cross-platform z native feel:** Lucide jako default + SF Symbols pod warunkiem `Platform.OS === 'ios'` dla 5-10 kluczowych miejsc (tab bar, share button, back arrow). Tam gdzie native gesture/affordance — system icon. Tam gdzie content/feature — Lucide.
+**Cross-platform z native feel:** Lucide jako default + `expo-symbols` dla 5-10 kluczowych miejsc (tab bar, share button, back arrow). Tam gdzie native gesture/affordance — system icon. Tam gdzie content/feature — Lucide. **Nie potrzebujesz `Platform.OS === 'ios'`** — podaj nazwę per platforma, moduł sam wybierze SF Symbol albo Material Symbol:
+
+```tsx
+import { SymbolView } from 'expo-symbols';
+
+<SymbolView
+  name={{ ios: 'info.circle', android: 'info', web: 'info' }}
+  fallback={<LucideInfo size={24} />}
+/>
+```
+
+`fallback` NIE oznacza „Android niewspierany" — to zapas na brak symbolu / starszą platformę. Źródło nazw dla Androida/webu: `@expo-google-fonts/material-symbols` (**nie** `@expo/material-symbols`).
 
 ---
 
