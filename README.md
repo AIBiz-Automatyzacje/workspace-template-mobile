@@ -3,7 +3,7 @@
 > Opiniowany starter Claude Code dla product engineering **mobile** na stacku **Expo (React Native) + TypeScript + Supabase + NativeWind**.
 > Kompletny katalog `.claude/` (skille, agenci, workflowy, reguły, hooki) + pipeline `dev-*` od pomysłu do wdrożenia — z autonomicznym autopilotem, code review multi-agent, E2E na emulatorze przez Maestro i kumulowaniem wiedzy.
 
-**Ostatnia aktualizacja:** 2026-07-12 · **Repo:** `AIBiz-Automatyzacje/workspace-template-mobile` · Wariant webowy: [`claude-code-starter`](https://github.com/AIBiz-Automatyzacje/claude-code-starter)
+**Ostatnia aktualizacja:** 2026-08-23 · **Repo:** `AIBiz-Automatyzacje/workspace-template-mobile` · Wariant webowy: [`claude-code-starter`](https://github.com/AIBiz-Automatyzacje/claude-code-starter)
 
 ---
 
@@ -55,6 +55,7 @@ z wiralowego wątku na r/ClaudeAI.
 
 | Data | Zmiana |
 |------|--------|
+| **2026-08-23** | **Audyt `dev-brainstorm` / `dev-plan` / `dev-docs` na materiale z gramywpadla (31 zadań) + dokumenty dla operatora w pipeline.** `dev-docs` przepisany na **czystą transformację planu** (koniec z dublowaniem analizy/ryzyk/szacunków z `dev-plan`; brak planu → odesłanie do `/dev-plan`), jawny **kontrakt formatu** czytany przez parsery (impl. / `Test:` / `Weryfikacja:` / `## Operator checklist faza N` — wcześniej Operator checklist lądował w 4 różnych formach i psuł `execute=done`), bezpieczny branch (istniejący → checkout, brudne drzewo → STOP), **handoff na autopilot** z bramką gotowości (`[E2E]` vs `.env.e2e`, blokery operatora, git) zamiast sugestii ręcznego `/dev-docs-execute`. `dev-plan`: **fazy obowiązkowe** (`### Faza N — …`, numeracja od 1 — `/dev-docs` przenosi 1:1), **zbiorczy dokument wymagań / lista z requestu jako pełnoprawne źródło** (30-dniowy limit tylko dla docs per feature), klasyfikacja UI/pure-data bez pytania, nowa sekcja **„Wymagania wstępne operatora"** + `docs/operator/<slug>-przygotowanie.md` (frontmatter `operator_prep:`), usunięta opcja `/dev-docs-execute` z handoffu. `dev-brainstorm`: sekcja „Kiedy używać" (opcjonalny, tylko „pusta kartka"), usunięte „Przejdź bezpośrednio do pracy" (omijało plan, IU, `[E2E]` i stan). `dev-docs-complete-wf`: nowa faza **smoke operatora** (`docs/operator/<data>-<zadanie>-smoke.md` z Operator checklist, `[Manual]`, findingów OPERATOR, known-issues; `[E2E]` nieuruchomione jako ⚠️), ścieżka w logu i wyniku autopilota (`smokeOperatora`, `smokeStatus`, `archiwizacjaStatus`); complete commituje jawnym pathspecem także wyjścia compound (solution, `CONCEPTS.md`, `learned-patterns.md`). **Druga runda audytu (adwersarialna, na realnych artefaktach gramywpadla) domknęła tor `[E2E]` end-to-end:** tester E2E zwraca **jawny przebieg per checkbox** (`przebiegi[]` PASS/FAIL/SKIP z dowodem) — scribe odznacza `[E2E]` **wyłącznie** z wpisu PASS (brak findingu ≠ PASS; wcześniej tester zabity przez watchdoga = fałszywa zieleń), retry testera po null + twardy STOP autopilota (`e2eTesterFail`) zamiast cichej degradacji do OPERATOR, findingi E2E/OPERATOR poza adversarial verify (dowodem jest przebieg, nie kod) i poza limitem P3, właściciel odznaczania `Test: [E2E]` = scribe/fix (execute nie rusza), kopie w Operator checklist z `[E2E]`→`[Manual]`, suffix `(FAIL: …)` na źródłowym checkboxie przy nierozwiązanym P2/E2E + rozdzielone listy completion-gate (`e2eFail` vs `e2eNieuruchomione` — bez rady „zmień na [Manual]" dla znanego defektu), db-sync dobiera seedy ze wszystkich linii `[E2E]` i checkboxów `Stwórz/Modyfikuj (e2e flow|seed)`, agent `feature-tester-mobile-e2e` przepisany na kontrakt (oba prefiksy, nie generuje flow, nie pisze do zadań, dev-client z harnessu zamiast `eas build`). Kontrakt formatu `docs/active/` (kolumna 0, `Test: [Unit]` liczy się do execute, **jedna nośna linia per scenariusz** `Test: [E2E] \`.maestro/<flow>.yaml\` (seed: …) — <scenariusz> → <stan>` — każda linia `[E2E]` to osobny przebieg w licznikach, `Modyfikuj (e2e flow):`, seed opcjonalny) spisany w `dev-docs` i odzwierciedlony w `dev-plan`, `dev-docs-update`, fixture `smoke-autopilot`. **Runda 3** (weryfikacja poprawek): retry testera przy każdym nullu/pustym przebiegu (liczba checkboxów nieznana po padzie packagera ≠ zero), ominięcie verify tylko dla findingów testera (`_zrodlo: e2e`), scribe na `e2eTesterFail` nie dopisuje suffixów ani kopii (review i tak się powtórzy), dopasowanie przebieg↔checkbox po ścieżce flow (tolerancyjne na suffixy), completion-gate cofa fazy z otwartymi `[E2E]` do `review=pending` (`e2eFazy`) zamiast pętli identycznych STOP-ów + pełna `naprawa`, brak flow = P2 typ E2E (fix pisze flow i re-runuje), visual-diff bez zapisu do zadań (finding OPERATOR), jeden grep `[E2E]` we wszystkich bramkach (bez kopii `Operator:`), pola E2E w `skrotPrzebiegu`/telemetrii, pathspec compound katalogowo (`docs/solutions`, refresh edytuje siostrzane pliki). |
 | **2026-08-03** | **Port ulepszeń z `claude-code-starter` (web, commity `eb5ad6c..cc29eb5`):** **routing reviewerów v2 (domenowy)** — flagi warstw od context-packagera zamiast progu „≤2 pliki" (rdzeń security/spec/simplicity/test zawsze; perf/arch/ts/E2E warunkowo, fail-open bez flag; E2E z drugą furtką na checkboxy `[E2E]`), sekcja `## Przebieg review` w raporcie + metryki routingu/dedupu/verify w stanie i telemetrii, **bloki GRANICE ZAUFANIA** (skrypty migracyjne/ETL/seedy = granica API; też w `security-sentinel` i `coding-rules §9`) i **LIMIT P3** (max 5 akcyjnych nitów per reviewer), **zrzut diffu fazy jako artefakt** (packager pisze do /tmp, reviewerzy czytają 1 Readem), **odzyskiwanie scribe'a** (inspektor dysku po padzie — raport kompletny = nie powtarzamy review), **guard plików binarnych po fixie** (surowe bajty sterujące w pliku źródłowym = STOP zamiast serii APIErrorów), **tokeny per etap** (execute/review/fix osobno) i telemetria całego zadania (fazy z wcześniejszych runów ze stanu). Nowe skille: **`sync-template`** (aktualizacja `.claude/` z szablonu w projektach potomnych), **`coderabbit-setup`** (AI review PR-ów), Output Style **`adhd`**. **Sync `expo/skills`:** housekeeping linków wersjonowanych docs w `expo-upgrade`, wskazanie na `expo-migrate-module` w `expo-module`, nowy skill **`expo-project-structure`** (struktura greenfield). |
 | **2026-07-12** | **Port ulepszeń z `claude-code-starter` (web):** słownik domenowy `docs/CONCEPTS.md` (writer w `dev-compound`, readerzy w plan/docs/builderach, scoped `compound-refresh` w autopilocie), audyt skilli technicznych (OWASP Top 10:2025, `user_metadata` → reguła w `coding-rules §9`, Stripe v22, `search_path=''`, Sentry Deno 2.x, `getClaims()`), **8. reviewer** (`code-simplicity-reviewer`) + **routing reviewerów wg mapy zmian** + **dedup semantyczny (Haiku)** w review-wf, **targeted verify P1/KOD po fixie**, retry scribe'a + flaga `scribeFail`, warmup degraduje zamiast STOP, readerzy `learned-patterns.md` (planner/reviewerzy/buildery), audyt console.log/Sentry w domknięciu fazy, poprawna semantyka RESUME (świeży run po STOP bramki vs resume po awarii), skille `/dev-docs-execute`+`/dev-docs-review` = cienkie wrappery na workflowy, `web-research-specialist` w brainstorm/ideate, usunięty skażony `auto-error-resolver`, lokalny skill `figma-design-to-code` (poprzednia nazwa nie istniała), ujednolicona ścieżka `docs/brainstorms/`, **`/freshness-audit`** (cykliczny audyt skilli w żywych źródłach; `expo-*` poza zakresem — upstream-owned), telemetria runów autopilota (`~/.claude/telemetry/autopilot-runs.jsonl`), pola `paths` w skillach guideline. **Sync skilli Expo z upstream po reorganizacji `expo/skills` (2026-07-07, PR #98):** nowa konwencja nazw `expo-*`/`eas-*` (m.in. `expo-building-native-ui`→`expo-native-ui`, `expo-native-data-fetching`→`expo-data-fetching`, `expo-api-routes`→`eas-hosting`, `expo-deployment`→`eas-app-stores`, `expo-cicd-workflows`→`eas-workflows`, `expo-upgrading`→`expo-upgrade`, `expo-use-dom`→`expo-dom`, `expo-ui-swift-ui`+`expo-ui-jetpack-compose`→`expo-ui`), **nowy skill `expo-router`** (nawigacja), aktualizacja treści wszystkich skilli do stanu upstream, polskie opisy zachowane. |
 | 2026-06-24 | Domknięte trzy fałszywe zielone, przez które autopilot cicho pomijał E2E; wcześniej: flow Maestro + seed jako deliverables buildera, bramka opt-in E2E (twardy STOP zamiast cichego pominięcia). |
@@ -91,7 +92,7 @@ Deterministyczne orkiestratory w JavaScript w `.claude/workflows/*.js` (suffix `
 | `dev-autopilot-wf` | Autonomiczny pipeline: bootstrap (stan z `.autopilot-state.json` + rozgrzewka cache testów + środowisko E2E) → per faza (execute → review + adversarial verify → fix + targeted verify P1) → compound → **compound-refresh (scoped)** → complete → **telemetria** (1 linia JSONL do globalnego `~/.claude/telemetry/autopilot-runs.jsonl`). |
 | `dev-docs-execute-wf` | Wykonanie JEDNEJ fazy: planner czyta Implementation Units z `docs/plans/`, buildery `feature-builder-mobile-*` implementują je przez `agentType`, potem walidacja + commit + aktualizacja docs. |
 | `dev-docs-review-wf` | Review jednej fazy: context-packager → routing reviewerów wg mapy zmian (rdzeń zawsze; perf/architektura warunkowo na małych fazach) → do 8 reviewerów równolegle (w tym E2E Maestro) → dedup 2-przebiegowy (JS + semantyczny Haiku) → adversarial verify P1/P2 → scribe zapisuje raport + bookkeeping checkboxów `Weryfikacja:` → severity gate. |
-| `dev-docs-complete-wf` | Archiwizacja: `docs/active/<zadanie>` → `docs/completed/`, podsumowanie, aktualizacja docs projektu, commit. |
+| `dev-docs-complete-wf` | Dwie fazy: **smoke operatora** (`docs/operator/<data>-<zadanie>-smoke.md` — co sprawdzić ręcznie po zielonym automacie; `[E2E]` nieuruchomione jako czerwona flaga) → archiwizacja: `docs/active/<zadanie>` → `docs/completed/`, podsumowanie, aktualizacja docs projektu, commit. |
 | `dev-compound-wf` | Dokumentuje rozwiązane problemy do `docs/solutions/`, ocenia rule-worthy do `learned-patterns.md`, aktualizuje `docs/CONCEPTS.md`. |
 | `freshness-audit-wf` | Cykliczny audyt aktualności skilli technicznych: twierdzenia o świecie (wersje, piny, wzorce API) → weryfikacja w **żywych** źródłach (docs, changelogi GitHub, npm — zakaz pamięci modelu) → adversarial verify P1/P2 → raport do `docs/reviews/freshness-<data>.md`. Nic nie zmienia w skillach. Skille `expo-*` poza zakresem (upstream-owned). |
 
@@ -108,13 +109,17 @@ Deterministyczne orkiestratory w JavaScript w `.claude/workflows/*.js` (suffix `
 
 **`/dev-ideate`** — generowanie pomysłów na ulepszenia. Agenty skanują projekt z różnych perspektyw (+ opcjonalny zewnętrzny grounding przez `web-research-specialist`), Devil's Advocate filtruje słabe. → `docs/ideation/`
 
-**`/dev-brainstorm`** — walidacja pomysłu (**CO** budować). Interaktywny dialog: jedno pytanie na raz, pressure test, eksploracja podejść, opcjonalny research prior art. → `docs/brainstorms/*-requirements.md`
+**`/dev-brainstorm`** *(opcjonalny — „pusta kartka")* — walidacja pomysłu (**CO** budować). Interaktywny dialog: jedno pytanie na raz, pressure test, eksploracja podejść, opcjonalny research prior art. → `docs/brainstorms/*-requirements.md`
+- **Kiedy:** nowy feature bez wymagań, kilka konkurencyjnych kierunków, niejasno ujęty problem. **Kiedy nie:** wymagania już są (etap w zbiorczym `mvp-requirements.md`, lista poprawek R1…Rn z feedbacku, bug/tech-debt, „zrób jak w X") — wtedy od razu `/dev-plan`, który czyta takie źródła bezpośrednio.
+- Nie oferuje skoku do implementacji z pominięciem planu — kod powstaje tylko z Implementation Units.
 
 #### Planowanie
 
-**`/dev-plan`** — planowanie techniczne (**JAK** budować). Szuka requirements w `docs/brainstorms/`, skanuje repo agentami research, tworzy Implementation Units (Goal, Files, Approach, Test scenarios, Verification). Czyta `docs/CONCEPTS.md`. Dla scenariuszy `[E2E]` stosuje konwencję zarządzanego harnessu (§3.4b): flow `.maestro/<flow>.yaml` + idempotentny seed jako deliverables **buildera**, granice możliwości Maestro (natywne powierzchnie OS → inject przez service_role albo `[Manual]`). → `docs/plans/`
+**`/dev-plan`** — planowanie techniczne (**JAK** budować). Źródłem wymagań jest requirements doc, **sekcja zbiorczego dokumentu** (np. `docs/brainstorms/mvp-requirements.md#etap-17`) albo lista wymagań z requestu. Skanuje repo agentami research, tworzy Implementation Units (Goal, Files, Approach, Test scenarios, Verification) **pogrupowane w numerowane fazy** (`### Faza N — …`, obowiązkowe — autopilot wykonuje plan fazami, `/dev-docs` przenosi je 1:1). Klasyfikację UI/pure-data wyprowadza z plików, bez pytania; jedyne pytanie designerskie to „masz mockupy w Figmie?". Czyta `docs/CONCEPTS.md`. Dla scenariuszy `[E2E]` stosuje konwencję zarządzanego harnessu (§3.4b): flow `.maestro/<flow>.yaml` + idempotentny seed jako deliverables **buildera**, granice możliwości Maestro (natywne powierzchnie OS → inject przez service_role albo `[Manual]`). → `docs/plans/`
+- **Przygotowanie dla operatora (dokument #1):** sekcja „Wymagania wstępne operatora" w planie + plik `docs/operator/<slug>-przygotowanie.md` — wyłącznie to, czego Claude nie zrobi sam (konsole OAuth, sekrety w `.env`, `.env.e2e`/`/e2e-setup` gdy plan ma `[E2E]`, assety graficzne, migracje na projekcie głównym, fizyczne urządzenie, decyzje do podjęcia). Każda pozycja: po co / jak / dowód wykonania + co blokuje (`[blokuje start]` albo numer fazy). Frontmatter `operator_prep:`.
 
-**`/dev-docs`** — struktura zarządzania zadaniem. Tworzy branch `feature/[nazwa]` + 3 pliki w `docs/active/[nazwa]/` (plan, kontekst, zadania). Wciąga kontekst designerski (SPEC.md/DESIGN.md/Figma) do `kontekst.md`.
+**`/dev-docs`** — **transformacja planu technicznego w zadanie dla autopilota**, bez nowej treści (zero własnych ryzyk/szacunków — to, czego nie ma w planie, nie pojawi się w zadaniu). Branch `feature/[nazwa]` (bezpiecznie: istniejący → checkout, brudne drzewo → STOP) + 3 pliki w `docs/active/[nazwa]/`: plan (mapa faz 1:1 z planem), kontekst (pliki, decyzje, wzorce, designerski kontekst SPEC.md/DESIGN.md/Figma), zadania (checkboxy wg kontraktu parserów: impl. / `Test:` / `Weryfikacja:` / `## Operator checklist faza N`). Bramka per `[E2E]` (natywne powierzchnie, flow+seed jako deliverables buildera).
+- **Handoff = autopilot:** na końcu bramka gotowości (`[E2E]` vs `.env.e2e`, niezaznaczone blokery z `docs/operator/<slug>-przygotowanie.md`, branch) i gotowe wywołanie `Workflow({scriptPath: ".claude/workflows/dev-autopilot-wf.js", args: "docs/active/[nazwa]"})`. Ścieżka ręczna (`/dev-docs-execute` → `/dev-docs-review`) tylko jako alternatywa.
 
 #### Implementacja
 
@@ -131,7 +136,8 @@ Deterministyczne orkiestratory w JavaScript w `.claude/workflows/*.js` (suffix `
 
 #### Zamknięcie i knowledge capture
 
-**`/dev-docs-complete [nazwa]`** — archiwizacja ukończonego zadania → `docs/completed/`.
+**`/dev-docs-complete [nazwa]`** — archiwizacja ukończonego zadania → `docs/completed/` + podsumowanie. W trybie ręcznym skill wykonuje procedurę inline w sesji (smoke → archiwizacja); `dev-docs-complete-wf` jest wołany przez autopilot i czyta ten skill jako referencję procedury.
+- **Smoke operatora (dokument #2):** przed archiwizacją generuje `docs/operator/<data>-<nazwa>-smoke.md` — listę **wyłącznie tego, czego automat nie sprawdził** (niezaznaczone `## Operator checklist faza N`, scenariusze `[Manual]`, findingi OPERATOR z raportów review, known-issues, P3 widoczne dla użytkownika), z sekcją „0. Przygotowanie" (właściwy projekt Supabase — nie e2e, konto testowe nazwą zmiennej, Metro/dev-client) i ramką „Jak kontynuować w nowej sesji". Niezaznaczone `[E2E]` trafiają na górę jako `⚠️ E2E nieuruchomione` — nigdy nie są cicho odhaczane. Autopilot loguje ścieżkę i zwraca ją w `smokeOperatora`.
 
 **`/dev-compound`** — dokumentowanie rozwiązanego problemu → `docs/solutions/[category]/`. Rule-worthy → `learned-patterns.md`; termin domenowy → `docs/CONCEPTS.md` (Krok 4.5).
 
@@ -235,8 +241,10 @@ W upstreamie są też skille nie zaimportowane (nisza poza core flow): `expo-bro
 ```
 docs/
 ├── ideation/                 ← pomysły z /dev-ideate
-├── brainstorms/              ← requirements docs z /dev-brainstorm
-├── plans/                    ← plany techniczne z /dev-plan
+├── brainstorms/              ← requirements docs z /dev-brainstorm (lub zbiorczy, np. mvp-requirements.md)
+├── plans/                    ← plany techniczne z /dev-plan (IU w fazach)
+├── operator/                 ← dokumenty dla człowieka: <slug>-przygotowanie.md (z /dev-plan, PRZED autopilotem)
+│                                i <data>-<zadanie>-smoke.md (z /dev-docs-complete, PO autopilocie)
 ├── CONCEPTS.md               ← słownik domenowy (żywy)
 ├── solutions/                ← rozwiązane problemy z /dev-compound
 ├── reviews/                  ← raporty freshness-audit
@@ -251,21 +259,22 @@ docs/
 
 ## Typowe scenariusze
 
-**1. Pełny autopilot (rekomendowane dla większych zmian)**
+**1. Pełny autopilot (ścieżka domyślna)**
 ```
-/dev-brainstorm ekran onboardingu        ← doprecyzuj CO
-/dev-plan                                ← plan techniczny (IU)
-/dev-docs                                ← struktura zadań + branch
-# zwaliduj branch w sesji, potem:
+/dev-brainstorm ekran onboardingu        ← tylko gdy wymagań jeszcze nie ma („pusta kartka")
+/dev-plan                                ← plan techniczny (IU w fazach) + docs/operator/<slug>-przygotowanie.md
+# odhacz przygotowanie dla operatora (konsole, sekrety, .env.e2e przez /e2e-setup gdy plan ma [E2E])
+/dev-docs                                ← zadania z planu + branch + bramka gotowości → gotowe wywołanie autopilota
 dev-autopilot-wf docs/active/onboarding  ← execute→review→fix→compound→refresh→complete
+# po runie: docs/operator/<data>-onboarding-smoke.md → przejdź ręcznie na symulatorze/urządzeniu → PR
 ```
 
 **2. Nowy feature krok po kroku (ręczna kontrola)**
 ```
-/dev-ideate → /dev-brainstorm → /dev-plan → /dev-docs
+/dev-ideate → (/dev-brainstorm) → /dev-plan → /dev-docs
 /dev-docs-execute docs/active/nazwa
 /dev-docs-review  docs/active/nazwa 1
-/dev-docs-complete nazwa
+/dev-docs-complete nazwa                 ← też generuje smoke operatora
 ```
 
 **3. Bugfix z dokumentacją**

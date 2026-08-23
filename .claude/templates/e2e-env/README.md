@@ -123,8 +123,10 @@ bojowy tej fazy.
   destrukcyjne** — po zbiorczym db-sync stan spełnia warunek wstępny najwyżej JEDNEGO flow i „N/N
   PASS" jest nieosiągalne, choć każdy flow osobno przechodzi. Dołóż do etapu runner
   `.maestro/<etap>-run-all.sh` przeplatający `psql -v ON_ERROR_STOP=1 -f <seed>` z
-  `maestro test <flow>` para po parze i wskaż go w checkboxach `Weryfikacja: [E2E]` oraz w Operator
-  checklist. Wzór: runner etapu obok flow, np. `.maestro/e3-run-all.sh`.
+  `maestro test <flow>` para po parze i wskaż go JEDNĄ linią `Weryfikacja: [E2E] \`.maestro/<etap>-run-all.sh\` — <stan>`
+  (scenariusze zostają w swoich liniach `Test: [E2E] \`.maestro/<flow>.yaml\``; tester uruchamia runner RAZ i
+  wyprowadza z jego outputu wynik per flow — nie odpala flow objętych runnerem standalone). Wzór: runner etapu
+  obok flow, np. `.maestro/e3-run-all.sh`.
 - **Seedy aplikuj `psql`, nie `supabase db query -f`**: `db query` wysyła plik jako JEDNO prepared
   statement, więc seed z `begin; do $$ … $$; commit;` pada na `cannot insert multiple commands into
   a prepared statement (42601)`. CLI nadaje się do jednozdaniowych sprawdzeń, nie do seedów.
