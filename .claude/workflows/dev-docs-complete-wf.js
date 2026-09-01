@@ -166,6 +166,10 @@ Kroki (zgodnie ze skillem):
    (\`git ls-files <sciezka> | grep -q .\`); sciezke, ktora nie spelnia zadnego warunku, POMIN i opisz w rezultaty
    (nieistniejacy pathspec = fatal i git add nie stage'uje NICZEGO). Jesli docs/active/${nazwaZadania} nie ma juz
    w indeksie (uzyles git mv wbrew krokowi 4) — pomin te sciezke, rename'y sa juz zestage'owane.
+   SIATKA BEZPIECZENSTWA: sprawdz \`git status --porcelain\` i jesli wisza niezacommitowane
+   artefakty bazy wiedzy — docs/solutions/, docs/CONCEPTS.md, .claude/rules/learned-patterns.md
+   — dolacz je do TEGO commita (compound albo compound-refresh nie domknal swojego commita).
+   Powod: brudne drzewo blokuje bramke bootstrapu nastepnego runu autopilota (STOP "niezacommitowane zmiany").
    Commit z message "docs(${nazwaZadania}): archiwizacja zadania — completed + podsumowanie${smokeStatus === 'plik' ? ' + smoke operatora' : ''}".
    Jesli git commit nie powiedzie sie lub nie ma zmian — zwroc commit: "" i opisz powod w rezultaty (nie przerywaj archiwizacji).
 

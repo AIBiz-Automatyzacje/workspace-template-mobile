@@ -1495,8 +1495,13 @@ const REFRESH_RESULT = {
     przejrzano: { type: 'number', description: 'liczba dokumentow w waskim scope' },
     akcje: { type: 'array', items: { type: 'string' }, description: 'wykonane akcje (Keep/Update/Replace/Archive/dedup CONCEPTS)' },
     slownik: { type: 'string', enum: ['posprzatany', 'bez zmian', 'brak pliku'] },
+    // Refresh EDYTUJE istniejace dokumenty bazy wiedzy (w audytowanym runie web zmodyfikowal siostrzany
+    // solution), a nikt tych zmian nie commitowal — razem z artefaktami compound zostawaly w drzewie
+    // i blokowaly bramke bootstrapu nastepnego runu. W required z tego samego powodu co plikiBinarne:
+    // brak commita musi byc jawny, pole opcjonalne = agent cicho pomija commit.
+    commit: { type: 'string', description: 'hash commita zmian bazy wiedzy ("" gdy nic nie zmieniono albo commit sie nie udal)' },
   },
-  required: ['przejrzano', 'slownik'],
+  required: ['przejrzano', 'slownik', 'commit'],
 }
 
 const refreshPrompt = (plik, kategoria) =>
@@ -1506,7 +1511,14 @@ Wykonaj skill .claude/skills/dev-compound-refresh/SKILL.md w TRYBIE AUTONOMICZNY
 - NIE przegladaj calej bazy docs/solutions/ — tylko ten waski scope (routing "Skupiony", 1-2 dokumenty).
 - Cel: czy nowy solution (${plik}) podwaza/zastepuje siostrzany dokument w tej kategorii; dedup i weryfikacja hasel w docs/CONCEPTS.md; napraw nieaktualne referencje.
 - Wykonuj bezpieczne akcje (Keep/Update/Archive/Replace gdy dowody wystarczajace); niejednoznaczne oznacz stale. Best-effort — nie blokuj.
-Zwroc obiekt zgodny ze schematem RefreshResult.`
+- PO wykonaniu akcji ZACOMMITUJ zmienione dokumenty bazy wiedzy. Kto zapisuje, ten commituje: niezacommitowane
+  artefakty bazy wiedzy zostawiaja brudne drzewo, a to blokuje bramke bootstrapu nastepnego runu autopilota
+  (STOP "niezacommitowane zmiany").
+  Staguj WYLACZNIE po whiteliscie: \`git add docs/solutions/ docs/CONCEPTS.md .claude/rules/learned-patterns.md\`
+  (pomin sciezki, ktorych nie ma na dysku). ZAKAZ \`git add -A\` i \`git add .\`.
+  Message: \`docs(solutions): odswiezenie bazy wiedzy — <co zmieniono>\`.
+  Gdy nie zmieniles zadnego pliku albo commit sie nie udal — zwroc commit: "" i nie przerywaj.
+Zwroc obiekt zgodny ze schematem RefreshResult (commit = hash commita lub "").`
 
 // `compound` jest zadeklarowany na gorze pliku (czyta go telemetria, takze na sciezkach STOP).
 let refresh = null
