@@ -1,6 +1,6 @@
 # Icons — system ikon mobilnych
 
-Wybór biblioteki, sizing, optical alignment, semantic vs decorative, rules dla touch targets i accessibility. Decyzje pod Expo + React Native + NativeWind, ale pryncypia uniwersalne.
+Wybór biblioteki, sizing, optical alignment, semantic vs decorative, rules dla touch targets i accessibility. Decyzje pod Expo + React Native + Uniwind, ale pryncypia uniwersalne.
 
 ---
 
@@ -45,7 +45,7 @@ import { SymbolView } from 'expo-symbols';
 
 **Reguła 24px:** jeśli nie wiesz jak duża ma być ikona, weź 24. To rozmiar do którego designerzy iOS i Android zoptymalizowali większość metaforek.
 
-**Density-aware:** na Androidzie wolisz `dp` zamiast `px`. W RN i NativeWind oba są density-independent — `size={24}` to 24dp, nie 24 fizyczne piksele.
+**Density-aware:** na Androidzie wolisz `dp` zamiast `px`. W RN, także przez klasy Uniwind, oba są density-independent — `size={24}` to 24dp, nie 24 fizyczne piksele.
 
 ---
 
@@ -130,17 +130,31 @@ Niektóre ikony to konwencja. **Nie wymyślaj koła na nowo.**
 
 ## Color rules
 
-**Default:** ikona dziedziczy color z tekstu wokół. W RN: `color={textColor}` lub przez NativeWind `className="text-foreground"` na rodzicu (Lucide RN respektuje currentColor).
+**Default:** ikona ma kolor tekstu wokół, ale w RN style się nie dziedziczą, więc podajesz go wprost: `color={textColor}` albo, z Uniwind, `colorClassName="accent-foreground"` na ikonie owiniętej w `withUniwind`:
+
+```tsx
+// components/icons.ts: owijasz raz, na poziomie modułu, nigdy w renderze
+import { withUniwind } from 'uniwind';
+import { Search as LucideSearch } from 'lucide-react-native';
+
+export const Search = withUniwind(LucideSearch);
+```
+
+```tsx
+<Search size={24} strokeWidth={1.5} colorClassName="accent-foreground" />
+```
+
+Prefiks `accent-` jest obowiązkowy, bo `color` nie należy do `style`. Przykłady ikon z `colorClassName` w tym skillu zakładają takie owinięcie.
 
 **Semantic colors:**
 
 | Semantyka | Color token | Przykład |
 |-----------|-------------|----------|
-| Error / destructive | `text-destructive` | Trash w "delete account" |
-| Success | `text-success` | Checkmark "saved" |
-| Warning | `text-warning` | Warning triangle przy form error summary |
-| Info | `text-info` | Info circle przy tooltip trigger |
-| Disabled | `text-muted-foreground` (50% opacity) | Action niedostępna |
+| Error / destructive | `accent-destructive` | Trash w "delete account" |
+| Success | `accent-success` | Checkmark "saved" |
+| Warning | `accent-warning` | Warning triangle przy form error summary |
+| Info | `accent-info` | Info circle przy tooltip trigger |
+| Disabled | `accent-muted-foreground` (50% opacity) | Action niedostępna |
 
 **Anti-patterns:**
 - Rainbow ikony bez powodu — chyba że brand (Slack, Google Photos)
@@ -242,7 +256,7 @@ export function SearchButton({ onPress }: { onPress: () => void }) {
       accessibilityRole="button"
       className="h-11 w-11 items-center justify-center rounded-full active:opacity-60"
     >
-      <Search size={24} strokeWidth={1.5} className="text-foreground" />
+      <Search size={24} strokeWidth={1.5} colorClassName="accent-foreground" />
     </Pressable>
   );
 }
@@ -283,26 +297,18 @@ export function FavoriteIcon({ isActive, size = 24 }: FavoriteIconProps) {
 }
 ```
 
-### Sizing system w NativeWind theme
+### Sizing system w `@theme`
 
-> **Wersja:** przykład = NativeWind v4 (`tailwind.config.ts`). Ten szablon używa **NativeWind v5 preview + Tailwind v4 CSS-first** — setup opisuje skill `expo-tailwind-setup`. Tokeny sizingowe poniżej pozostają aktualne konceptualnie.
-
-```ts
-// tailwind.config.ts (extension)
-export default {
-  theme: {
-    extend: {
-      spacing: {
-        // Icon size tokens
-        'icon-xs': '16px',
-        'icon-sm': '20px',
-        'icon-md': '24px',
-        'icon-lg': '28px',
-        'icon-xl': '32px',
-      },
-    },
-  },
-};
+```css
+/* global.css */
+@theme {
+  /* Icon size tokens */
+  --spacing-icon-xs: 16px;
+  --spacing-icon-sm: 20px;
+  --spacing-icon-md: 24px;
+  --spacing-icon-lg: 28px;
+  --spacing-icon-xl: 32px;
+}
 ```
 
 ```tsx
@@ -319,7 +325,7 @@ import { memo } from 'react';
 import { ChevronRight } from 'lucide-react-native';
 
 export const ListChevron = memo(function ListChevron() {
-  return <ChevronRight size={20} strokeWidth={1.5} className="text-muted-foreground" />;
+  return <ChevronRight size={20} strokeWidth={1.5} colorClassName="accent-muted-foreground" />;
 });
 ```
 

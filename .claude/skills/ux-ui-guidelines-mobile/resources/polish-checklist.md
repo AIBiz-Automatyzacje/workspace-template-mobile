@@ -31,7 +31,7 @@ Format: `[ ]` checklist. Każdy punkt linkuje do pełnego pliku z kontekstem.
 
 ## Color & dark mode polish
 
-- [ ] **Dark mode = redesign, nie inwersja**. `#000` na `#FFF` flip = horror dla oczu. Użyj `useColorScheme()` + osobne tokeny per mode.
+- [ ] **Dark mode = redesign, nie inwersja**. `#000` na `#FFF` flip = horror dla oczu. Użyj osobnych tokenów per motyw (`@variant light` i `@variant dark` w `global.css`).
 - [ ] **Semantic colors w roli**. Czerwony = destructive, zielony = success, żółty = warning. NIGDY odwrotnie. User czyta apkę przez kolor zanim przeczyta tekst.
 - [ ] **Contrast min 4.5:1 dla tekstu** (3:1 dla large 18pt+). Test każdego ekranu — Apple Accessibility Inspector / Stark plugin. → patrz [accessibility-mobile.md](accessibility-mobile.md)
 - [ ] **Reduce Transparency alternative**. Glass/blur surfaces muszą mieć solid fallback gdy `isReduceTransparencyEnabled`. Natywne `expo-blur` robi to automatycznie. → patrz [accessibility-mobile.md](accessibility-mobile.md)
@@ -83,7 +83,7 @@ Format: `[ ]` checklist. Każdy punkt linkuje do pełnego pliku z kontekstem.
 - [ ] **1 primary CTA per ekran**. Max 2 secondary actions. Powyżej user gubi hierarchię akcji.
 - [ ] **Optical alignment ikon w buttonach**. Ikona musi być centrowana wizualnie (nie matematycznie) względem tekstu — strzałki, asymetryczne ikony.
 - [ ] **Image outline 1px subtle border** (~rgba alpha 0.05-0.1). Premium feel, oddziela obrazek od tła nawet gdy tło jest podobne kolorystycznie.
-- [ ] **Konkretne `transition-property`** w NativeWind, nigdy `transition: all`. Animuj specyficzne properties.
+- [ ] **Konkretne `transitionProperty`** w Reanimated 4, nigdy `'all'`, które dokumentacja odradza ze względu na wydajność. Animuj specyficzne properties.
 
 ---
 
@@ -120,4 +120,4 @@ Przed mergem każdego PR z UI:
 
 ---
 
-*Źródła: synthesis z innych plików skilla, Things 3 / Linear Mobile / Bear teardown observations, Apple HIG (developer.apple.com/design/human-interface-guidelines), Material 3 (m3.material.io), Refactoring UI (refactoringui.com), Vercel Geist patterns. Update: 2026-05-10.*
+*Źródła: synthesis z innych plików skilla, Things 3 / Linear Mobile / Bear teardown observations, Apple HIG (developer.apple.com/design/human-interface-guidelines), Material 3 (m3.material.io), Refactoring UI (refactoringui.com), Vercel Geist patterns. Update: 2026-11-05.*

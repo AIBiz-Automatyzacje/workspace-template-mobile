@@ -1,8 +1,26 @@
 {
-  "enabledPlugins": {
-    "dev-browser@dev-browser-marketplace": true
+  "permissions": {
+    "deny": [
+      "Bash(npx --yes @expo/agent-cli*)",
+      "Bash(npx @expo/agent-cli*)",
+      "Bash(*agent-cli*feedback*)",
+      "Bash(*submit-expo-feedback*)"
+    ]
   },
+  "disableClaudeAiConnectors": true,
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/env-wartosci.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
@@ -16,6 +34,15 @@
           },
           {
             "type": "command",
+            "command": "node \"$CLAUDE_PROJECT_DIR/.claude/scripts/telemetria/zbierz.mjs\" --hook",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/mobile-anti-pattern-check.sh"
           }
         ]
@@ -25,5 +52,17 @@
   "statusLine": {
     "type": "command",
     "command": "npx -y @owloops/claude-powerline@latest --style=powerline"
+  },
+  "enabledPlugins": {
+    "figma@claude-plugins-official": true,
+    "expo@claude-code-starter": true
+  },
+  "extraKnownMarketplaces": {
+    "claude-code-starter": {
+      "source": {
+        "source": "github",
+        "repo": "AIBiz-Automatyzacje/claude-code-starter"
+      }
+    }
   }
 }

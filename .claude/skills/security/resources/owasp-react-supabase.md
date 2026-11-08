@@ -1,6 +1,6 @@
-# OWASP Top 10 (2025) — Mapowanie na React Native (Expo) + Supabase + Edge Functions
+# OWASP Top 10 (2025) — Mapowanie na Expo + Supabase + Edge Functions
 
-Przewodnik mapujący każdą kategorię **OWASP Top 10:2025** (finalna wersja: styczeń 2026) na konkretne scenariusze, checklisty i wzorce kodu dla stacku React Native (Expo) + Supabase + Edge Functions (resource współdzielony z wariantem web — sekcje webowe oznaczone).
+Przewodnik mapujący każdą kategorię **OWASP Top 10:2025** (finalna wersja: styczeń 2026) na konkretne scenariusze, checklisty i wzorce kodu dla stacku Expo 19 + Supabase + Edge Functions. Aplikację natywną sprawdzasz też OWASP Mobile Top 10 2024: `../references/stack.md`, sekcja „Ramy audytu”.
 
 **Co zmieniło się względem 2021 (istotne dla nas):**
 - **SSRF** nie jest już osobną kategorią — wchłonięty do **A01 Broken Access Control**.
@@ -18,7 +18,7 @@ Najczęstszy problem bezpieczeństwa (#1 od lat). W naszym stacku manifestuje si
 **Scenariusze w naszym stacku:**
 - RLS wyłączone na tabeli — każdy z anon key ma pełny dostęp
 - Brak policy na operację DELETE — użytkownik może usuwać cudze dane
-- `service_role` key w zmiennych `EXPO_PUBLIC_*` (Expo) / `VITE_*` (web) — klient omija RLS
+- `service_role` key w zmiennych `EXPO_PUBLIC_*` — paczka aplikacji omija RLS
 - Edge Function bez weryfikacji JWT — anonimowy dostęp do chronionych operacji
 - Policy oparta na `auth.email()` lub `user_metadata` zamiast `auth.uid()` / `app_metadata`
 - **SECURITY DEFINER function z mutowalnym `search_path`** — privilege escalation przez podstawienie schematu
@@ -29,9 +29,10 @@ Najczęstszy problem bezpieczeństwa (#1 od lat). W naszym stacku manifestuje si
 - [ ] Policies pokrywają SELECT, INSERT, UPDATE, DELETE
 - [ ] Policies używają `(SELECT auth.uid()) = user_id`
 - [ ] Autoryzacja NIGDY na `user_metadata` (edytowalne przez usera) — używaj `app_metadata` lub tabeli ról (patrz `auth-security-patterns.md`)
-- [ ] `service_role` key NIE jest w zmiennych `EXPO_PUBLIC_*` (Expo) / `VITE_*` (web)
-- [ ] Edge Functions weryfikują JWT przez `supabase.auth.getUser()` / `getClaims()`
-- [ ] Każda funkcja SECURITY DEFINER ma `SET search_path = ''` i nazwy schematyczne (`public.tabela`)
+- [ ] `service_role` key NIE jest w zmiennych `EXPO_PUBLIC_*`
+- [ ] Edge Functions owinięte w `withSupabase({ auth: 'user' })` (`npm:@supabase/server@^1`) — JWT weryfikowany przed handlerem; ręcznie tylko `getClaims()` / `getUser()` w trybie `auth: 'none'`
+- [ ] Funkcje z `auth` innym niż `'user'` mają `verify_jwt = false` w `supabase/config.toml` — i świadomie (webhook z weryfikacją sygnatury, cron z secret key), nie „bo nie działało"
+- [ ] Każda funkcja SECURITY DEFINER ma `SET search_path = ''`, nazwy schematyczne (`public.tabela`), EXECUTE odebrane od `PUBLIC` i `anon` i nadane roli, która ją woła
 - [ ] SSRF: walidacja URL + blokada redirectów + blokada adresów wewnętrznych (patrz niżej)
 - [ ] Macierz dostępu (kto może co) jest udokumentowana i zweryfikowana
 
@@ -68,6 +69,9 @@ LANGUAGE plpgsql SECURITY DEFINER
 SET search_path = ''            -- kluczowe
 AS $$
 BEGIN RETURN (SELECT secret FROM public.vault); END; $$;
+-- Supabase nadaje EXECUTE na nowe funkcje rolom anon i authenticated: zostaw je tylko roli, która woła
+REVOKE EXECUTE ON FUNCTION public.get_secret() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_secret() TO authenticated;
 ```
 
 **SSRF — hardened (2025: część A01):**
@@ -85,23 +89,26 @@ function isBlockedHost(host: string): boolean {
     return false;
 }
 
-Deno.serve(async (req) => {
-    const { url } = await req.json();
-    let parsed: URL;
-    try { parsed = new URL(url); } catch { return new Response('Bad URL', { status: 400 }); }
+export default {
+    // auth: 'user' — wrapper odrzuca anonimowe wywołania; walidacja URL to nadal Twoja robota
+    fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
+        const { url } = await req.json();
+        let parsed: URL;
+        try { parsed = new URL(url); } catch { return new Response('Bad URL', { status: 400 }); }
 
-    if (parsed.protocol !== 'https:') return new Response('Forbidden', { status: 403 });
-    if (!ALLOWED_HOSTS.has(parsed.hostname)) return new Response('Forbidden', { status: 403 });
-    if (isBlockedHost(parsed.hostname)) return new Response('Forbidden', { status: 403 });
+        if (parsed.protocol !== 'https:') return new Response('Forbidden', { status: 403 });
+        if (!ALLOWED_HOSTS.has(parsed.hostname)) return new Response('Forbidden', { status: 403 });
+        if (isBlockedHost(parsed.hostname)) return new Response('Forbidden', { status: 403 });
 
-    const res = await fetch(parsed, {
-        redirect: 'manual',                         // 302 -> 169.254.169.254 nie przejdzie
-        signal: AbortSignal.timeout(5000),
-        // NIE przekazuj nagłówka Authorization do zewnętrznego hosta
-    });
-    if (res.status >= 300 && res.status < 400) return new Response('Redirect blocked', { status: 403 });
-    return new Response(res.body);
-});
+        const res = await fetch(parsed, {
+            redirect: 'manual',                         // 302 -> 169.254.169.254 nie przejdzie
+            signal: AbortSignal.timeout(5000),
+            // NIE przekazuj nagłówka Authorization do zewnętrznego hosta
+        });
+        if (res.status >= 300 && res.status < 400) return new Response('Redirect blocked', { status: 403 });
+        return new Response(res.body);
+    }),
+};
 ```
 > Uwaga: filtr po hostname nie chroni w 100% przed **DNS rebinding** (host rozwiązuje się do IP prywatnego po walidacji). Przy wysokim ryzyku — rozwiąż DNS, zwaliduj IP i pinuj je do połączenia.
 
@@ -113,34 +120,17 @@ Awans z #5 (2021). Domyślne lub błędne ustawienia otwierające luki — w nas
 
 **Scenariusze w naszym stacku:**
 - CORS `Access-Control-Allow-Origin: *` na Edge Functions
-- Brak Content Security Policy / nagłówków bezpieczeństwa (Vite SPA)
+- Wyjątki cleartext i ATS w konfiguracji natywnej
 - Redirect URLs / OAuth w Supabase Dashboard nieograniczone do znanych domen
 - Debug mode / źródła map / verbose błędy na produkcji
 - Zmienne środowiskowe niedopasowane między dev/staging/prod
 
 **Checklist:**
 - [ ] CORS ograniczony do konkretnych domen (nie `*`)
-- [ ] (web / API routes only — dla klienta mobilnego pomiń) **CSP dla Vite SPA** z `connect-src` obejmującym domenę Supabase (inaczej klient się nie połączy)
-- [ ] (web / API routes only — dla klienta mobilnego pomiń) `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` (lub CSP `frame-ancestors 'none'`)
-- [ ] (web / API routes only — dla klienta mobilnego pomiń) `Strict-Transport-Security` na custom domenie
+- [ ] Bez wyjątków cleartext i ATS (`expo-build-properties`) bez powodu w planie
 - [ ] Supabase Dashboard: email enumeration protection + leaked-password protection włączone
-- [ ] Supabase Dashboard: Redirect URLs ograniczone do znanych domen/schematu appki (dotyczy też deep linków OAuth mobile — `myapp://` musi być jawnie wypisany, nie wildcard)
+- [ ] Supabase Dashboard: Redirect URLs ograniczone do znanych domen
 - [ ] Brak `console.log` / debug output na produkcji
-- [ ] **Mobile:** brak wyjątków cleartext traffic / App Transport Security w konfiguracji appki (`app.json` → `ios.infoPlist.NSAppTransportSecurity`, `android.usesCleartextTraffic`) — bez jawnego wyjątku ruch HTTP jest domyślnie blokowany, tak ma zostać
-
-**CSP dla Vite SPA (ustawiane w nagłówkach hostingu, nie w `<meta>` dla dyrektyw wymagających nagłówka):**
-```
-Content-Security-Policy:
-  default-src 'self';
-  connect-src 'self' https://<PROJECT>.supabase.co wss://<PROJECT>.supabase.co https://*.sentry.io;
-  img-src 'self' data: https:;
-  script-src 'self';
-  style-src 'self' 'unsafe-inline';
-  frame-ancestors 'none';
-  base-uri 'self'
-```
-> Vite buduje statyczne assety z hashowanymi nazwami — unikaj `'unsafe-inline'` dla `script-src`. `connect-src` MUSI zawierać REST (`https://…supabase.co`) i Realtime (`wss://…`), inaczej aplikacja nie działa.
-> **(web / API routes only)** — klient mobilny (RN/Expo) nie ma DOM ani nagłówków HTTP strony, więc CSP/X-Frame-Options/HSTS go nie dotyczą; odpowiednikiem misconfiguration na mobile jest brak ATS/cleartext hardeningu i niezawężone Redirect URLs (patrz checklist wyżej).
 
 **CORS — restrykcyjny:**
 ```typescript
@@ -150,6 +140,12 @@ export const corsHeaders = {
     'Access-Control-Allow-Origin': ALLOWED_ORIGIN,
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
+};
+
+// index.ts — withSupabase ma cors: 'default' (standardowe nagłówki supabase-js);
+// na produkcji podaj własne, a dla webhooków serwer-serwer użyj cors: 'disabled'
+export default {
+    fetch: withSupabase({ auth: 'user', cors: { headers: corsHeaders } }, async (req, ctx) => { /* ... */ }),
 };
 ```
 
@@ -165,7 +161,6 @@ Rozszerzenie dawnego „Vulnerable and Outdated Components" o **cały łańcuch 
 - Niepinowane importy Deno w Edge Functions (`npm:pkg` bez wersji, `https://` bez integrity)
 - Typosquatting / złośliwe paczki w `dependencies`
 - **Prompt injection przez dane w bazie** przy agentach AI z MCP na `service_role` (udokumentowane 2025) — złośliwy wiersz instruuje agenta do wykonania SQL
-- **EAS Update jako kanał dostarczania kodu** — OTA update omija review sklepowy; bez kontroli integralności/dostępu to dodatkowa ścieżka supply chain (patrz też SKILL.md, Mobile Top 10 M2)
 
 **Checklist:**
 - [ ] `npm audit` / `bun audit` bez krytycznych luk (w CI)
@@ -175,7 +170,6 @@ Rozszerzenie dawnego „Vulnerable and Outdated Components" o **cały łańcuch 
 - [ ] Brak `dependencies`, które powinny być `devDependencies`
 - [ ] **Agent AI / MCP NIE dostaje klucza `service_role`** — tylko anon/ograniczony zakres, tryb read-only gdzie się da
 - [ ] Weryfikacja źródła paczek przed dodaniem (pobrania, maintainer, data ostatniej publikacji)
-- [ ] **EAS Update:** rozważ code signing update'ów i kontrolę dostępu do kanałów (channel access) — kto może wypchnąć OTA na dany kanał produkcyjny
 
 ```bash
 bun audit          # lub: npm audit
@@ -198,15 +192,13 @@ Wycieki danych wrażliwych przez brak/błędne szyfrowanie lub zarządzanie secr
 - [ ] `.env` / `.env.local` w `.gitignore`; `.env.example` bez wartości
 - [ ] Brak secretów w kodzie (szukaj: `sk_`, `secret`, `password`, `token`)
 - [ ] `console.*` nie loguje obiektów user/session
-- [ ] Sentry `beforeSend` filtruje PII; `sendDefaultPii: false`
+- [ ] Sentry `beforeSend` filtruje PII; `sendDefaultPii: false` w `@sentry/react-native`
 - [ ] Tokeny nie w URL query params
 
 ```typescript
-// DOBRZE: secret server-side, anon key na froncie, log bez PII
+// DOBRZE: secret server-side, publishable key w aplikacji, log bez PII
 const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
-// Expo (RN): process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY
-// Web (Vite): import.meta.env.VITE_SUPABASE_ANON_KEY
-const supabase = createClient(url, anonKey);
+const supabase = createClient(url, process.env.EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY);
 logger.error('Błąd aktualizacji profilu', { userId: user.id, errorCode: error.code });
 ```
 
@@ -214,40 +206,29 @@ logger.error('Błąd aktualizacji profilu', { userId: user.id, errorCode: error.
 
 ## A05:2025 — Injection
 
-SQL injection i XSS — dwa główne wektory. Spadek z #3, ale wciąż krytyczny dla `.rpc()` i renderowania user content.
+SQL injection i wstrzyknięcie przez `WebView`. Spadek z #3, ale wciąż krytyczny dla `.rpc()` i treści od użytkownika.
 
 **Scenariusze w naszym stacku:**
 - Konkatenacja stringów w funkcjach PostgreSQL / `EXECUTE format()` bez `%L`
-- Niebezpieczne renderowanie raw HTML z user content (XSS)
-- User-generated URLs w `href` — `javascript:` protocol injection
+- `injectedJavaScript` albo HTML w `WebView` z danych użytkownika
+- URL z danych w `Linking.openURL` — dowolny schemat uruchamia inną aplikację
 
 **Checklist:**
 - [ ] Brak konkatenacji stringów w funkcjach PostgreSQL (parametry `$1`, `$2`)
 - [ ] `EXECUTE format(...)` używa `%L` (literal) / `%I` (identifier) dla user input
-- [ ] Brak renderowania niesanityzowanego HTML (DOMPurify, gdy konieczne)
-- [ ] Walidacja protokołu URL (whitelist `https:`/`http:`)
-- [ ] CSP blokuje inline scripts
+- [ ] HTML sanitowany po stronie serwera albo nierenderowany (DOMPurify w RN rzuca `TypeError`)
+- [ ] Walidacja protokołu URL (`https:`, `http:`, `mailto:`)
 
 ```sql
 -- BEZPIECZNE: parametryzacja / format z %L
 RETURN QUERY SELECT * FROM posts WHERE title ILIKE '%' || search_term || '%';
 -- lub: EXECUTE format('SELECT * FROM posts WHERE title ILIKE %L', '%' || search_term || '%');
 ```
-> ⚠️ **React Native: DOMPurify bez DOM to CICHY NO-OP** — `isSupported === false`, a `sanitize()` zwraca input BEZ ZMIAN. NIGDY nie sanityzuj DOMPurify w runtime RN; sanityzacja user-HTML wyłącznie server-side (Edge Function) albo nie renderuj HTML w ogóle; treść do WebView traktuj wg kroku 3 SKILL.md.
-
 ```typescript
-// BEZPIECZNE — tylko web/server-side (DOM dostępny); w RN patrz ostrzeżenie wyżej
-import DOMPurify from 'dompurify';
-function Comment({ content }: { content: string }) {
-    const sanitized = DOMPurify.sanitize(content, {
-        ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'br'],
-        ALLOWED_ATTR: ['href', 'target', 'rel'],
-    });
-    return <div>{sanitized}</div>;
-}
-function UserLink({ url }: { url: string }) {
-    if (!/^https?:\/\//i.test(url)) return null;          // blokuj javascript:
-    return <a href={url} rel="noopener noreferrer">Link</a>;
+function otworzLink(url: string) {
+    const adres = new URL(url);
+    if (!['https:', 'http:', 'mailto:'].includes(adres.protocol)) return;  // blokuj inne schematy
+    void Linking.openURL(adres.href);
 }
 ```
 
@@ -269,15 +250,19 @@ Brak mechanizmów bezpieczeństwa na poziomie architektury (rate limiting, throt
 - [ ] Limity długości inputów (Zod `.max()`), limity rozmiaru uploadu
 
 ```typescript
-Deno.serve(async (req) => {
-    const origin = req.headers.get('Origin') ?? '';
-    if (!allowedOrigins.includes(origin)) return new Response('Forbidden', { status: 403 });
+export default {
+    // Endpoint publiczny (np. reset hasła): auth: 'publishable' + verify_jwt = false w config.toml.
+    // Wrapper NIE daje rate limitu ani walidacji — to Twoja odpowiedzialność.
+    fetch: withSupabase({ auth: 'publishable', cors: { headers: corsHeaders } }, async (req, ctx) => {
+        const origin = req.headers.get('Origin') ?? '';
+        if (!allowedOrigins.includes(origin)) return new Response('Forbidden', { status: 403 });
 
-    const parsed = z.object({ email: z.email().max(255) }).safeParse(await req.json());
-    if (!parsed.success) return new Response('Bad Request', { status: 400 });
-    // + rate limiting przed operacją wrażliwą (np. reset hasła)
-    return new Response('OK', { headers: corsHeaders });
-});
+        const parsed = z.object({ email: z.email().max(255) }).safeParse(await req.json());
+        if (!parsed.success) return new Response('Bad Request', { status: 400 });
+        // + rate limiting przed operacją wrażliwą (np. reset hasła)
+        return new Response('OK');
+    }),
+};
 ```
 
 ---
@@ -326,19 +311,24 @@ Brak weryfikacji integralności danych z zewnętrznych źródeł.
 
 ```typescript
 import Stripe from 'npm:stripe@22';                        // pinowana wersja
+import { withSupabase } from 'npm:@supabase/server@^1';
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!);
 const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET')!;
 
-Deno.serve(async (req) => {
-    const body = await req.text();
-    const signature = req.headers.get('stripe-signature')!;
-    const event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
-    if (event.type === 'checkout.session.completed') {
-        const userId = event.data.object.metadata?.user_id;  // NIE email
-        if (userId) await activateSubscription(userId);
-    }
-    return new Response('OK');
-});
+export default {
+    // Webhook: auth: 'none' (Stripe nie ma JWT) + verify_jwt = false w config.toml;
+    // cors: 'disabled' (serwer-serwer). Tożsamość zapewnia WYŁĄCZNIE sygnatura Stripe.
+    fetch: withSupabase({ auth: 'none', cors: 'disabled' }, async (req, ctx) => {
+        const body = await req.text();
+        const signature = req.headers.get('stripe-signature')!;
+        const event = await stripe.webhooks.constructEventAsync(body, signature, webhookSecret);
+        if (event.type === 'checkout.session.completed') {
+            const userId = event.data.object.metadata?.user_id;  // NIE email
+            if (userId) await activateSubscription(ctx.supabaseAdmin, userId);
+        }
+        return new Response('OK');
+    }),
+};
 ```
 
 ---
@@ -357,7 +347,7 @@ Deno.serve(async (req) => {
 - [ ] Audit log dla krytycznych operacji (lista w `supabase-dev-guidelines`)
 - [ ] `logger.error()` zamiast `console.error()` na produkcji
 - [ ] Logi bez: haseł, tokenów, pełnych obiektów sesji, PII
-- [ ] Sentry `beforeSend` filtruje wrażliwe dane
+- [ ] Sentry `beforeSend` filtruje PII; `sendDefaultPii: false` w `@sentry/react-native`
 - [ ] **Alerty Sentry** skonfigurowane (spike błędów, nowy typ błędu w auth/płatnościach)
 
 ```typescript
@@ -380,7 +370,7 @@ Nowa kategoria: błędna obsługa błędów prowadząca do luk — **fail-open**
 
 **Checklist:**
 - [ ] Autoryzacja **fail-closed** — błąd sprawdzenia = odmowa dostępu, nigdy przyznanie
-- [ ] Zero pustych `catch {}` — loguj albo re-throw (patrz `coding-rules` §4)
+- [ ] Zero pustych `catch {}` — loguj albo re-throw (reguły kodu, sekcja „Obsługa błędów”)
 - [ ] Klient dostaje generyczny komunikat + kod; szczegóły błędu tylko do logu/Sentry
 - [ ] Edge Function zwraca poprawny status (4xx/5xx) przy błędzie, nie `200`
 - [ ] `Promise.allSettled` dla operacji, które mogą niezależnie failować
@@ -406,14 +396,14 @@ try {
 
 ---
 
-## Podsumowanie — najwyższe ryzyko w stacku React + Supabase + Edge Functions
+## Podsumowanie — najwyższe ryzyko w stacku Expo + Supabase + Edge Functions
 
 | Priorytet | Kategoria 2025 | Główne ryzyko w naszym stacku |
 |-----------|----------------|-------------------------------|
-| 1 | A01 Broken Access Control | RLS wyłączone/błędne, authz na `user_metadata`, SECURITY DEFINER bez `search_path`, SSRF |
+| 1 | A01 Broken Access Control | RLS wyłączone/błędne, authz na `user_metadata`, SECURITY DEFINER bez `search_path` albo z EXECUTE dla `anon`, SSRF |
 | 2 | A07 Authentication Failures | `getSession()` zamiast `getUser()`/`getClaims()` server-side |
-| 3 | A02 Security Misconfiguration | CORS `*`, brak CSP z `connect-src` Supabase |
-| 4 | A05 Injection | Raw SQL w `.rpc()`, XSS przez user content |
+| 3 | A02 Security Misconfiguration | CORS `*`, wyjątki cleartext i ATS |
+| 4 | A05 Injection | Raw SQL w `.rpc()`, `WebView` z danymi użytkownika |
 | 5 | A08 Data Integrity | Stripe webhook bez sygnatury / dopasowanie po email |
 | 6 | A10 Mishandling of Exceptional Conditions | Fail-open w autoryzacji, wyciek błędów do klienta |
 

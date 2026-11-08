@@ -50,9 +50,9 @@ Pełna oficjalna specyfikacja: sesje WWDC25 ("Meet Liquid Glass", "Get to know t
 
 ### Migracja techniczna (escape hatch Apple)
 
-Glass aktywuje się **tylko po rekompilacji z Xcode 26** — sam update iOS nie zmienia apki. `UIDesignRequiresCompatibility = YES` w Info.plist to oficjalny escape hatch — apka pozostaje w starym design language.
+Glass aktywuje się **tylko po rekompilacji z Xcode 26** — sam update iOS nie zmienia apki. `UIDesignRequiresCompatibility = YES` w Info.plist to oficjalny escape hatch dla buildów z SDK 26 — apka pozostaje w starym design language.
 
-> ⚠️ **UWAGA — hatch ma datę ważności.** Apple: *„The system ignores this key when you build for iOS 27 or later, iPadOS 27 or later, Mac Catalyst 27 or later, macOS 27 or later, or tvOS 27 or later."* (klucz jest dostępny od iOS/iPadOS/macOS/tvOS 26.0). Działa **wyłącznie w buildach z SDK 26**; po przejściu na SDK 27 jest cicho ignorowany — bez ostrzeżenia kompilatora. Traktuj go jako bufor na jeden cykl, nie jako strategię. Bywa nieszczelny już na iOS 26 (por. `dotnet/maui#32814`).
+> ⚠️ **UWAGA — hatch ma datę ważności.** Apple: *„The system ignores this key when you build for iOS 27 or later, iPadOS 27 or later, Mac Catalyst 27 or later, macOS 27 or later, or tvOS 27 or later."* (klucz jest dostępny od iOS/iPadOS/macOS/tvOS 26.0). Działa **wyłącznie w buildach z SDK 26**; po przejściu na SDK 27 jest cicho ignorowany — bez ostrzeżenia kompilatora. Expo SDK 58 buduje na iOS 27 SDK, więc w tym stosie klucz już nie działa i nie planuj na nim wyjścia z Liquid Glass. Bywa nieszczelny już na iOS 26 (por. `dotnet/maui#32814`).
 >
 > **Próg SDK w App Store:** potwierdzony jest próg *od 28.04.2026 uploady muszą być budowane min. z SDK 26*. Analogiczny próg dla SDK 27 należy zaplanować, ale **nie cytuj konkretnej daty jako faktu** — nie było oficjalnego ogłoszenia.
 
@@ -61,6 +61,16 @@ Po rekompilacji wszystkie buttony auto-capsulify, **tylko vibrant tinty przetrwa
 → Patrz [[resources/accessibility-mobile.md]] dla Reduce Transparency i fallback strategies.
 
 → Patrz [[resources/app-icon-splash.md]] dla nowych zasad ikon Apple iOS 26/27.
+
+### iOS 27: aplikacje iPhone o zmiennym rozmiarze
+
+Od iOS 27 okno aplikacji iPhone może zmieniać rozmiar, np. w iPhone Mirroring na macOS albo przy uruchomieniu na iPadzie. Dostaje to automatycznie każdy build z iOS 27 SDK, czyli też Expo SDK 58. Skutki dla layoutu:
+
+- `requireFullScreen` nie wyłącza już zmiany rozmiaru, więc nie blokuje orientacji.
+- `ScreenOrientation.lockAsync` może nic nie zrobić, bo system traktuje obsługiwaną orientację jako preferencję. W buildach debug biblioteka loguje ostrzeżenie przy odmowie blokady; po nim znajdziesz ekrany, które od niej zależą.
+- `getOrientationAsync` może nie opisywać kształtu okna: iPhone Mirroring zawsze zgłasza portret.
+
+Projektuj ekrany pod dostępną przestrzeń (flex, `useWindowDimensions`), a nie pod stałą orientację i proporcję urządzenia.
 
 ---
 
@@ -179,7 +189,7 @@ import { Platform, View } from "react-native";
 <View
   className={Platform.select({
     ios: "pt-safe shadow-md rounded-2xl",
-    android: "pt-2 elevation-md rounded-xl",
+    android: "pt-2 shadow-md rounded-xl",
   })}
 />
 ```
@@ -200,7 +210,7 @@ import { Button } from "./button"; // resolver wybiera odpowiedni
 - Nawigacja (tab bar vs drawer, back button conventions)
 - Animacje (spring vs Material easing)
 - Haptyki (różne API)
-- Cienie (iOS shadow props vs Android `elevation`)
+- Cienie, gdy wartość ma się różnić per platforma (klasy `shadow-*` kompilują się do `boxShadow`, który rysuje się na obu)
 - Form controls (native picker vs Material dropdown)
 
 ### Kiedy NIE używać
@@ -234,7 +244,7 @@ Oficjalny moduł od zespołu Expo (Brent Vatne) eksponuje **natywne komponenty S
 **Inne biblioteki w ekosystemie 2026** (copy-paste shadcn-style w RN):
 - **NativeMotion** (164↑) — animowane komponenty, Reanimated 3 + RNGH, **świadomie bez NativeWind**
 - **BNA UI** (227↑) — shadcn-inspired
-- **React Native Reusables** (104↑) — kanoniczny port shadcn/ui do RN, dziś pod organizacją **founded-labs** (`github.com/founded-labs/react-native-reusables`, ~8.6k⭐; stare linki do `mrzachnugent/*` nie są już kanoniczne). Komponenty copy-paste przez CLI, stylowanie do wyboru: **NativeWind lub Uniwind**
+- **React Native Reusables** (104↑) — kanoniczny port shadcn/ui do RN, dziś pod organizacją **founded-labs** (`github.com/founded-labs/react-native-reusables`, ~8.6k⭐; stare linki do `mrzachnugent/*` nie są już kanoniczne). Komponenty copy-paste przez CLI, stylowanie do wyboru: **NativeWind lub Uniwind** (w tym stosie Uniwind)
 - **Neobrutalist for RN** (288↑) — neobrutalist style
 
 **Nie myl z tym zestawem:** **GLOW UI** = pakiet `react-native-animated-glow` (v3.1.0) — to **nie** biblioteka komponentów shadcn-style, tylko biblioteka jednego efektu wizualnego (animowany glow/neon na Skia + Reanimated; peery: `@shopify/react-native-skia`, `react-native-reanimated >=3`, RNGH). Instalujesz ją jako zwykłą zależność, nie kopiujesz kodu przez CLI. Uwaga: domena `reactnativeglow.com` z package.json nie działa (parking) — dokumentacja jest w README na npm/GitHubie (`realimposter/react-native-animated-glow`).
@@ -423,9 +433,10 @@ components/
 - [ ] Nawigacja używa platform-specific patternu (tab bar iOS, bottom nav lub drawer Android)
 - [ ] Back button respektuje platform conventions (iOS — swipe + nav bar back; Android — hardware + nav bar)
 - [ ] Alerts używają native — `Alert` z RN, nie custom modal
-- [ ] Form controls (Switch, Picker, Slider, Menu) idą z `@expo/ui` (skill `expo-ui`) — wbudowane RN lub platform-mimicking libs tylko gdy `@expo/ui` nie ma odpowiednika
+- [ ] Form controls (Switch, Picker, Slider, Menu) idą z `@expo/ui` (skill `expo:expo-ui`) — wbudowane RN lub platform-mimicking libs tylko gdy `@expo/ui` nie ma odpowiednika
 - [ ] Animacje w nawigacji są per platforma (`Platform.select`)
-- [ ] Cienie używają `shadow-*` na iOS, `elevation` na Androidzie
+- [ ] Cienie przez klasy `shadow-*` albo `boxShadow`, które działają na obu platformach
+- [ ] Żaden ekran nie zależy od blokady orientacji ani stałej proporcji (iOS 27: zmienny rozmiar okna)
 - [ ] Haptyki świadomie — tylko świadome akcje, nie każdy tap
 - [ ] Touch target 44pt iOS / 48dp Android (recommended 48-56)
 - [ ] Safe area i Dynamic Island traktowane jako część designu
@@ -440,4 +451,4 @@ components/
 - [[resources/color-darkmode.md]] — iOS Dynamic Color vs Material You
 - [[resources/ai-pitfalls.md]] — mieszanie konwencji platformowych jako AI signature
 
-*Źródła: Apple Human Interface Guidelines (developer.apple.com/design/human-interface-guidelines), Apple WWDC25 sesje "Meet Liquid Glass" + "Get to know the new design system" (oficjalne specs), Material Design 3 (m3.material.io), Google Android Developers M3 Expressive prezentacja (46 badań / 18K uczestników — peer-reviewed dataset), Christine Rode @ Config London (Figma annual conference), wiki/ios-hig, wiki/material-design-3, wiki/react-native-expo. Ostatni update: 2026-05-15.*
+*Źródła: Apple Human Interface Guidelines (developer.apple.com/design/human-interface-guidelines), Apple WWDC25 sesje "Meet Liquid Glass" + "Get to know the new design system" (oficjalne specs), Material Design 3 (m3.material.io), Google Android Developers M3 Expressive prezentacja (46 badań / 18K uczestników — peer-reviewed dataset), Christine Rode @ Config London (Figma annual conference), wiki/ios-hig, wiki/material-design-3, wiki/react-native-expo. Ostatni update: 2026-11-05.*

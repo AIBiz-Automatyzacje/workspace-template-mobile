@@ -1,0 +1,115 @@
+// Zmiany fazy do dossier: lista plikow ze statusem i liczbami linii oraz pelny diff (z kontekstem) do pliku, ktory
+// reviewerzy czytaja jednym Read zamiast kazdy odpalac wlasny `git diff`. Baza = commit sprzed fazy; stan = drzewo
+// robocze, wiec diff obejmuje commity fazy, zmiany niezacommitowane i pliki niesledzone (jak bramki — diff.mjs).
+
+import { spawnSync } from 'node:child_process'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { git } from '../bramki/diff.mjs'
+
+// ~75k tokenow: gorna granica, przy ktorej reviewer ma jeszcze miejsce na dossier i wlasne Read.
+export const LIMIT_DIFFU_B = 300 * 1024
+export const ZNACZNIK_UCIECIA = '=== DIFF PRZYCIETY (limit 300 KB) — dalsza czesc zmian fazy NIE jest w tym pliku ==='
+// Galezie glowne w kolejnosci proby — baza zastepcza, gdy wolajacy nie zna bazy fazy (tez baza zadania ogrodnika).
+export const GALEZIE_GLOWNE = ['origin/main', 'main', 'origin/master', 'master']
+// Artefakty pipeline'u, nie zmiany fazy — poza lista i diffem: stan autopilota oraz caly docs/active/<zadanie>/ (raporty
+// review poprzednich faz sa niesledzone do konca zadania, wiec bez wykluczenia wchodzily w calosci do diffu kazdej kolejnej
+// fazy; zadania fazy reviewer ma w dossier).
+const BEZ_ARTEFAKTOW = [':(exclude,glob)**/.autopilot-state.json', ':(exclude,glob)docs/active/**']
+
+/** @typedef {{ plik: string, status: 'A' | 'M' | 'D', dodane: number, usuniete: number }} PlikFazy */
+
+/** @param {string} tekst @returns {string[]} */
+const linie = (tekst) => tekst.split('\n').filter(Boolean)
+
+/**
+ * Diff pliku niesledzonego (git diff --no-index konczy sie kodem 1, gdy sa roznice — to nie blad).
+ * @param {string} projekt
+ * @param {string} plik
+ * @returns {string}
+ */
+function diffNiesledzonego(projekt, plik) {
+  const p = spawnSync('git', ['-C', projekt, 'diff', '--no-color', '--no-index', '--', '/dev/null', plik], { encoding: 'utf8' })
+  if (p.status !== 0 && p.status !== 1) throw new Error(`git diff --no-index ${plik}: ${p.stderr}`)
+  return p.stdout
+}
+
+/**
+ * @param {string} projekt katalog projektu (repo git albo jego podkatalog)
+ * @param {string} baza commit sprzed fazy
+ * @returns {{ pliki: PlikFazy[], diff: string }}
+ */
+export function zmianyDossier(projekt, baza) {
+  const opcje = ['--no-color', '--no-renames', '--no-ext-diff', '--relative']
+  /** @type {Map<string, PlikFazy>} */
+  const pliki = new Map()
+  for (const wiersz of linie(git(projekt, ['diff', '--name-status', ...opcje, baza, '--', ...BEZ_ARTEFAKTOW]))) {
+    const [status, plik] = wiersz.split('\t')
+    const s = status === 'A' || status === 'D' ? status : 'M'
+    pliki.set(plik, { plik, status: s, dodane: 0, usuniete: 0 })
+  }
+  for (const wiersz of linie(git(projekt, ['diff', '--numstat', ...opcje, baza, '--', ...BEZ_ARTEFAKTOW]))) {
+    const [dodane, usuniete, plik] = wiersz.split('\t')
+    const wpis = pliki.get(plik)
+    // Plik binarny: numstat podaje "-" zamiast liczb.
+    if (wpis) Object.assign(wpis, { dodane: Number(dodane) || 0, usuniete: Number(usuniete) || 0 })
+  }
+  const niesledzone = linie(git(projekt, ['ls-files', '--others', '--exclude-standard', '--', ...BEZ_ARTEFAKTOW]))
+  for (const plik of niesledzone) {
+    const dodane = linie(readFileSync(join(projekt, plik), 'utf8')).length
+    pliki.set(plik, { plik, status: 'A', dodane, usuniete: 0 })
+  }
+  const diff = git(projekt, ['diff', ...opcje, baza, '--', ...BEZ_ARTEFAKTOW]) + niesledzone.map((p) => diffNiesledzonego(projekt, p)).join('')
+  return { pliki: [...pliki.values()].sort((a, b) => a.plik.localeCompare(b.plik)), diff }
+}
+
+/**
+ * Diff z numerem linii w pliku po zmianie przed kazda linia kontekstu i dodana. Reviewer czytal zrzut przez Read i podawal numer wiersza
+ * zrzutu jako plik:linia (piszemy_wirale: templates.ts:846 przy pliku 199 linii).
+ * @param {string} diff
+ * @returns {string}
+ */
+export function ponumerujDiff(diff) {
+  let nr = 0
+  return diff.split('\n').map((l) => {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l)
+    if (hunk) { nr = Number(hunk[1]); return l }
+    if (nr === 0 || l.startsWith('---') || l.startsWith('+++') || l.startsWith('\\')) return l
+    if (l.startsWith('diff --git')) { nr = 0; return l }
+    if (l.startsWith('-')) return `      | ${l}`
+    if (!l.startsWith('+') && !l.startsWith(' ')) return l
+    const linia = `${String(nr).padStart(5)} | ${l}`
+    nr += 1
+    return linia
+  }).join('\n')
+}
+
+/**
+ * Zapis diffu do pliku; powyzej limitu przyciety ze znacznikiem na koncu.
+ * @param {string} diff
+ * @param {string} plik
+ * @param {number} [limit]
+ * @returns {{ zapisany: boolean, uciety: boolean }}
+ */
+export function zapiszDiff(diff, plik, limit = LIMIT_DIFFU_B) {
+  if (!diff) return { zapisany: false, uciety: false }
+  const bajty = Buffer.from(diff, 'utf8')
+  const uciety = bajty.length > limit
+  writeFileSync(plik, uciety ? `${bajty.subarray(0, limit).toString('utf8')}\n${ZNACZNIK_UCIECIA}\n` : diff)
+  return { zapisany: true, uciety }
+}
+
+/**
+ * Baza, gdy wolajacy jej nie zna (review uruchomione samodzielnie, swiezy run po STOP-ie): merge-base HEAD z galezia
+ * glowna — zakres moze wtedy objac wczesniejsze fazy zadania. Bez galezi glownej: HEAD (tylko zmiany niezacommitowane).
+ * @param {string} projekt
+ * @returns {string}
+ */
+export function bazaZastepcza(projekt) {
+  for (const galaz of GALEZIE_GLOWNE) {
+    const p = spawnSync('git', ['-C', projekt, 'merge-base', 'HEAD', galaz], { encoding: 'utf8' })
+    if (p.status === 0) return p.stdout.trim()
+  }
+  return 'HEAD'
+}

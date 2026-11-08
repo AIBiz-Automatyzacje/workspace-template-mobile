@@ -352,7 +352,7 @@ export function CustomSlider({
 | Icon button bez `accessibilityLabel` | "Button" — user nie wie co kliknie | Dodaj label opisowy |
 | Touch target < 44pt | A11y user nie trafia | `hitSlop` lub powiększ wizualnie |
 | Modal bez focus trap | Screen reader czyta tło modala | `accessibilityViewIsModal` + manualne focus |
-| Loading state bez announcement | User nie wie że trwa | `accessibilityLiveRegion="polite"` |
+| Loading state bez announcement | User nie wie że trwa | `aria-live="polite"` (Android) + `AccessibilityInfo.announceForAccessibility` (iOS) |
 | Form error tylko czerwoną ramką | A11y user nie widzi | `accessibilityLabel` + role alert |
 | `accessibilityHint` zawiera label | Powtórzenie | Hint = uzupełnienie, nie duplikat |
 | Custom button na `View` | Brak default a11y | Użyj `Pressable` + `accessibilityRole="button"` |
@@ -460,4 +460,4 @@ export function AccessibleButton({
 
 ---
 
-*Źródła: Apple Accessibility Programming Guide (developer.apple.com/accessibility), Android Accessibility Developer Guide (developer.android.com/guide/topics/ui/accessibility), React Native Accessibility (reactnative.dev/docs/accessibility), W3C WCAG 2.2 (w3.org/WAI/WCAG22 — nadal aktualna W3C Recommendation z 12.12.2024), Apple Dynamic Type usage stats (WWDC 2023, 2024), WWDC 2026 / iOS 27 (rewizja Liquid Glass + użytkowniczy suwak przezroczystości), expo-glass-effect docs (docs.expo.dev/versions/latest/sdk/glass-effect). Update: 2026-08-23.*
+*Źródła: Apple Accessibility Programming Guide (developer.apple.com/accessibility), Android Accessibility Developer Guide (developer.android.com/guide/topics/ui/accessibility), React Native Accessibility (reactnative.dev/docs/accessibility), W3C WCAG 2.2 (w3.org/WAI/WCAG22 — nadal aktualna W3C Recommendation z 12.12.2024), Apple Dynamic Type usage stats (WWDC 2023, 2024), WWDC 2026 / iOS 27 (rewizja Liquid Glass + użytkowniczy suwak przezroczystości), expo-glass-effect docs (docs.expo.dev/versions/latest/sdk/glass-effect). Update: 2026-11-05.*

@@ -77,6 +77,32 @@ export default function TabsLayout() {
 }
 ```
 
+### Native tabs
+
+Od SDK 58 `NativeTabs` z `expo-router/native-tabs` są stabilne (`expo-router/unstable-native-tabs` dotyczy SDK 54–57). Używają systemowego tab bara, więc zgodnie z zasadą „default to native first” to punkt wyjścia. JavaScript `Tabs` wyżej bierzesz, gdy projekt już stoi na tabach React Navigation, a custom tabs, gdy pasek wymaga wyglądu niemożliwego w systemowym.
+
+```tsx
+// src/app/_layout.tsx
+import { NativeTabs } from "expo-router/native-tabs";
+
+export default function TabLayout() {
+  return (
+    <NativeTabs>
+      <NativeTabs.Trigger name="index">
+        <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="house.fill" md="home" />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="settings">
+        <NativeTabs.Trigger.Icon sf="gear" md="settings" />
+        <NativeTabs.Trigger.Label>Settings</NativeTabs.Trigger.Label>
+      </NativeTabs.Trigger>
+    </NativeTabs>
+  );
+}
+```
+
+Ikona `md` na Androidzie wymaga zainstalowanego `expo-symbols`, od SDK 58 opcjonalnej zależności. Implementację prowadzi skill `expo:expo-native-ui`.
+
 ### Tab bar persistence
 
 | Sytuacja | Hide on scroll? |
@@ -124,7 +150,7 @@ export default function TabsLayout() {
   screenOptions={({ navigation }) => ({
     headerLeft: () => (
       <Pressable onPress={() => navigation.openDrawer?.()}>
-        <Menu className="size-6 ml-3" />
+        <Menu size={24} className="ml-3" colorClassName="accent-foreground" />
       </Pressable>
     ),
   })}
@@ -235,7 +261,7 @@ Android obsługuje maks. 3 detenty (dotyczy SDK 52+, gdzie `formSheet` w ogóle 
 - Form który może wymagać scroll
 - Preview z możliwością edit
 
-**Android equivalent:** `BottomSheet` z `@expo/ui` — natywny Jetpack Compose, `snapPoints` zamiast detents, jeden komponent na obie platformy (patrz skill `expo-ui`). `@gorhom/bottom-sheet` dopiero jako fallback — kryteria w `sheets-modals.md`.
+**Android equivalent:** `BottomSheet` z `@expo/ui` — natywny Jetpack Compose, `snapPoints` zamiast detents, jeden komponent na obie platformy (patrz skill `expo:expo-ui`). `@gorhom/bottom-sheet` dopiero jako fallback — kryteria w `sheets-modals.md`.
 
 ---
 

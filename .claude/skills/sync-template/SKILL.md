@@ -1,13 +1,15 @@
 ---
 name: sync-template
-description: "Aktualizuje maszynerię workflow (.claude/: skille, agenci, reguły, hooki, workflows, templates + settings.json) w bieżącym projekcie, zaciągając najnowszą wersję z repo szablonu workspace-template-mobile. Jednym uruchomieniem sprawdza czy w szablonie pojawiły się jakiekolwiek zmiany i automatycznie je aplikuje. Używaj gdy: „zaktualizuj szablon\", „zsynchronizuj .claude\", „zaciągnij zmiany z szablonu\", „sync template\", „czy są nowe skille/agenci\", „update workflow\", „odśwież folder Claude\" — a także po wrzuceniu tego szablonu do nowego projektu, żeby dociągnąć maszynerię. Wywołuj TEN skill zawsze gdy user chce zsynchronizować konfigurację Claude Code z centralnym szablonem, nawet jeśli nie nazwie tego wprost „synchronizacją\"."
+description: "Aktualizuje maszynerię workflow (.claude/: skille, agenci, reguły, hooki, workflows, templates + settings.json) w bieżącym projekcie, zaciągając najnowszą wersję z repo szablonu (claude-code-starter albo repo wariantu stacku z profilu projektu). Jednym uruchomieniem sprawdza czy w szablonie pojawiły się jakiekolwiek zmiany i automatycznie je aplikuje. Używaj gdy: „zaktualizuj szablon\", „zsynchronizuj .claude\", „zaciągnij zmiany z szablonu\", „sync template\", „czy są nowe skille/agenci\", „update workflow\", „odśwież folder Claude\" — a także po wrzuceniu tego szablonu do nowego projektu, żeby dociągnąć maszynerię. Wywołuj TEN skill zawsze gdy user chce zsynchronizować konfigurację Claude Code z centralnym szablonem, nawet jeśli nie nazwie tego wprost „synchronizacją\"."
 argument-hint: "[opcjonalnie: --dry-run (tylko podgląd), --force (aplikuj mimo tej samej wersji)]"
 ---
 
 # sync-template — aktualizacja maszynerii workflow z szablonu
 
-Zaciąga najnowszą wersję folderu `.claude/` z centralnego repo szablonu
-**`AIBiz-Automatyzacje/workspace-template-mobile`** (branch `main`) do bieżącego projektu.
+Zaciąga najnowszą wersję folderu `.claude/` z repo szablonu (branch `main`) do bieżącego projektu.
+Adres repo bierze z klucza `szablon.repo` w `.claude/stack/profil.json` projektu: wariant stacku publikuje się do
+własnego repo, a bez profilu albo klucza zostaje **`AIBiz-Automatyzacje/claude-code-starter`**. Zmienna
+`TEMPLATE_REPO_URL` wygrywa z obu.
 Powstał, żeby po wrzuceniu szablonu do innego projektu nie trzeba było ręcznie
 dyktować linku i prosić o aktualizację — jedno uruchomienie sprawdza, czy w
 szablonie coś się zmieniło, i automatycznie to aplikuje.
@@ -15,7 +17,7 @@ szablonie coś się zmieniło, i automatycznie to aplikuje.
 ## Model działania (ważne — tak zdecydował user)
 
 - **Zakres:** tylko maszyneria `.claude/` — `skills/`, `agents/`, `rules/`,
-  `hooks/`, `workflows/`, `templates/`, `docs/` oraz `settings.json`. **Nie** rusza
+  `hooks/`, `workflows/`, `templates/`, `scripts/`, `docs/` oraz `settings.json`. **Nie** rusza
   `settings.local.json` (lokalny), rootowego `README.md`/`CLAUDE.md` ani `docs/` projektu.
 - **Szablon zawsze wygrywa:** pliki wspólne są nadpisywane wersją z szablonu, także
   gdy były lokalnie modyfikowane. Nadpisywane i usuwane pliki najpierw trafiają do
@@ -58,6 +60,23 @@ Skrypt wypisuje ustrukturyzowany raport, który streszczasz userowi po polsku:
 - `APPLIED: …` → potwierdź, że zmiany zaaplikowano.
 - `BACKUP: <ścieżka>` → podaj userowi tę ścieżkę jako punkt odwrotu (tam są
   poprzednie wersje nadpisanych/usuniętych plików).
+- `NOWA SESJA: …` → przekaż userowi dosłownie jako ostatnie zdanie raportu: instrukcje i skille
+  są buforowane w sesji, więc `/dev-autopilot-wf` uruchomiony w tej sesji działałby na starej
+  maszynerii.
+- `RUNNER TESTÓW: <szczegół> — poprawka: <config>` (także po `STATUS: UP_TO_DATE`) → vitest albo jest
+  projektu zbiera testy maszynerii z `.claude/**` i autopilot zatrzyma się na `npm test` na starcie.
+  Przekaż userowi linię z poprawką (wpis `exclude` w pliku configu, który podaje) i zaproponuj, że ją
+  wpiszesz i zacommitujesz. Sync i tak się udał.
+- `HIGIENA: <element> — <szczegół> — naprawa: <komenda>` (każdy sync, także `UP_TO_DATE`) → rzecz, której sync nie
+  przenosi, a która kosztuje albo psuje pipeline: stara baza wiedzy (`learned-patterns.md` w `.claude/rules/`), kontekst startowy
+  agenta ponad próg (CLAUDE.md + reguły bez `paths:`), pozostałości starego zestawu w `.claude/`, hook wskazujący usunięty
+  plik, `.claude/.backups/` albo `CLAUDE.md` w podkatalogach poza `.gitignore`, bajt sterujący w wiedzy, brak albo nieaktualny
+  `.coderabbit.yaml`. Wypisz każdą linię z naprawą jako listę do decyzji usera — sam niczego nie naprawiasz. Sync i tak się udał.
+- `--- DOCTOR (pierwsza instalacja) ---` + tabela + `DOCTOR_KOD: <n>` → pierwsza instalacja
+  szablonu w projekcie. Pokaż userowi tabelę. `DOCTOR_KOD: 0` = wszystkie obowiązkowe narzędzia są;
+  inny kod = wypisz wiersze `BRAK` z komendami z kolumny „Instalacja" i powiedz, że bez nich run
+  pipeline'u się zatrzyma. Sync i tak się udał — nie ponawiaj go. Ten sam sprawdzian user uruchamia
+  później sam: `bash .claude/scripts/doctor/doctor.sh`.
 
 ## Obsługa błędów
 
@@ -65,14 +84,29 @@ Skrypt wypisuje ustrukturyzowany raport, który streszczasz userowi po polsku:
   Przekaż userowi stderr z git i zasugeruj `gh auth login` / sprawdzenie sieci.
   **Nie** ponawiaj w kółko tej samej komendy.
 - `BŁĄD: brak 'git' w PATH` → git nie jest zainstalowany; zgłoś to userowi.
+- `BŁĄD: niepoprawny szablon.repo w .claude/stack/profil.json` (kod 7) → profil stacku projektu ma klucz, który nie jest
+  adresem git. Skrypt niczego nie ruszył i celowo nie wrócił do claude-code-starter, bo projekt innego stacku dostałby
+  cudzy wariant. Przekaż userowi wartość klucza; poprawny adres podaje profil w repo szablonu tego stacku.
+- `syntax error` w `sync-template.sh` (kod wyjścia bywa 0) albo brak linii `APPLIED`/`STATUS` → sync podmienił własny skrypt
+  w trakcie działania: pliki są już nowe, a marker wersji i manifest nie. Uruchom skrypt **ponownie** (ten sam, już nowy) —
+  zaktualizuje marker i manifest, pliki ma identyczne. Od wersji z blokiem `{ …; exit; }` skrypt jest parsowany w całości
+  przed wykonaniem; błąd może się zdarzyć tylko raz, przy przejściu ze starszej kopii.
+- `BŁĄD: workflow(y) w szablonie nie parsują się` → w **szablonie** jest plik
+  `.claude/workflows/*.js`, którego runtime by nie zarejestrował. Skrypt nie
+  zaaplikował **niczego**, projekt jest nietknięty. To defekt po stronie szablonu, nie
+  projektu: przekaż userowi listę plików ze stdout i powiedz, że naprawa idzie do repo
+  szablonu (`node --test '.claude/workflows/__tests__/skladnia-workflowow.test.mjs'`
+  odtwarza to lokalnie). **Nie obchodź tego** kopiowaniem plików ręcznie — zepsuty
+  workflow milczy aż do pierwszego wywołania, a wtedy autopilot pada w środku fazy.
 
 Nie modyfikuj skryptu „w locie", żeby obejść błąd konfiguracji — zdiagnozuj przyczynę.
 
 ## Higiena repo
 
 Katalog backupów `.claude/.backups/` i pliki `.claude/.template-version` /
-`.claude/.template-manifest` to lokalne bookkeeping — zasugeruj userowi dodanie
-`.claude/.backups/` do `.gitignore` projektu, jeśli jeszcze go tam nie ma.
+`.claude/.template-manifest` / `.claude/.template-hashes` to lokalne bookkeeping — zasugeruj userowi dodanie
+`.claude/.backups/` do `.gitignore` projektu, jeśli jeszcze go tam nie ma. `.template-hashes` (hash gita
+każdego pliku z chwili syncu) czyta telemetria: czy run wykonał dokładnie wersję z szablonu (`run.szablon.zgodny`).
 
 ## Uwagi techniczne
 
@@ -80,6 +114,12 @@ Katalog backupów `.claude/.backups/` i pliki `.claude/.template-version` /
 - `settings.json` (współdzielona konfiguracja szablonu) jest nadpisywany; lokalne
   nadpisania konfiguracji projekt trzyma w `settings.json` **local** — czyli
   `settings.local.json`, którego skrypt nigdy nie dotyka.
-- Skille `expo-*`/`eas-*` aktualizują się przez repo jak każdy inny skill; ich twarda
-  synchronizacja z upstreamem (github.com/expo/skills) to osobny proces wykonywany
-  w repo szablonu — nie mieszaj tych dwóch.
+- Skill narzędzia z własnym upstreamem aktualizuje się przez repo jak każdy inny skill;
+  jego twarda synchronizacja z upstreamem to osobny proces opisany w
+  `ZRODLA-SZABLONU.md` — nie mieszaj tych dwóch.
+
+## Pierwsze wprowadzenie do projektu
+
+Po pierwszej synchronizacji doprowadź do tego, żeby maszyneria była na zdalnej gałęzi głównej: push `main` (po decyzji operatora, bo może oznaczać deploy) albo osobny PR. Inaczej
+pierwszy `/dev-pr` policzy jej pliki jako część zadania. Linie `HIGIENA:` przejdź przed pierwszym `/dev-pr`, także CodeRabbit: istniejący `.coderabbit.yaml` musi spełniać kontrakt pipeline'u
+(`node .claude/scripts/pr/kontrakt-bota.mjs --galaz main`), a nie tylko istnieć.

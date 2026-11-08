@@ -6,7 +6,7 @@ argument-hint: "[opcjonalnie: opis problemu lub --full]"
 
 # Compound — dokumentowanie rozwiązanego problemu
 
-**Uwaga: Aktualny rok to 2026.** Używaj tego przy datowaniu dokumentów.
+Datę do dokumentów bierz z `date +%F`.
 
 Przechwytuje rozwiązania problemów gdy kontekst jest świeży, tworząc ustrukturyzowaną dokumentację w `docs/solutions/` z YAML frontmatter dla wyszukiwalności i przyszłego odniesienia.
 
@@ -92,16 +92,23 @@ date: YYYY-MM-DD
 category: kategoria
 severity: low | medium | high | critical
 stack:
-  - React Native
-  - Expo
-  - TypeScript
-  - Supabase
-  - NativeWind
+  - Technologia
+  - Technologia
 tags:
   - tag1
   - tag2
 status: verified
 last_verified: YYYY-MM-DD
+klasa: klasa-ze-slownika
+regula: "Rób X, nie Y — jedno albo dwa zdania."
+regula_krotka: "Ta sama reguła w jednym zdaniu, ≤ 160 zn."
+paths:
+  - katalog/**
+waga: wysoka | srednia | niska
+szczebel: kod | lint | regula
+szczebel_powod: "Jedno zdanie: dlaczego ten szczebel, a nie wyższy."
+zrodlo: "zadanie <nazwa> / PR <numer> / commit <sha>"
+ucieczki: 0
 ---
 
 # Tytuł problemu
@@ -143,7 +150,9 @@ Krok po kroku z przykładami kodu:
 Dodatkowe informacje o okolicznościach, środowisku, wersji.
 ```
 
-Dostosuj sekcje `stack` i `tags` do faktycznego stosu technologicznego problemu. Nie wstawiaj pełnego stacka jeśli problem dotyczy tylko jednej technologii.
+Dostosuj sekcje `stack` i `tags` do faktycznego stosu technologicznego problemu (technologie stacku i przykład `paths`: `references/stack.md`, sekcja „Pola wpisu”). Nie wstawiaj pełnego stacka jeśli problem dotyczy tylko jednej technologii.
+
+Pola od `klasa` do `ucieczki` wypełniasz i sprawdzasz wg sekcji **Pola wiedzy** niżej, zanim przejdziesz dalej.
 
 ### Krok 4.5: Zaktualizuj słownik domenowy (docs/CONCEPTS.md)
 
@@ -151,7 +160,7 @@ Sprawdź, czy w tej sesji pojawił się lub uściślił **termin domenowy o znac
 
 **Zasady słownika (trzymaj się ściśle):**
 - **Cienki indeks**: hasło = 1-2 zdania definicji + opcjonalny link do szczegółów (`→ [nazwa](../CLAUDE.md#kotwica)`). Nie kopiuj wiedzy z CLAUDE.md — linkuj.
-- **Tylko domenowe**: pojęcia biznesowe/projektowe, zwłaszcza **kontrintuicyjne** (np. status „refund" liczony jako aktywny). NIE dodawaj pojęć technicznych/generycznych — te idą do `docs/solutions/` lub `learned-patterns`.
+- **Tylko domenowe**: pojęcia biznesowe/projektowe, zwłaszcza **kontrintuicyjne** (np. status „refund" liczony jako aktywny). NIE dodawaj pojęć technicznych/generycznych — te idą do `docs/solutions/`.
 - **Alfabetycznie**, jeden `## Termin` na hasło, dedup przed dodaniem.
 - **Glosariusz, nie spec** — jeśli hasło wymaga akapitów, to nie jest hasło słownika.
 
@@ -172,6 +181,48 @@ Narasta przez /dev-compound, porządkowany przez /dev-compound-refresh.
 
 Jeśli nie pojawił się żaden termin domenowy — pomiń ten krok (to normalne dla większości sesji).
 
+### Pola wiedzy
+
+Solution wchodzi do wiedzy projektu przez pola frontmattera: skrypt `.claude/scripts/wiedza/` buduje z nich indeks
+`docs/learned-patterns.md` i wycinki reguł, które planner wkleja builderom, a dossier reviewerom. Solution bez poprawnych
+pól nie zostaje w bazie.
+
+- `klasa` — klasa defektu z listy `KLASY_WIEDZY` w `.claude/scripts/wiedza/klasy.mjs` (słownik klas błędów dev-pr bez klas
+  nie-defektu i bez `inna`).
+- `regula` — jedno albo dwa zdania, ≤ 400 zn: co przyszły kod robi, żeby problem nie wrócił („rób X, nie Y”).
+- `regula_krotka` — ta sama reguła w jednym zdaniu, ≤ 160 zn. Wycinek reguł dla buildera i reviewera pokazuje ją
+  z linkiem do solution, więc w limicie wycinka mieści się kilka razy więcej reguł; bez tego pola wycinek tnie pierwsze
+  zdanie `regula`.
+- `paths` — globy plików, których reguła dotyczy: względne, z `/`, bez segmentów `.` i `..`, każdy pasuje do pliku repo.
+  `"**"` znaczy „każdy plik” — projekt ma takich reguł najwyżej 5, więc dostaje go reguła naprawdę przekrojowa.
+- `waga` — `wysoka` (severity critical/high), `srednia` (medium), `niska` (low).
+- `szczebel` i `szczebel_powod` — najwyższy szczebel, na którym lekcję da się wymusić, i jedno zdanie, dlaczego nie wyżej:
+  - `kod` — zły wzorzec da się uczynić niemożliwym w kodzie (typ, struktura danych, jedno miejsce w architekturze);
+  - `lint` — wykryje go analiza statyczna (np. reguła ESLint `no-restricted-syntax`);
+  - `regula` — wymaga osądu, więc zostaje regułą tekstową.
+
+  Zaczynaj od `kod`. Przykład: „nagłówek `X-Forwarded-For` czytaj w jednym wskazanym miejscu” → `lint`;
+  „sumuj kolumnę pomiarową dopiero po sprawdzeniu rozłączności odcinków” → `regula`.
+- `zrodlo` — zadanie, PR albo commit, z którego pochodzi lekcja.
+- `ucieczki` — ile razy ta klasa uciekła naszemu review: 0, gdy znalazło ją review fazy; co najmniej 1 dla uwagi bota na PR.
+  Gdy indeks `docs/learned-patterns.md` ma już regułę tej klasy o tym samym sensie, przepisz jej treść dosłownie
+  i daj `ucieczki` o 1 większe niż w tamtym solution — indeks zostawia wtedy nowszy wpis.
+- `bramka` — tylko przy szczeblu `kod` albo `lint`, gdy bramka jest już wdrożona: gdzie (np. `eslint.config.js
+  no-restricted-syntax`). Dopisuje je ten, kto wdraża bramkę, nie compound. Do tego czasu lekcja trafia do indeksu i wycinków
+  jak reguła; z polem `bramka` wypada z nich, bo pilnuje jej mechanizm.
+
+Po zapisie pliku:
+
+1. `node .claude/scripts/wiedza/wiedza.mjs sprawdz <plik>` — kod 0 = pola poprawne. Kod 1: popraw pola wg `bledy`
+   i sprawdź drugi raz; gdy dalej kod 1, usuń plik i podaj błędy w podsumowaniu (odmowa zapisu).
+2. Po każdym zapisanym solution: `node .claude/scripts/wiedza/wiedza.mjs indeks --zapisz` — skrypt generuje indeks
+   z solutions (szczebel `regula` oraz `kod`/`lint` bez pola `bramka`). `zapisany: false` z `bledy` (koszyk „zawsze” albo
+   rozmiar indeksu) = indeks zostaje bez zmian; podaj błędy w podsumowaniu, porządkuje je `/dev-compound-refresh`.
+   Indeksu nie edytujesz ręcznie.
+3. Szczebel `kod` albo `lint`: w podsumowaniu także **Propozycja bramki** (typ albo reguła lint do wdrożenia),
+   decyzja operatora. Klasa zapisanego solution w `doBramki` wyniku indeksu (suma ucieczek ≥ 3) — też propozycja bramki,
+   nawet przy szczeblu `regula`, bo kolejna linia reguły tej klasy jej nie zatrzymała.
+
 ### Krok 5: Podsumowanie
 
 Wyświetl podsumowanie:
@@ -182,46 +233,12 @@ Dokumentacja zapisana (tryb compact)
 Plik: docs/solutions/[category]/[filename].md
 
 Aby uzyskać bogatszą dokumentację (cross-referencje, diagnostyka, strategia zapobiegania),
-uruchom /dev-compound --full w świeżej sesji.
+uruchom /dev-compound --full w tej samej sesji, póki rozmowa o problemie jest w kontekście.
 
-[Jeśli dodano regułę:]
-Reguła: Dodana do .claude/rules/learned-patterns.md
+Wiedza: szczebel [regula|kod|lint] — [indeks zapisany / bramka indeksu: błędy]
+Propozycja bramki (kod, lint): [kod|lint] [klasa] — [reguła] ([szczebel_powod])
+[Odmowa zapisu: błędy z wiedza.mjs sprawdz]
 ```
-
-### Krok 6: Ocena i dodanie reguły do learned-patterns
-
-Po zapisaniu dokumentacji, autonomicznie oceń czy rozwiązany problem zasługuje na regułę w `.claude/rules/learned-patterns.md`. Nie pytaj użytkownika — zdecyduj sam.
-
-**Kryteria rule-worthy (problem spełnia minimum 2 z 5):**
-
-1. **Ryzyko powtórzenia** — błąd łatwo popełnić ponownie bo API/zachowanie jest nieintuicyjne lub słabo udokumentowane
-2. **Wysoka waga** — problem powodował ciche błędy, lukę bezpieczeństwa, utratę danych lub trudne do debugowania zachowanie
-3. **Prosty wzorzec** — regułę da się wyrazić w 1-3 liniach jako "rób X, nie Y"
-4. **Szerokie zastosowanie** — wzorzec dotyczy przyszłego kodu w tym stacku, nie jednorazowej migracji czy typo
-5. **Niewidoczna luka wiedzy** — problem nie manifestuje się oczywistym błędem; cicho daje złe wyniki lub ujawnia się dopiero w produkcji/strict mode
-
-**Jeśli rule-worthy:**
-
-1. Przeczytaj `.claude/rules/learned-patterns.md` (jeśli istnieje)
-2. Sprawdź czy nie istnieje już zduplikowana lub bardzo podobna reguła — jeśli tak, pomiń
-3. Odczytaj aktualny rule-count z komentarza `<!-- rule-count: N -->`
-4. Jeśli N >= 50: NIE dodawaj nowej reguły. Zanotuj w podsumowaniu że limit został osiągnięty i zasugeruj `/dev-compound-refresh`
-5. Jeśli plik nie istnieje, stwórz go z nagłówkiem:
-   ```markdown
-   # Learned Patterns
-
-   Reguły wyciągnięte z rozwiązanych problemów w docs/solutions/. Zarządzane przez /dev-compound i /dev-compound-refresh.
-
-   <!-- rule-count: 0 -->
-   ```
-6. Dodaj regułę na końcu pliku:
-   ```markdown
-   - **[Zwięzły tytuł wzorca]**: [1-2 zdania actionable guidance: "rób X, nie Y"]
-     Source: docs/solutions/[category]/[filename].md
-   ```
-7. Zaktualizuj `<!-- rule-count: N -->` na `<!-- rule-count: N+1 -->`
-
-**Jeśli NIE jest rule-worthy:** pomiń ten krok cicho, nie dodawaj nic do podsumowania.
 
 ---
 
@@ -341,9 +358,10 @@ Jeśli widzisz oczywistego kandydata do odświeżenia, wspomnij o tym w podsumow
 
 Zastosuj **Krok 4.5** także w trybie full — jeśli w sesji pojawił się termin domenowy o projektowo-specyficznym znaczeniu, dodaj/zaktualizuj hasło w `docs/CONCEPTS.md` (cienki indeks + link; utwórz plik z nagłówkiem jeśli nie istnieje).
 
-### Po zapisie: ocena i dodanie reguły do learned-patterns
+### Po zapisie: pola wiedzy
 
-Identyczna logika jak Krok 6 w trybie Compact — autonomicznie oceń czy problem jest rule-worthy (minimum 2 z 5 kryteriów), sprawdź duplikaty i limit ~50, dodaj regułę do `.claude/rules/learned-patterns.md` jeśli zasługuje. Jeśli plik nie istnieje — stwórz z nagłówkiem. Format reguły i kryteria opisane w Kroku 6 trybu Compact.
+Ta sama sekcja **Pola wiedzy** co w trybie Compact: pola we frontmatterze, `wiedza.mjs sprawdz`, indeks po każdym
+zapisanym solution, propozycja bramki dla `kod` i `lint`.
 
 ---
 
@@ -413,7 +431,7 @@ Wyniki zadań:
 
 Plik: docs/solutions/auth-issues/2026-03-24-supabase-rls-policy-bypass.md
 
-Reguła: [Dodana do .claude/rules/learned-patterns.md / Limit osiągnięty / Nie rule-worthy]
+Wiedza: [szczebel — indeks zapisany / bramka indeksu; Propozycja bramki: kod|lint / Odmowa zapisu]
 
 Ta dokumentacja będzie wyszukiwalna jako referencja gdy podobne
 problemy pojawią się w przyszłości.
@@ -454,6 +472,5 @@ Build -> Test -> Znajdź problem -> Research -> Popraw -> Dokumentuj -> Waliduj 
 ## Powiązane komendy
 
 - `/dev-brainstorm [temat]` - Walidacja pomysłu i brainstorming
-- `/dev-plan [wymagania lub ścieżka requirements doc]` - Planowanie techniczne implementacji (docs/plans/)
-- `/dev-docs [ścieżka planu z docs/plans/]` - Cięcie planu na zadania dla autopilota (docs/active/)
+- `/dev-plan [wymagania lub ścieżka requirements doc]` - Plan techniczny (docs/plans/) i zadanie dla autopilota (docs/active/)
 - `/dev-compound-refresh [scope]` - Odświeżenie istniejącej dokumentacji solutions

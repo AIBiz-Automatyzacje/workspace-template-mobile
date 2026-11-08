@@ -88,34 +88,39 @@ Background (L: 0.08)   — najgłębsza warstwa
 ### Implementacja w OKLCH (CSS variables)
 
 ```css
-:root {
-  /* Light mode */
-  --color-background: oklch(1 0 0);
-  --color-surface: oklch(0.98 0.005 250);
-  --color-surface-elevated: oklch(1 0 0);
-  --color-foreground: oklch(0.18 0.02 250);
-  --color-muted-foreground: oklch(0.5 0.02 250);
-  --color-border: oklch(0.9 0.01 250);
-  --color-primary: oklch(0.55 0.2 250);
-  --color-success: oklch(0.6 0.15 145);
-  --color-warning: oklch(0.7 0.15 70);
-  --color-error: oklch(0.6 0.2 25);
-}
-
-.dark {
-  /* Dark mode — kalibracja, nie inwersja */
-  --color-background: oklch(0.1 0.01 250);
-  --color-surface: oklch(0.14 0.01 250);
-  --color-surface-elevated: oklch(0.18 0.01 250);
-  --color-foreground: oklch(0.93 0.005 250);
-  --color-muted-foreground: oklch(0.62 0.01 250);
-  --color-border: oklch(0.25 0.01 250);
-  --color-primary: oklch(0.7 0.18 250);   /* lżejszy + mniej nasycony */
-  --color-success: oklch(0.7 0.13 145);
-  --color-warning: oklch(0.78 0.12 70);
-  --color-error: oklch(0.7 0.18 25);
+/* global.css */
+@layer theme {
+  :root {
+    @variant light {
+      --color-background: oklch(1 0 0);
+      --color-surface: oklch(0.98 0.005 250);
+      --color-surface-elevated: oklch(1 0 0);
+      --color-foreground: oklch(0.18 0.02 250);
+      --color-muted-foreground: oklch(0.5 0.02 250);
+      --color-border: oklch(0.9 0.01 250);
+      --color-primary: oklch(0.55 0.2 250);
+      --color-success: oklch(0.6 0.15 145);
+      --color-warning: oklch(0.7 0.15 70);
+      --color-error: oklch(0.6 0.2 25);
+    }
+    @variant dark {
+      /* Dark mode — kalibracja, nie inwersja */
+      --color-background: oklch(0.1 0.01 250);
+      --color-surface: oklch(0.14 0.01 250);
+      --color-surface-elevated: oklch(0.18 0.01 250);
+      --color-foreground: oklch(0.93 0.005 250);
+      --color-muted-foreground: oklch(0.62 0.01 250);
+      --color-border: oklch(0.25 0.01 250);
+      --color-primary: oklch(0.7 0.18 250);   /* lżejszy + mniej nasycony */
+      --color-success: oklch(0.7 0.13 145);
+      --color-warning: oklch(0.78 0.12 70);
+      --color-error: oklch(0.7 0.18 25);
+    }
+  }
 }
 ```
+
+Oba warianty muszą definiować ten sam zestaw zmiennych, inaczej dostaniesz błąd w runtime. `--color-surface` daje klasy `bg-surface` i `text-surface`, które same przełączają się z motywem. Selektorów `:root.dark` ani `.dark` tu nie używasz: motywem steruje `Uniwind.setTheme`.
 
 ### Elevation overlays (Material approach)
 
@@ -227,7 +232,7 @@ Red-green color blindness dotyka **8% mężczyzn** i **0.5% kobiet**. Najczęsts
 
 // DOBRE — kolor + ikona + tekst
 <View className="flex-row items-center gap-2">
-  <ErrorIcon className="text-error" />
+  <ErrorIcon size={16} colorClassName="accent-error" />
   <Text className="text-error">Field is required</Text>
 </View>
 ```
@@ -286,57 +291,36 @@ function ThemedSurface() {
 
 ---
 
-## `useColorScheme()` w Expo — automatic + manual
+## Motyw w Uniwind — automatic + manual
 
-Expo daje hook `useColorScheme()` z Reactowego context.
-
-```tsx
-// app/_layout.tsx
-import { useColorScheme } from "react-native";
-import { vars } from "nativewind";
-
-const lightTheme = vars({
-  "--color-background": "oklch(1 0 0)",
-  "--color-foreground": "oklch(0.18 0.02 250)",
-  "--color-primary": "oklch(0.55 0.2 250)",
-});
-
-const darkTheme = vars({
-  "--color-background": "oklch(0.1 0.01 250)",
-  "--color-foreground": "oklch(0.93 0.005 250)",
-  "--color-primary": "oklch(0.7 0.18 250)",
-});
-
-export default function RootLayout() {
-  const scheme = useColorScheme();
-  return (
-    <View style={scheme === "dark" ? darkTheme : lightTheme} className="flex-1">
-      <Slot />
-    </View>
-  );
-}
-```
+Domyślnie Uniwind jest w motywie `system`, czyli podąża za ustawieniem urządzenia. Provider nie jest potrzebny: klasy z tokenów przełączają się same, gdy tokeny są zdefiniowane w `@variant light` i `@variant dark` (sekcja OKLCH wyżej).
 
 ### Manual override
 
 ```tsx
-// hooks/use-theme-mode.ts
-import { create } from "zustand";
+import { Pressable, Text } from "react-native";
+import { Uniwind, useUniwind } from "uniwind";
 
 type ThemeMode = "system" | "light" | "dark";
 
-export const useThemeMode = create<{ mode: ThemeMode; setMode: (m: ThemeMode) => void }>(
-  (set) => ({
-    mode: "system",
-    setMode: (mode) => set({ mode }),
-  })
-);
+// Ekran ustawień: zapis wyboru i odtworzenie go przy starcie to Twoja warstwa
+function ThemeOption({ mode, label }: { mode: ThemeMode; label: string }) {
+  const { theme, hasAdaptiveThemes } = useUniwind();
+  const activeMode = hasAdaptiveThemes ? "system" : theme;
 
-// W komponencie
-const { mode } = useThemeMode();
-const systemScheme = useColorScheme();
-const effectiveScheme = mode === "system" ? systemScheme : mode;
+  return (
+    <Pressable
+      onPress={() => Uniwind.setTheme(mode)}
+      accessibilityRole="button"
+      accessibilityState={{ selected: activeMode === mode }}
+    >
+      <Text className="text-foreground">{label}</Text>
+    </Pressable>
+  );
+}
 ```
+
+`Uniwind.setTheme('light')` i `setTheme('dark')` synchronizują też komponenty natywne (Alert, Modal, dialogi systemowe) przez `Appearance.setColorScheme`, a `setTheme('system')` wraca do ustawienia urządzenia. Wołanie jest też dozwolone poza komponentem, co pozwala uniknąć zmiany motywu w trakcie startu. Tam, gdzie `className` nie wchodzi w grę (wykres, konfiguracja natywna), wartość tokenu daje `useCSSVariable('--color-primary')`.
 
 ---
 
@@ -401,8 +385,8 @@ Nigdy nie definiuj kolorów inline w komponentach.
 - [ ] Fiolet/róż NIE używane jako semantic action color (color blindness)
 - [ ] Każdy semantic state (error, success, warning) ma DODATKOWY sygnał (ikona, tekst)
 - [ ] Brand color jako akcent, NIE wymuszany jako primary action
-- [ ] `useColorScheme()` wsparte + opcjonalny manual override
-- [ ] Centralna definicja w theme (NativeWind config / CSS variables)
+- [ ] Motyw `system` wsparty + opcjonalny manual override przez `Uniwind.setTheme`
+- [ ] Centralna definicja w theme (`@layer theme` z `@variant light` i `@variant dark` w `global.css`)
 
 ---
 
@@ -413,4 +397,4 @@ Nigdy nie definiuj kolorów inline w komponentach.
 - [[resources/polish-checklist.md]] — image outline / border zamiast drop-shadow (Component patterns polish)
 - [[resources/ai-pitfalls.md]] — chaotyczny system kolorów jako AI signature
 
-*Źródła: Apple HIG Color (developer.apple.com/design/human-interface-guidelines/color), Material 3 Color (m3.material.io/styles/color), oklch.com, contrast-ratio.com, accessible-colors.com, WCAG 2.2 (w3.org/TR/WCAG22 — nadal aktualna W3C Recommendation z 12.12.2024), wiki/kolory-i-dark-mode, WWDC 2026 / iOS 27. Ostatni update: 2026-08-23.*
+*Źródła: Apple HIG Color (developer.apple.com/design/human-interface-guidelines/color), Material 3 Color (m3.material.io/styles/color), oklch.com, contrast-ratio.com, accessible-colors.com, WCAG 2.2 (w3.org/TR/WCAG22 — nadal aktualna W3C Recommendation z 12.12.2024), wiki/kolory-i-dark-mode, WWDC 2026 / iOS 27. Ostatni update: 2026-11-05.*

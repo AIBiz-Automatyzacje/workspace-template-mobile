@@ -4,43 +4,13 @@ Wzorce dla Supabase Edge Functions - Deno runtime, autentykacja, CORS, Stripe.
 
 ---
 
-## Kontrakt handlera (2026)
+## Struktura Edge Function
 
-Supabase **wycofało `Deno.serve()`** jako wzorzec dla Edge Functions. Obowiązujący kontrakt to
-`export default` z metodą `fetch`, owinięty w `withSupabase` z `npm:@supabase/server@^1`:
-
-```typescript
-import { withSupabase } from 'npm:@supabase/server@^1';
-
-export default {
-    fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
-        const { data, error } = await ctx.supabase.from('countries').select('*');
-        if (error) throw error;
-        return Response.json({ data });
-    }),
-};
-```
-
-Jeden wrapper daje cztery rzeczy, których wcześniej trzeba było pisać ręcznie:
-
-| Co załatwia `withSupabase` | Czego już NIE piszesz |
-|---|---|
-| Autentykacja — weryfikuje poświadczenia wywołującego | ręczne `getUser()` / `getClaims()` na `Authorization` |
-| Autoryzacja — przepuszcza tylko tryb `auth`, który zadeklarujesz | `if (!authHeader) throw ...` |
-| Gotowe klienty na `ctx` (`ctx.supabase` RLS-scoped, `ctx.supabaseAdmin` omija RLS) | `createClient(url, key, { global: { headers } })` |
-| CORS — preflight `OPTIONS` + nagłówki na **wszystkich** odpowiedziach | `_shared/cors.ts`, `...corsHeaders` przy każdej odpowiedzi |
-
-Handler uruchamia się **wyłącznie** po udanej autentykacji. Gdy auth zawiedzie, `withSupabase` sam
-zwraca `{ message, code }` z właściwym statusem (401/500) i nagłówkami CORS.
-
-Ten sam kontrakt (`export default { fetch }`) działa bez zmian na Cloudflare Workers i Bun.
-
-### Struktura Katalogów
+### Katalog i Plik
 ```
 supabase/functions/
-├── _shared/                 # Współdzielone utilsy (import relatywny)
-│   └── validation.ts
 ├── create-checkout-session/
+│   ├── deno.json
 │   └── index.ts
 ├── create-billing-portal-session/
 │   └── index.ts
@@ -48,35 +18,89 @@ supabase/functions/
     └── index.ts
 ```
 
-> `_shared/cors.ts` **nie jest już potrzebny** — CORS obsługuje `withSupabase`. Katalog `_shared`
-> zostaje dla realnie współdzielonej logiki (walidacja, mapowanie błędów). Nigdy nie rób
-> cross-importów między samymi Edge Functions.
+### CORS — załatwia wrapper `withSupabase`
 
-### Podstawowy Szablon (2026)
+`withSupabase` z `npm:@supabase/server@^1` sam obsługuje preflight (OPTIONS) i dokleja
+standardowe nagłówki CORS supabase-js (opcja `cors: 'default'`, domyślna). Nie twórz
+`_shared/cors.ts` ani ręcznej gałęzi `if (req.method === 'OPTIONS')`. Warianty:
+`cors: 'disabled'` (webhooki server-to-server) lub `cors: { headers: {...} }` (własne
+nagłówki, np. konkretne `Access-Control-Allow-Origin`).
+
+### Podstawowy Szablon (2026) — `withSupabase`
+
+Wzorzec oficjalny Supabase: eksport domyślny obiektu z handlerem `fetch`, owinięty
+`withSupabase`. Wrapper weryfikuje auth PRZED wejściem do handlera, tworzy klientów
+(`ctx.supabase` — w roli usera, podlega RLS; `ctx.supabaseAdmin` — secret key, omija RLS)
+i obsługuje CORS. Ten sam handler działa bez zmian na Cloudflare Workers i Bun.
+
 ```typescript
 // supabase/functions/my-function/index.ts
 import { withSupabase } from 'npm:@supabase/server@^1';
+import { captureError } from '../_shared/sentry.ts';  // helper ze skilla sentry-integration
 
 export default {
     fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
         try {
-            // ctx.supabase jest już scope'owany do RLS wywołującego użytkownika
-            const result = await processRequest(req, ctx.supabase);
+            // ctx.userClaims: { id, email, role } z JWT (null przy auth innym niż 'user')
+            const result = await processRequest(req, ctx.supabase, ctx.userClaims);
 
-            return Response.json(result);
+            return Response.json({ data: result, error: null });
         } catch (error) {
-            // Widoczne w Supabase Dashboard > Logs
-            console.error('Function error:', error);
+            await captureError(error, { operation: 'my-function', user_id: ctx.userClaims?.id });
 
-            const message = error instanceof Error ? error.message : 'Internal error';
-            return Response.json({ error: message }, { status: 400 });
+            // koperta błędu z reguł kodu; treść błędu (schemat bazy) zostaje w Sentry
+            return Response.json(
+                { data: null, error: { code: 'INTERNAL', message: 'Operacja nie powiodła się' } },
+                { status: 500 },
+            );
         }
     }),
 };
 ```
 
-`Response.json()` to Web API — nie potrzeba już `new Response(JSON.stringify(...))` z ręcznym
-`Content-Type`, a nagłówki CORS dokłada wrapper.
+**Sygnatura (README `supabase/server`, v1.4.1):**
+```typescript
+withSupabase(
+    {
+        auth: 'user' | 'publishable' | 'secret' | 'none' | AuthMode[],   // tablica = dowolny z trybów
+        cors?: 'default' | 'disabled' | { headers: Record<string, string> },
+    },
+    handler: (req: Request, ctx: SupabaseContext) => Promise<Response>,
+);
+
+interface SupabaseContext {
+    supabase: SupabaseClient;        // RLS (rola usera / anon)
+    supabaseAdmin: SupabaseClient;   // secret key, omija RLS
+    userClaims: UserClaims | null;   // id, email, role — tylko auth 'user'
+    jwtClaims: JWTClaims | null;     // pełne claims JWT
+    authMode: AuthMode;              // który tryb dopasowano
+    authKeyName?: string;            // nazwa klucza API ('secret'/'publishable')
+}
+```
+
+Wrapper czyta `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEYS`, `SUPABASE_SECRET_KEYS` i
+`SUPABASE_JWKS` — wszystkie wstrzykiwane automatycznie w Edge Functions.
+
+### Tryb `auth` — dobierz per funkcja
+
+| Tryb | Kto woła | Klient w ctx | `verify_jwt` w `config.toml` |
+|------|----------|--------------|------------------------------|
+| `'user'` | zalogowany user (JWT w `Authorization`) | `ctx.supabase` (RLS) | domyślne (`true`) |
+| `'secret'` | cron, worker, `pg_net`, inna funkcja (secret key) | `ctx.supabaseAdmin` | `false` |
+| `'publishable'` | klient publiczny przed logowaniem | `ctx.supabase` (anon) | `false` |
+| `'none'` | endpoint publiczny / webhook zewnętrzny (weryfikacja w kodzie) | `ctx.supabase` jako anon | `false` |
+
+Dla KAŻDEGO trybu innego niż `'user'` wyłącz weryfikację JWT na bramce, inaczej gateway
+odrzuci request zanim dojdzie do wrappera:
+
+```toml
+# supabase/config.toml
+[functions.stripe-webhook]
+verify_jwt = false
+
+[functions.nightly-cleanup]
+verify_jwt = false
+```
 
 ---
 
@@ -84,12 +108,10 @@ export default {
 
 ### Preferowane Źródła
 ```typescript
-// Wrapper handlera — domyślny import w KAŻDEJ Edge Function
+// Wrapper handlera (auth, klienci, CORS)
 import { withSupabase } from 'npm:@supabase/server@^1';
 
-// Supabase SDK - npm: jest rekomendowane w docs Supabase ("NPM packages (recommended)");
-// jsr:@supabase/supabase-js@2 to działająca alternatywa, ale nie ta polecana w docs.
-// Bezpośredni createClient potrzebny TYLKO poza withSupabase (klienty masz na ctx).
+// Supabase JS — tylko gdy potrzebujesz klienta poza ctx (docs Supabase używają npm:, nie jsr:)
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 // Stripe - użyj npm:
@@ -102,18 +124,16 @@ import { z } from 'npm:zod@4';
 import { encodeBase64 } from 'jsr:@std/encoding@1/base64';
 ```
 
-### Dlaczego npm:/jsr: zamiast esm.sh?
+### Dlaczego JSR/npm zamiast esm.sh?
 
 | Źródło | Status 2026 | Użycie |
 |--------|-------------|--------|
-| `npm:` | ✅ Rekomendowane | Pakiety npm, w tym `@supabase/supabase-js` |
-| `jsr:` | ✅ Działająca alternatywa | Pakiety Deno-native; `@supabase/supabase-js` też działa przez jsr:, ale docs Supabase polecają npm: |
-| `esm.sh` | ⚠️ Legacy | Tylko gdy jsr/npm nie działa |
-| `deno.land/x` | ❌ Deprecated | Migruj do jsr:/npm: |
-| `deno.land/std/http/server.ts` | ❌ Zakazane | `import { serve }` — wzorzec sprzed `export default { fetch }` |
+| `npm:` | ✅ Preferowane | Pakiety npm (w tym `@supabase/server`, `@supabase/supabase-js`) |
+| `jsr:` | ✅ Preferowane | Pakiety Deno-native (`@std/*`) |
+| `deno.land/x` | ⚠️ Minimalizuj | Wspierane, niepreferowane — docs: „minimize the use" |
+| `esm.sh`, `unpkg.com` | ⚠️ Minimalizuj | Tylko gdy jsr/npm nie działa |
 
-Zasady importów z oficjalnych wytycznych Supabase: **żadnych bare specifiers** (zawsze prefiks
-`npm:` / `jsr:` / `node:`), **zawsze wersja** (`npm:express@4.18.2`, nie `npm:express`).
+Zawsze pinuj wersję (`@2`, `@^1`, `@22`).
 
 ### Konfiguracja `deno.json` (Preferowane)
 
@@ -138,111 +158,57 @@ import Stripe from 'stripe';
 
 ---
 
-## Autentykacja i autoryzacja (tryby `auth`)
+## Weryfikacja JWT
 
-Weryfikacja JWT nie jest już zadaniem kodu funkcji — robi ją `withSupabase`. Twoja jedyna decyzja to
-**tryb `auth`**, dobrany po tym, KTO woła funkcję:
+### `auth: 'user'` — wrapper weryfikuje za Ciebie (PREFEROWANE)
 
-| Wywołujący | `auth` | `verify_jwt` | Klient do użycia |
-|---|---|---|---|
-| Zalogowany użytkownik (JWT w `Authorization`) | `'user'` | `true` (domyślne, pomiń) | `ctx.supabase` (RLS wg usera) |
-| Cron, worker, `pg_net`, inna funkcja | `'secret'` | `false` | `ctx.supabaseAdmin` (omija RLS) |
-| Klient publiczny przed logowaniem | `'publishable'` | `false` | `ctx.supabase` (anon, RLS działa) |
-| Publiczny endpoint / webhook zewnętrzny (weryfikacja w kodzie) | `'none'` | `false` | `ctx.supabaseAdmin` jeśli potrzebny |
-
-Dla **każdego trybu innego niż `'user'`** wyłącz platformową bramkę JWT w `supabase/config.toml` —
-inaczej platforma odrzuci request, zanim dojdzie do funkcji:
-
-```toml
-[functions.stripe-webhook]
-verify_jwt = false
-```
-
-Warianty: `auth: 'secret:cron'` / `auth: 'publishable:web_app'` przyjmują tylko konkretny nazwany
-klucz (rotacja bez ruszania innych serwisów), `auth: 'secret:*'` dowolny z zestawu, a tablica
-`auth: ['user', 'secret']` przepuszcza oba — pierwszy pasujący wygrywa (brak poświadczeń spada do
-kolejnego trybu, ale obecny-a-niepoprawny JWT odrzuca request, bez cichego downgrade'u).
-
-### Kontekst `ctx`
-
-```typescript
-interface SupabaseContext {
-    supabase: SupabaseClient;       // RLS-scoped (user albo anon, zależnie od trybu)
-    supabaseAdmin: SupabaseClient;  // omija RLS (secret key)
-    userClaims: UserClaims | null;  // tożsamość z JWT: { id, role?, email?, appMetadata?, userMetadata? }
-    jwtClaims: JWTClaims | null;    // pełne claimy JWT (sub, exp, iat, ...)
-    authMode: AuthMode;             // który tryb dopasował request
-    authKeyName?: string;           // nazwa użytego klucza API (brak dla 'user' / 'none')
-}
-```
-
-`ctx.supabase` to zawsze klient bezpieczny — respektuje RLS. `ctx.supabaseAdmin` zawsze RLS omija,
-więc sięgaj po niego tylko tam, gdzie naprawdę potrzeba pełnego dostępu (webhooki, crony).
-
-`ctx.userClaims.id` wystarcza do identyfikacji użytkownika — **nie wołaj `getUser()` tylko po UUID**
-(to zbędny round-trip do serwera Auth). Pełny obiekt `User` (metadane, telefon, identities) pobierz
-przez `ctx.supabase.auth.getUser()` dopiero gdy realnie go potrzebujesz.
-
-> **Autoryzacja ról:** nigdy po `userMetadata` — to pole jest edytowalne przez samego użytkownika
-> (`supabase.auth.updateUser`). Rolę czytaj z `appMetadata` albo z dedykowanej tabeli ról.
+Z `withSupabase({ auth: 'user' })` nie parsujesz nagłówka `Authorization` ani nie wołasz
+`getClaims()`/`getUser()` ręcznie: request bez ważnego JWT jest odrzucany ZANIM handler
+się wykona. Tożsamość masz w `ctx.userClaims` (`id`, `email`, `role`), pełne claims
+w `ctx.jwtClaims`, a `ctx.supabase` działa już w roli tego usera (RLS).
 
 ```typescript
 import { withSupabase } from 'npm:@supabase/server@^1';
 
 export default {
     fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
-        // Tożsamość jest już zweryfikowana — handler nie odpali się bez ważnego JWT
-        const userId = ctx.userClaims!.id;
+        // ctx.userClaims nie jest null — wrapper odrzucił request bez JWT
+        const userId = ctx.userClaims?.id;
+        if (!userId) {
+            return Response.json({ data: null, error: { code: 'UNAUTHORIZED', message: 'Brak uwierzytelnienia' } }, { status: 401 });
+        }
 
-        const { data, error } = await ctx.supabase
-            .from('orders')
-            .select('*')
-            .eq('user_id', userId);
-
-        if (error) throw error;
-        return Response.json({ data });
+        const result = await processForUser(userId, ctx.supabase);
+        return Response.json({ data: result, error: null });
     }),
 };
 ```
 
-### Własny format błędu — `createSupabaseContext`
+Pełny obiekt `User` (metadata, identities) — dopiero gdy naprawdę go potrzebujesz:
+`const { data: { user } } = await ctx.supabase.auth.getUser();` (round-trip do Auth).
 
-`withSupabase` sam odpowiada `{ message, code }` przy błędzie auth. Gdy potrzebujesz innego kształtu
-odpowiedzi (np. ustandaryzowane `{ data, error: { code, message } }` z reguł projektu), użyj
-`createSupabaseContext` — te same weryfikacje, ale w formie result tuple:
+### getClaims() vs getUser() — gdy weryfikujesz ręcznie
+
+Potrzebne tylko przy `auth: 'none'` z własną logiką (np. token w body) lub poza wrapperem.
+
+- `getClaims()` — preferowane. Od 1 października 2025 nowe projekty mają asymetryczne
+  klucze JWT: weryfikacja lokalna przez JWKS (`SUPABASE_JWKS`), bez round-tripu do Auth.
+- Na projektach z symetrycznym secretem JWT `getClaims()` sam robi fallback do weryfikacji
+  zdalnej (jak `getUser()`) — działa, tylko bez zysku wydajności; `getUser()` pozostaje
+  równoważną alternatywą.
 
 ```typescript
-import { createSupabaseContext } from 'npm:@supabase/server@^1';
-
-export default {
-    fetch: async (req: Request) => {
-        const { data: ctx, error } = await createSupabaseContext(req, { auth: 'user' });
-
-        if (error) {
-            return Response.json(
-                { data: null, error: { code: error.code, message: error.message } },
-                { status: error.status }
-            );
-        }
-
-        const { data } = await ctx!.supabase.from('orders').select('*');
-        return Response.json({ data, error: null });
-    },
-};
+const token = req.headers.get('Authorization')?.replace('Bearer ', '') ?? '';
+const { data, error } = await ctx.supabase.auth.getClaims(token);
+if (error || !data) {
+    return Response.json({ data: null, error: { code: 'INVALID_TOKEN', message: 'Nieprawidłowy token' } }, { status: 401 });
+}
+const userId = data.claims.sub;
 ```
-
-Uwaga: ta ścieżka **nie dokłada nagłówków CORS** — obsłuż je sam albo wróć do `withSupabase`.
 
 ---
 
 ## Przykład: Stripe Checkout
-
-> **`apiVersion` MUSI równać się wersji pinowanej przez zainstalowany major SDK.** W stripe-node typ
-> `apiVersion` to `LatestApiVersion` — literal jednej konkretnej wersji, nie dowolny string. Podanie
-> starszej wartości to **błąd typów w `deno check`/TS**, nie ostrzeżenie. Wartości poniżej odpowiadają
-> `npm:stripe@22` (22.5.0 pinuje `'2026-07-29.dahlia'`). Po każdym podbiciu majora sprawdź
-> `Stripe.LatestApiVersion` (albo `src/apiVersion.ts` w tagu wydania) i zsynchronizuj oba miejsca
-> w tym pliku — inaczej przykłady przestaną się kompilować.
 
 ### create-checkout-session
 ```typescript
@@ -251,16 +217,20 @@ import { withSupabase } from 'npm:@supabase/server@^1';
 import Stripe from 'npm:stripe@22';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
-    apiVersion: '2026-07-29.dahlia',
+    // MUSI rownac sie pinowi zainstalowanego majora (Stripe.LatestApiVersion).
+    // Typ apiVersion to literal JEDNEJ wersji — rozjazd = blad typow w deno check,
+    // nie ostrzezenie. Po kazdym podbiciu stripe-node sprawdz src/apiVersion.ts.
+    apiVersion: '2026-07-29.dahlia', // stripe-node 22.5.0 (pin wszedl w 22.4.0)
 });
 
-// auth: 'user' — handler odpali się tylko z ważnym JWT zalogowanego użytkownika.
-// verify_jwt zostaje domyślnie true, więc config.toml bez zmian.
+// auth: 'user' — wrapper odrzuca request bez ważnego JWT i obsługuje CORS/preflight
 export default {
     fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
         try {
-            // Tożsamość zweryfikowana przez wrapper — bez ręcznego getUser()
-            const { id: userId, email } = ctx.userClaims!;
+            const user = ctx.userClaims;
+            if (!user) {
+                return Response.json({ data: null, error: { code: 'UNAUTHORIZED', message: 'Brak uwierzytelnienia' } }, { status: 401 });
+            }
 
             // Pobierz dane z body
             const { priceId, successUrl, cancelUrl } = await req.json();
@@ -277,19 +247,18 @@ export default {
                 mode: 'payment',
                 success_url: successUrl,
                 cancel_url: cancelUrl,
-                customer_email: email,
+                customer_email: user.email,
                 metadata: {
-                    user_id: userId,
-                    user_email: email ?? '',
+                    user_id: user.id,
+                    user_email: user.email,
                 },
             });
 
-            return Response.json({ sessionId: session.id, url: session.url });
+            return Response.json({ data: { sessionId: session.id, url: session.url }, error: null });
         } catch (error) {
-            console.error('Checkout error:', error);
-
-            const message = error instanceof Error ? error.message : 'Internal error';
-            return Response.json({ error: message }, { status: 400 });
+            // captureError z ../_shared/sentry.ts (skill sentry-integration); treść błędu Stripe zostaje w Sentry
+            await captureError(error, { operation: 'checkout', user_id: ctx.userClaims?.id });
+            return Response.json({ data: null, error: { code: 'CHECKOUT_FAILED', message: 'Nie udało się utworzyć płatności' } }, { status: 500 });
         }
     }),
 };
@@ -306,158 +275,143 @@ import { withSupabase } from 'npm:@supabase/server@^1';
 import Stripe from 'npm:stripe@22';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY') ?? '', {
-    apiVersion: '2026-07-29.dahlia',
+    // MUSI rownac sie pinowi zainstalowanego majora (Stripe.LatestApiVersion).
+    // Typ apiVersion to literal JEDNEJ wersji — rozjazd = blad typow w deno check,
+    // nie ostrzezenie. Po kazdym podbiciu stripe-node sprawdz src/apiVersion.ts.
+    apiVersion: '2026-07-29.dahlia', // stripe-node 22.5.0 (pin wszedl w 22.4.0)
 });
 const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET') ?? '';
 
-// auth: 'none' — Stripe nie ma JWT Supabase. Zaufanie budujemy WYŁĄCZNIE na
-// podpisie webhooka (constructEventAsync) weryfikowanym w kodzie niżej.
-// cors: 'disabled' — wywołanie server-to-server, przeglądarka tu nie zagląda.
+// Webhook zewnętrzny: auth 'none' (Stripe nie ma JWT Supabase), CORS wyłączony
+// (server-to-server). Zaufanie opiera się WYŁĄCZNIE na podpisie stripe-signature.
+// Wymaga `verify_jwt = false` dla tej funkcji w supabase/config.toml.
 export default {
     fetch: withSupabase({ auth: 'none', cors: 'disabled' }, async (req, ctx) => {
-        try {
-            const body = await req.text();
-            const signature = req.headers.get('stripe-signature');
+    try {
+        const body = await req.text();
+        const signature = req.headers.get('stripe-signature');
 
-            if (!signature) {
-                throw new Error('Missing signature');
-            }
-
-            // Weryfikuj sygnaturę webhook — to jest tu jedyna autentykacja
-            const event = await stripe.webhooks.constructEventAsync(
-                body,
-                signature,
-                webhookSecret
-            );
-
-            // ctx.supabaseAdmin omija RLS — bez ręcznego createClient z service key
-            const supabase = ctx.supabaseAdmin;
-
-            // Obsłuż event
-            switch (event.type) {
-                case 'checkout.session.completed': {
-                    const session = event.data.object as Stripe.Checkout.Session;
-                    // Dopasowanie po UUID z metadata (ustawionym przy tworzeniu
-                    // sesji), NIGDY po email — email jest mutowalny.
-                    const userId = session.metadata?.user_id;
-                    const customerId = session.customer as string;
-
-                    if (!userId) {
-                        throw new Error('Missing user_id in session metadata');
-                    }
-
-                    // Aktywuj dostęp
-                    await supabase
-                        .from('users')
-                        .update({
-                            paid: true,
-                            stripe_customer_id: customerId,
-                            updated_at: new Date().toISOString(),
-                        })
-                        .eq('id', userId);
-
-                    // Zapisz płatność
-                    await supabase
-                        .from('payments')
-                        .insert({
-                            user_id: userId,
-                            stripe_payment_intent_id: session.payment_intent as string,
-                            stripe_customer_id: customerId,
-                            amount: session.amount_total ?? 0,
-                            currency: session.currency ?? 'pln',
-                            status: 'succeeded',
-                            metadata: { session_id: session.id },
-                        });
-
-                    break;
-                }
-
-                case 'customer.subscription.deleted': {
-                    const subscription = event.data.object as Stripe.Subscription;
-                    const customerId = subscription.customer as string;
-
-                    // Deaktywuj dostęp
-                    await supabase
-                        .from('users')
-                        .update({
-                            paid: false,
-                            updated_at: new Date().toISOString(),
-                        })
-                        .eq('stripe_customer_id', customerId);
-
-                    break;
-                }
-            }
-
-            return Response.json({ received: true });
-        } catch (error) {
-            console.error('Webhook error:', error);
-
-            const message = error instanceof Error ? error.message : 'Internal error';
-            return Response.json({ error: message }, { status: 400 });
+        if (!signature) {
+            throw new Error('Missing signature');
         }
+
+        // Weryfikuj sygnaturę webhook — jedyna bramka auth tej funkcji
+        const event = await stripe.webhooks.constructEventAsync(
+            body,
+            signature,
+            webhookSecret
+        );
+
+        // Klient admin (secret key, omija RLS) — dopiero PO weryfikacji podpisu
+        const supabase = ctx.supabaseAdmin;
+
+        // Obsłuż event
+        switch (event.type) {
+            case 'checkout.session.completed': {
+                const session = event.data.object as Stripe.Checkout.Session;
+                // Dopasowanie po UUID z metadata (ustawionym przy tworzeniu
+                // sesji), NIGDY po email — email jest mutowalny.
+                const userId = session.metadata?.user_id;
+                const customerId = session.customer as string;
+
+                if (!userId) {
+                    throw new Error('Missing user_id in session metadata');
+                }
+
+                // Aktywuj dostęp
+                await supabase
+                    .from('users')
+                    .update({
+                        paid: true,
+                        stripe_customer_id: customerId,
+                        updated_at: new Date().toISOString(),
+                    })
+                    .eq('id', userId);
+
+                // Zapisz płatność
+                await supabase
+                    .from('payments')
+                    .insert({
+                        user_id: userId,
+                        stripe_payment_intent_id: session.payment_intent as string,
+                        stripe_customer_id: customerId,
+                        amount: session.amount_total ?? 0,
+                        currency: session.currency ?? 'pln',
+                        status: 'succeeded',
+                        metadata: { session_id: session.id },
+                    });
+
+                break;
+            }
+
+            case 'customer.subscription.deleted': {
+                const subscription = event.data.object as Stripe.Subscription;
+                const customerId = subscription.customer as string;
+
+                // Deaktywuj dostęp
+                await supabase
+                    .from('users')
+                    .update({
+                        paid: false,
+                        updated_at: new Date().toISOString(),
+                    })
+                    .eq('stripe_customer_id', customerId);
+
+                break;
+            }
+        }
+
+        return Response.json({ received: true });
+    } catch (error) {
+        // captureError z ../_shared/sentry.ts; 400 każe Stripe ponowić dostarczenie
+        await captureError(error, { operation: 'stripe-webhook' });
+        return Response.json({ data: null, error: { code: 'WEBHOOK_FAILED', message: 'Nie udało się obsłużyć zdarzenia' } }, { status: 400 });
+    }
     }),
 };
 ```
 
-**Wymagany wpis w `supabase/config.toml`** — bez niego platforma odrzuci request Stripe'a
-(brak JWT) zanim funkcja się uruchomi:
-
 ```toml
+# supabase/config.toml
 [functions.stripe-webhook]
 verify_jwt = false
 ```
 
-**Uwaga:** Webhook nie używa CORS (`cors: 'disabled'`) - jest wywoływany przez Stripe server-to-server.
+**Uwaga:** Webhook ma `cors: 'disabled'` — jest wywoływany przez Stripe server-to-server.
+NIE przepisuj go na `auth: 'user'`/`'secret'`: Stripe nie wyśle ani JWT, ani secret key.
 
 ---
 
-## Wywołanie Edge Function z Frontend
-
-### Użycie supabase.functions.invoke (Expo / React Native)
-
-Mobile nie ma `window` ani `import.meta.env` — Stripe Checkout otwieramy w in-app browserze
-(`expo-web-browser`), a `successUrl`/`cancelUrl` muszą wskazywać na deep link aplikacji
-(`yourapp://...`), nie na `window.location.origin` (nie istnieje na natywie).
+## Wywołanie Edge Function z aplikacji
 
 ```typescript
-// lib/stripe.ts
-import * as WebBrowser from 'expo-web-browser';
 import { supabase } from './supabase';
 
-export async function redirectToCheckout() {
-    const { data, error } = await supabase.functions.invoke('create-checkout-session', {
-        body: {
-            priceId: process.env.EXPO_PUBLIC_STRIPE_PRICE_ID,
-            // Deep linki app scheme — Stripe po zakończeniu checkoutu
-            // przekierowuje z powrotem do aplikacji, nie do przeglądarki
-            successUrl: 'yourapp://checkout/success',
-            cancelUrl: 'yourapp://checkout/cancel',
-        },
-    });
-
-    if (error) {
-        throw error;
-    }
-
-    // Otwórz Stripe Checkout w in-app browserze (SFSafariViewController / Custom Tabs)
-    await WebBrowser.openBrowserAsync(data.url);
+export async function wyslijZamowienie(zamowienieId: string) {
+    const { data, error } = await supabase.functions.invoke('zloz-zamowienie', { body: { zamowienieId } });
+    if (error) throw error;
+    return data;
 }
+```
 
-export async function redirectToBillingPortal() {
-    const { data, error } = await supabase.functions.invoke('create-billing-portal-session', {
-        body: {
-            returnUrl: 'yourapp://settings/billing',
-        },
-    });
+### Płatności w aplikacji mobilnej (D10)
 
-    if (error) {
-        throw error;
-    }
+Treści i funkcje cyfrowe w aplikacji sprzedajesz przez IAP (RevenueCat), bo App Store Review Guidelines 3.1.1 wymagają tego poza wyjątkami regionalnymi (3.1.1(a), 3.1.3), a Google Play ma własne zasady płatności zależne od kraju. Przycisk Stripe Checkout dla treści cyfrowych prowadzi do odrzucenia w review.
 
+Stripe zostaje dla treści niecyfrowych (towary, usługi poza aplikacją). Sesję tworzy Edge Function z tego pliku, a aplikacja otwiera ją w przeglądarce systemowej:
+
+```typescript
+import * as WebBrowser from 'expo-web-browser';
+
+export async function otworzPlatnosc(zamowienieId: string) {
+    const { data, error } = await supabase.functions.invoke('create-checkout-session', { body: { zamowienieId } });
+    if (error) throw error;
     await WebBrowser.openBrowserAsync(data.url);
 }
 ```
+
+- `success_url` to Universal Link (https), a sesja ma `origin_context: 'mobile_app'` (docs Stripe dla mobile). Własny schemat służy najwyżej jako przekierowanie ze strony https.
+- Stan zamówienia po powrocie czytasz z bazy zapisanej przez webhook, nie z parametru linku.
 
 ---
 
@@ -477,30 +431,21 @@ supabase secrets list
 ```
 
 ### Dostęp w Funkcji
-
-Kluczy Supabase **nie czytaj ręcznie** — `withSupabase` sam je rozwiązuje i wstrzykuje do
-`ctx.supabase` / `ctx.supabaseAdmin`. Poniższe zmienne są pre-populowane w środowisku lokalnym
-i hostowanym; użytkownik nie musi ich ustawiać:
-
-| Zmienna | Format | Opis |
-|---|---|---|
-| `SUPABASE_URL` | `https://<ref>.supabase.co` | URL projektu |
-| `SUPABASE_PUBLISHABLE_KEYS` | `{"default":"sb_publishable_..."}` | Mapa nazwanych kluczy publishable (JSON) |
-| `SUPABASE_SECRET_KEYS` | `{"default":"sb_secret_..."}` | Mapa nazwanych kluczy secret (JSON) |
-| `SUPABASE_DB_URL` | connection string | Bezpośrednie połączenie do Postgresa |
-
 ```typescript
-// Gdy MUSISZ sięgnąć po klucz poza SDK — to mapa JSON, nie goły string
-const SUPABASE_SECRET_KEYS = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS')!);
-const secretKey = SUPABASE_SECRET_KEYS['default'];
+// Automatycznie dostępne (docs: functions/secrets). Z withSupabase nie czytasz ich
+// ręcznie — klienci są gotowi w ctx.supabase / ctx.supabaseAdmin.
+const supabaseUrl = Deno.env.get('SUPABASE_URL');
 
-// Custom secrets (ustawione przez `supabase secrets set`)
+// Klucze API to JSON-mapy nazwanych kluczy; główny klucz pod 'default'
+const publishableKey = JSON.parse(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS') ?? '{}').default; // sb_publishable_...
+const secretKey = JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS') ?? '{}').default;           // sb_secret_...
+
+// LEGACY (anon/service_role JWT, wycofywane do końca 2026): SUPABASE_ANON_KEY,
+// SUPABASE_SERVICE_ROLE_KEY — nie używaj w nowym kodzie.
+
+// Custom secrets
 const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
 ```
-
-> Stare `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` to poprzednia generacja kluczy. Nowy
-> model to nazwane klucze publishable/secret w mapach JSON — dlatego rotacja klucza dla jednego
-> serwisu (`auth: 'secret:cron'`) nie rusza pozostałych.
 
 ---
 
@@ -577,90 +522,63 @@ import { withSupabase } from 'npm:@supabase/server@^1';
 
 export default {
     fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
-        // Błędy auth (401/500) obsługuje wrapper ZANIM handler wystartuje —
-        // tu zostają wyłącznie błędy logiki biznesowej.
         try {
-            // Walidacja input na granicy funkcji
+            // Walidacja input
             const body = await req.json();
 
             if (!body.priceId) {
-                return Response.json({ error: 'Missing priceId' }, { status: 400 });
+                return Response.json({ data: null, error: { code: 'VALIDATION', message: 'Brak priceId' } }, { status: 400 });
             }
 
             // Logika...
             const result = await process(body, ctx.supabase);
 
-            return Response.json(result);
+            return Response.json({ data: result, error: null });
         } catch (error) {
-            // Loguj pełny błąd (widoczny w Supabase Dashboard > Logs)
-            console.error('Function error:', error);
+            // Pełny błąd do Sentry (captureError z ../_shared/sentry.ts); 401 dla braku JWT zwraca sam wrapper
+            await captureError(error, { operation: 'my-function', user_id: ctx.userClaims?.id });
 
-            // Zwróć bezpieczną wiadomość
-            const message = error instanceof Error ? error.message : 'Internal error';
-            return Response.json({ error: message }, { status: 500 });
+            // Klient dostaje kopertę bez treści błędu (schemat bazy, szczegóły usług)
+            return Response.json({ data: null, error: { code: 'INTERNAL', message: 'Operacja nie powiodła się' } }, { status: 500 });
         }
     }),
 };
 ```
-
-### Błędy z `withSupabase`
-
-Gdy autentykacja zawiedzie, wrapper odpowiada sam — handler się nie uruchamia:
-
-```json
-{ "message": "Invalid credentials", "code": "INVALID_CREDENTIALS" }
-```
-
-| Klasa | Kod | Status | Znaczenie |
-|---|---|---|---|
-| `AuthError` | `INVALID_CREDENTIALS` | 401 | Brak poświadczeń pasujących do trybu `auth` albo JWT nie przeszedł weryfikacji |
-| `AuthError` | `CREATE_SUPABASE_CLIENT_ERROR` | 500 | Auth OK, ale nie udało się stworzyć klienta |
-| `EnvError` | `MISSING_SUPABASE_URL`, `MISSING_DEFAULT_SECRET_KEY`, ... | 500 | Brakująca/uszkodzona zmienna środowiskowa (błąd konfiguracji, nie klienta) |
-
-Chcesz własny kształt odpowiedzi błędu — użyj `createSupabaseContext` (sekcja
-„Autentykacja i autoryzacja").
 
 ---
 
 ## Podsumowanie
 
 **Checklist Edge Function (2026):**
-- [ ] `export default { fetch: withSupabase({ auth }, handler) }` — NIGDY `Deno.serve()`
-- [ ] Dobierz tryb `auth` do wywołującego (`user` / `secret` / `publishable` / `none`)
-- [ ] Tryb inny niż `'user'` → `verify_jwt = false` w `supabase/config.toml`
-- [ ] Importy z wersją: `npm:@supabase/server@^1`, `npm:stripe@22` (bez bare specifiers)
-- [ ] Klienty z `ctx` — `ctx.supabase` domyślnie, `ctx.supabaseAdmin` tylko gdy trzeba ominąć RLS
-- [ ] CORS zostaw wrapperowi (`cors: 'disabled'` dla webhooków server-to-server)
-- [ ] Waliduj input na granicy funkcji (Zod)
+- [ ] `export default { fetch: withSupabase({ auth }, handler) }` — nie `Deno.serve()`
+- [ ] Importy: `npm:@supabase/server@^1`, `npm:@supabase/supabase-js@2`, `npm:stripe@22` (zawsze z wersją)
+- [ ] Tryb `auth` dobrany per funkcja (`'user'` / `'secret'` / `'publishable'` / `'none'`)
+- [ ] `verify_jwt = false` w `config.toml` dla każdej funkcji z `auth` innym niż `'user'`
+- [ ] CORS przez wrapper (`'default'` / `'disabled'` dla webhooków) — bez `_shared/cors.ts`
+- [ ] `ctx.supabaseAdmin` tylko w webhookach/cronie, po weryfikacji podpisu
 - [ ] Loguj błędy (widoczne w Dashboard > Logs)
-- [ ] Zwracaj odpowiednie kody statusu przez `Response.json(..., { status })`
+- [ ] Zwracaj odpowiednie kody statusu
 - [ ] Ustaw secrets przez CLI lub Dashboard
-- [ ] Zapis plików tylko do `/tmp`; długie taski przez `EdgeRuntime.waitUntil()`
 - [ ] Testuj lokalnie przed deployem
 
 **Migracja ze Starego Kodu:**
 ```typescript
-// ❌ NAJSTARSZY (Deno 1.x era)
+// ❌ STARY (Deno 1.x era)
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 serve(async (req) => { ... });
 
-// ❌ PRZESTARZAŁY (Deno.serve — wycofany przez Supabase)
+// ⚠️ STARSZY (nadal działa, niezalecany przez Supabase — AI-prompt: „do NOT use Deno.serve")
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 Deno.serve(async (req) => { ... });
 
-// ✅ AKTUALNY kontrakt
+// ✅ NOWY (Deno 2.x — oficjalny wzorzec 2026)
 import { withSupabase } from 'npm:@supabase/server@^1';
-
 export default {
     fetch: withSupabase({ auth: 'user' }, async (req, ctx) => { ... }),
 };
 ```
 
-Co znika przy migracji: `_shared/cors.ts` i rozsypane `...corsHeaders`, gałąź
-`if (req.method === 'OPTIONS')`, ręczne `createClient(...)` z `Authorization`/service key,
-ręczne `getUser()`/`getClaims()` do samej weryfikacji tokenu.
-
 **Zobacz Także:**
-- [auth-patterns.md](auth-patterns.md) - Autentykacja po stronie klienta
+- [auth-patterns.md](auth-patterns.md) - Weryfikacja JWT
 - [security.md](security.md) - Service role

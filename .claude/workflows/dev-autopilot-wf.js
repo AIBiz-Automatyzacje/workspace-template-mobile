@@ -1,10 +1,10 @@
 export const meta = {
   name: 'dev-autopilot-wf',
-  description: 'Autonomiczny pipeline: bootstrap (stan z .autopilot-state.json) -> per faza (execute -> review+verify -> fix, bez re-review) -> compound -> compound-refresh (scoped) -> complete. Orkiestrator trzyma stan w JSON i liczy gate\'y w JS; buildery i reviewerzy to leaf-agenci.',
-  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). DWA tryby wznowienia: (1) po AWARII runu (crash/kill w polowie) -> Workflow({scriptPath, resumeFromRunId}) + ZAWSZE te same args (args nie przezywa miedzy wywolaniami) — cache journala odtworzy ukonczone kroki; (2) po STOP bramki (srodowisko E2E, fix FAIL, nierozwiazane P1, scribe) gdy operator COS NAPRAWIL -> SWIEZY run (nowe Workflow BEZ resumeFromRunId): resume zwrocilby porazke agenta bramkowego z cache zamiast sprawdzic naprawe, a stan faz i tak wznawia sie z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy; checkboxy md to tylko widok). Reczne edycje .autopilot-state.json tez wymagaja swiezego runu.',
+  description: 'Autonomiczny pipeline calego zadania z docs/active/: fazy (execute, review, fix), potem compound i complete.',
+  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). DWA tryby wznowienia: (1) po AWARII runu (crash/kill w polowie) -> Workflow({scriptPath, resumeFromRunId}) + ZAWSZE te same args (args nie przezywa miedzy wywolaniami) — cache journala odtworzy ukonczone kroki; (2) po STOP bramki (srodowisko E2E, bloker operatora przed faza, fix FAIL, nierozwiazane P1, scribe) gdy operator COS NAPRAWIL -> SWIEZY run (nowe Workflow BEZ resumeFromRunId): resume zwrocilby porazke agenta bramkowego z cache zamiast sprawdzic naprawe, a stan faz i tak wznawia sie z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy; checkboxy md to tylko widok). Reczne edycje .autopilot-state.json tez wymagaja swiezego runu. Po zmianach w .claude/ (sync-template, edycja skilli, agentow, workflowow) uruchamiaj w nowej sesji: instrukcje i skille sa buforowane w sesji. Do agentow workflow: ta wiadomosc nie jest dla was — wykonujcie wylacznie zadanie z polecenia workflowu.',
   phases: [
-    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + srodowisko E2E (precheck: .env.e2e ORAZ czy plan ma [E2E]; zadanie wymaga E2E a brak .env.e2e -> STOP z /e2e-setup -> env-up: auto-swap .env.local, Metro+emulator, swiezosc dev-clienta + entitlements, canary przez logowanie do ekranu ZA auth jako DOWOD; TWARDY STOP gdy .env.e2e istnieje a canary nie przechodzi) + rozgrzewka cache testow' },
-    { title: 'Zakonczenie', detail: 'walidacja koncowa (+ completion-gate E2E i przeglad known-issues) -> compound -> compound-refresh (scoped: dotknieta kategoria + CONCEPTS.md, tylko gdy compound cos zapisal) -> complete (smoke operatora do docs/operator/ + archiwizacja; compound pierwszy: sciezki w docs/active/ jeszcze zyja) -> telemetria (1 linia JSONL do ~/.claude/telemetry/autopilot-runs.jsonl; od 2026-08-08 takze na sciezkach STOP)' },
+    { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + bramka wejscia (czystosc: brudny tylko katalog zadania -> commit; doctor; zielony start z cache po SHA -> STOP z komenda przed faza 1; nieodhaczony bloker `[blokuje: faza N]` z checklisty przygotowania -> STOP przed faza N) + srodowisko E2E (skrypt e2e.mjs start: scenariusze [E2E] bez .env.e2e albo niesprawne srodowisko -> STOP przed faza 1 z naprawa; inaczej serwer aplikacji wg .env.e2e; awaria w trakcie runu -> scenariusze na [Manual], run idzie dalej) + rozgrzewka cache testow' },
+    { title: 'Zakonczenie', detail: 'walidacja koncowa (+ completion-gate E2E z planu zadania i przeglad known-issues) -> compound -> compound-refresh (waski: dotknieta kategoria + CONCEPTS.md, tylko gdy compound cos zapisal) -> ogrodnik (pomiar skryptem, ocena tylko przy przyroscie albo co N zadan; sekcja Ogrod w podsumowaniu, zero zmian w kodzie) -> complete (smoke operatora do docs/operator/ + archiwizacja; compound pierwszy: sciezki w docs/active/ jeszcze zyja)' },
   ],
 }
 
@@ -16,8 +16,8 @@ export const meta = {
 //          nie liczy checkboxow. Orkiestrator liczy kolejke i przejscia w JS.
 // Filar 3: trust-but-verify — gate'y liczone w JS z review.findings[], null-guardy po kazdym
 //          await, warmup wymaga dowodu (kontrolny warm-run w sekundach).
-// Re-review po fixie USUNIETY (decyzja usera, dane wf_3c9d3864); od 2026-07-12 gate P1 wzmocniony
-// TARGETED VERIFY: kazdy P1/KOD z listy fixa dostaje 1 niezaleznego weryfikatora (tanszy substytut re-review).
+// Re-review po fixie USUNIETY (decyzja usera, dane wf_3c9d3864). Commity fixa oglada kontrola diffu naprawczego
+// (P8: listy K-1…K-7, w tym K-6 — test P1 pada na kodzie sprzed poprawki; zastapila targeted verify z 2026-07-12).
 // Mitygacja test-weakeningu: zakaz modyfikacji asercji w fixPrompt + git diff testow w walidacji.
 // RESUME vs CACHE: resumeFromRunId odtwarza wyniki agentow z journala po prefiksie wywolan — sluzy
 // TYLKO do wznowienia po awarii runu. Po STOP bramki srodowiskowej operator naprawia i odpala
@@ -28,23 +28,25 @@ const BLOK_DLUGIE_KOMENDY = `
 === DLUGIE KOMENDY (przeczytaj ZANIM uruchomisz testy/buildy — prawa srodowiska, nie sugestie) ===
 (1) Runtime zabija subagenta po ~180s bez zadnego outputu ("agent stalled"); po 6 killach pada CALY run.
 (2) Pojedyncze foreground Bash ma limit 600s (domyslnie 120s) — dluzszej komendy NIE dokonczysz.
-(3) Zimny vitest na komponentach RN (cache node_modules/.vite po inwalidacji) trwa do ~16 min i przez
-    caly czas MILCZY — cisza to faza transform PRZED pierwszym outputem reportera; zaden reporter nie pomaga.
+(3) Zimny runner testow po inwalidacji cache (zmiana zaleznosci lub configu) potrafi MILCZEC przed pierwszym
+    outputem reportera — cisza to nie zwis; zaden reporter nie pomaga.
+STACK: runner testow, pliki inwalidujace jego cache, reporter strumieniowy i sygnatury flake'ow infrastruktury
+TEGO projektu sa w .claude/stack/walidacja.md, sekcje „Zimny runner” i „Flake infrastruktury” — przeczytaj je
+PRZED pierwszym uruchomieniem testow.
 REGULY:
-- Komenda mogaca trwac >100s (vitest po zmianie zaleznosci/configu, pelny suite, build): uruchom przez
+- Komenda mogaca trwac >100s (runner testow po zmianie zaleznosci/configu, pelny suite, build): uruchom przez
   Bash z run_in_background i przekierowaniem do pliku logu, potem POLLUJ krotkim Bash co ~45-60s
   (tail loga / sprawdzenie procesu) az do zakonczenia. Kazda sonda = znak zycia dla watchdoga.
 - NIGDY nie podnos timeoutu foreground zamiast isc w tlo — 180s ciszy zabija CIEBIE, nie komende.
-- Po zmianie package.json / lockfile / vitest.config przez kogokolwiek w tym runie: pierwszy vitest
-  traktuj jako ZIMNY (pelna procedura tla powyzej).
-- vitest uruchamiaj z --reporter=dot: strumieniowany stdout W TRAKCIE foreground Bash resetuje watchdog
-  (zweryfikowane empirycznie probe 2026-06-09), wiec chroni WARM suite'y w oknie 180-600s.
+- Po zmianie package.json / lockfile / configu runnera albo builda (lista w sekcji „Zimny runner”) przez kogokolwiek
+  w tym runie: pierwszy bieg testow traktuj jako ZIMNY (pelna procedura tla powyzej).
+- Runner uruchamiaj z reporterem strumieniowym z sekcji „Zimny runner”: strumieniowany stdout W TRAKCIE foreground
+  Bash resetuje watchdog, wiec chroni WARM suite'y w oknie 180-600s.
   NIE chroni: zimnego cache (transform milczy do konca) ani komend >600s (twardy limit Bash).
-- FLAKE INFRA: gdy pelny suite zglosi na pliku blad infrastruktury workera ([vitest-worker]: Timeout
-  calling "fetch", "Timeout calling", worker terminated, ENOMEM, heap out of memory) — re-runuj TEN plik
-  w izolacji (procedura OSOBNO dla kazdego takiego pliku). PASS w izolacji = flake infra, NIE defekt:
-  odnotuj "flake-infra: <plik> (PASS w izolacji)" i NIE traktuj jako FAIL. FAIL w izolacji = realny defekt.
-  Po obsludze flake'ow DOKONCZ przerwany lancuch walidacji (kolejne kroki, np. expo-doctor).
+- FLAKE INFRA: gdy pelny suite zglosi na pliku blad infrastruktury workera (sygnatury w sekcji „Flake infrastruktury”)
+  — re-runuj TEN plik w izolacji (procedura OSOBNO dla kazdego takiego pliku). PASS w izolacji = flake infra,
+  NIE defekt: odnotuj "flake-infra: <plik> (PASS w izolacji)" i NIE traktuj jako FAIL. FAIL w izolacji = realny defekt.
+  Po obsludze flake'ow DOKONCZ przerwany lancuch walidacji (kolejne kroki, np. build).
 === KONIEC BLOKU DLUGICH KOMEND ===`
 
 // ── Schematy ──────────────────────────────────────────────────────────────
@@ -53,7 +55,9 @@ const FINDING_OTWARTY = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    severity: { type: 'string', enum: ['P1', 'P2'] },
+    // 'P3' zostaje dla stanow sprzed P8 (plan B1 slal P3 do fixa): bootstrap przepisuje stan przez ten schemat, a P3 spoza
+    // enumu znikalyby przy wznowieniu (oferty-online, faza 6: 13 utraconych P3). Orkiestrator przenosi je do known-issues.
+    severity: { type: 'string', enum: ['P1', 'P2', 'P3'] },
     typ: { type: 'string', enum: ['KOD', 'TEST', 'E2E'] },
     plik: { type: 'string' },
     opis: { type: 'string' },
@@ -81,20 +85,53 @@ const METRYKI_FAZY = {
       additionalProperties: false,
       properties: {
         pominieci: { type: 'array', items: { type: 'string' }, description: 'keys reviewerow pominietych przez routing' },
+        // Poza `required` SWIADOMIE (2026-07-30): stany zapisane przed ta zmiana maja `przebieg` BEZ tego
+        // pola, a bootstrap-agent przepisuje `metryki` 1:1 przez ten schemat. W `required` wywalilby
+        // wznowienie starego zadania na walidacji. null = przebieg ze starszego runu.
+        // Dawne wartosci z runow przed szwami stacku (przegladarka, bez-przegladarki) skrotPrzebiegu mapuje na nowe.
+        e2eTryb: { type: ['string', 'null'], description: 'tryb testera E2E: interaktywny | bez-interakcji | pominiety' },
         znalezione: { type: 'integer' },
         poDedupJs: { type: 'integer' },
         poDedupSem: { type: 'integer' },
         weryfikowane: { type: 'integer' },
         obalone: { type: 'integer' },
-        // Poza required: stany zapisane przed 2026-08-08 tego pola nie maja, a bootstrap przepisuje
-        // stan 1:1 przez ten schemat — wymog wywracalby resume starszych zadan.
+        // Poza required: stany zapisane przed portem globalnego limitu P3 tego pola nie maja, a bootstrap
+        // przepisuje stan 1:1 przez ten schemat — wymog wywracalby resume starszych zadan.
         p3Odrzucone: { type: ['integer', 'null'], description: 'P3 uciete globalnym limitem po dedupie (strojenie progu)' },
-        // Pola E2E (2026-08-23) tez poza required — stany sprzed tej daty ich nie maja.
+        // Pola E2E (port z mobile, 2026-08-23) tez poza required — stany sprzed tej daty ich nie maja.
         e2eCheckboxy: { type: ['integer', 'null'] },
         e2eStatus: { type: ['string', 'null'], description: 'status testera E2E z review-wf (wykonany / padl / pominiety przez routing)' },
         e2ePass: { type: ['integer', 'null'] },
         e2eFail: { type: ['integer', 'null'] },
         e2eSkip: { type: ['integer', 'null'] },
+        e2eManual: { type: ['integer', 'null'], description: 'scenariusze przeniesione w trakcie runu na [Manual] (P14) — null gdy liczba nieznana' },
+        // Metryki kosztu review (audyt 2026-09-06, N3) — tez poza `required`, bo stany sprzed tej
+        // daty ich nie maja, a bootstrap przepisuje stan 1:1 przez ten schemat. Bez nich progi
+        // "efekt dossier" i "batchowanie sceptykow" byly niemierzalne: `additionalProperties: false`
+        // wymazywal te pola przy PIERWSZYM zapiszStan, wiec do telemetrii nie mialy jak dojsc.
+        // `dossier: false` = cichy fallback do czytania pelnych dokumentow, nieodrozniany od sukcesu.
+        dossier: { type: ['boolean', 'null'], description: 'czy dossier fazy powstalo (false = reviewerzy czytali pelne dokumenty)' },
+        sceptycy: {
+          type: ['object', 'null'],
+          additionalProperties: false,
+          properties: {
+            p1: { type: ['integer', 'null'], description: 'liczba agentow-sceptykow P1 (3 na finding)' },
+            p2Grupy: { type: ['integer', 'null'], description: 'liczba agentow-sceptykow P2 (porcje po 4 zarzuty posortowane po pliku)' },
+            p2Findingi: { type: ['integer', 'null'], description: 'liczba findingow P2 poddanych verify' },
+          },
+        },
+        // P9: etykiety sceptyka asymetrycznego (glosy po regule dowodu) i degradacje (findingi) -> telemetria faza.sceptyk.
+        sceptyk: {
+          type: ['object', 'null'],
+          additionalProperties: false,
+          properties: {
+            agree: { type: ['integer', 'null'] },
+            disagree_evidence: { type: ['integer', 'null'], description: 'glosy obalajace z linia kodu albo testem' },
+            disagree_concern: { type: ['integer', 'null'], description: 'glosy sprzeciwu bez dowodu (obnizaja wage, nie kasuja)' },
+            degradacje: { type: ['integer', 'null'], description: 'findingi z waga obnizona o stopien (P1 -> P2, P2 -> P3)' },
+          },
+        },
+        tiery: { type: ['object', 'null'], additionalProperties: { type: ['string', 'null'] }, description: 'tier rozumowania per rola (plan B4)' },
       },
       required: ['pominieci', 'znalezione', 'poDedupJs', 'poDedupSem', 'weryfikowane', 'obalone'],
     },
@@ -114,9 +151,56 @@ const PLAN_STATE = {
         aktualny: { type: 'string' },
         wymagany: { type: ['string', 'null'] },
         zgodny: { type: 'boolean' },
-        czysty: { type: 'boolean', description: 'brak niezacommitowanych zmian' },
       },
-      required: ['aktualny', 'wymagany', 'zgodny', 'czysty'],
+      required: ['aktualny', 'wymagany', 'zgodny'],
+    },
+    // Dane bramki wejscia (P4) — decyzje liczy decyzjaWejscia w JS.
+    wejscie: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        zmiany: { type: 'array', items: { type: 'string' }, description: 'linie `git status --porcelain --untracked-files=all` 1:1 (pusta = czyste drzewo)' },
+        doctorKod: { type: ['integer', 'null'], description: 'kod wyjscia doctor.sh (0 OK, 1 brak obowiazkowego); null = brak skryptu' },
+        doctorWynik: { type: 'string', description: 'linia WYNIK z doctora ("" gdy brak)' },
+        kodJakPrzyTescie: { type: ['boolean', 'null'], description: 'od bazaZielona.sha zmiany tylko w docs/; null = brak bazaZielona' },
+        // Pliki decyzji na galezi glownej (P5) — czy CLAUDE.md uzgodniono po merge'u, liczy decyzjaClaudeMd.
+        decyzje: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            glowna: { type: ['string', 'null'], description: 'main albo master; null = zadnej' },
+            katalog: { type: 'boolean', description: 'docs/decisions istnieje na galezi glownej' },
+            linie: { type: 'array', items: { type: 'string' }, description: "wyjscie git grep -e '^claude_md:' 1:1" },
+          },
+          required: ['glowna', 'katalog', 'linie'],
+        },
+        // Blokery operatora per faza (P25 A1) — wynik `plan.mjs blokery` 1:1; STOP przed faza liczy decyzjaBlokeraFazy.
+        blokery: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            checklista: { type: ['string', 'null'], description: 'sciezka checklisty przygotowania; null = plan bez checklisty' },
+            blokery: {
+              type: 'array',
+              items: {
+                type: 'object',
+                additionalProperties: false,
+                properties: { faza: { type: 'integer' }, linia: { type: 'integer' }, tresc: { type: 'string' } },
+                required: ['faza', 'linia', 'tresc'],
+              },
+            },
+          },
+          required: ['checklista', 'blokery'],
+        },
+      },
+      required: ['zmiany', 'doctorKod', 'doctorWynik', 'kodJakPrzyTescie', 'decyzje', 'blokery'],
+    },
+    // Wynik zielonego startu z pliku stanu (przepisany 1:1) — swiezy run po STOP-ie przed faza 1 nie powtarza testow.
+    bazaZielona: {
+      type: ['object', 'null'],
+      additionalProperties: false,
+      properties: { sha: { type: 'string' }, wynik: { type: 'string', enum: ['PASS'] } },
+      required: ['sha', 'wynik'],
     },
     zrodloStanu: { type: 'string', enum: ['state-json', 'pierwszy-parse-md'] },
     fazy: {
@@ -132,6 +216,8 @@ const PLAN_STATE = {
           fix: { type: 'string', enum: ['done', 'pending', 'none'], description: 'none = review nie zostawil otwartych P1/P2' },
           otwarteFindingi: { type: 'array', items: FINDING_OTWARTY },
           metryki: METRYKI_FAZY,
+          // Baza fazy z execute-wf (P7) — poza `required`, bo stany sprzed P7 jej nie maja.
+          baza: { type: ['string', 'null'], description: 'SHA HEAD przed builderami fazy; null = nieznana' },
         },
         required: ['numer', 'nazwa', 'execute', 'review', 'fix', 'otwarteFindingi'],
       },
@@ -148,7 +234,7 @@ const PLAN_STATE = {
     },
     rozbieznosci: { type: 'array', items: { type: 'string' }, description: 'informacyjne: stan vs pliki md (np. review-faza-N.md istnieje a stan mowi pending)' },
   },
-  required: ['nazwaZadania', 'branch', 'zrodloStanu', 'fazy', 'zakonczenie', 'rozbieznosci'],
+  required: ['nazwaZadania', 'branch', 'wejscie', 'zrodloStanu', 'fazy', 'zakonczenie', 'rozbieznosci'],
 }
 
 const ZAPIS_STANU = {
@@ -156,13 +242,50 @@ const ZAPIS_STANU = {
   additionalProperties: false,
   properties: {
     zapisano: { type: 'boolean' },
-    // Pole opcjonalne, bo tego samego schematu uzywa telemetria (dopisuje linie JSONL, nie stan).
-    // Dla .autopilot-state.json jest OBOWIAZKOWE — patrz zapiszStanPrompt: agent ma je ustawic
-    // po REALNYM sparsowaniu pliku z dysku, nie po samym wywolaniu Write.
+    // Agent ustawia je po REALNYM sparsowaniu pliku z dysku, nie po samym wywolaniu Write (patrz zapiszStanPrompt).
     poprawnyJson: { type: ['boolean', 'null'], description: 'plik odczytany z dysku po zapisie sparsowal sie jako JSON' },
   },
-  required: ['zapisano'],
+  required: ['zapisano', 'poprawnyJson'],
 }
+
+// ── Stan fazy (P7) ──────────────────────────────────────────────────────────
+// Tresc .autopilot-state.json liczy JS; zapis dokleja sie do polecenia agenta, ktory w tym miejscu i tak startuje
+// (mapa 14 miejsc: HANDOFF 6a pkt 54). Przed pod-workflowem i po niepotwierdzonym zapisie zostaje agent `stan:zapis`.
+function trescStanu(stan) {
+  return JSON.stringify(
+    { wersja: 1, zadanie: stan.nazwaZadania, fazy: stan.fazy, zakonczenie: stan.zakonczenie, bazaZielona: stan.bazaZielona || null },
+    null,
+    2
+  )
+}
+
+// Pole potwierdzenia w schemacie kazdego agenta, ktoremu autopilot dokleja zapis stanu.
+const POLE_STANU = { type: ['boolean', 'null'], description: 'true po zapisie pliku stanu i odczycie z wynikiem JSON-OK' }
+
+function blokZapisuStanu(sciezka, tresc) {
+  const plik = `${sciezka}/.autopilot-state.json`
+  return `Zapis stanu pipeline'u:
+a) Narzedziem Write zapisz plik ${plik} (pelne nadpisanie) z trescia miedzy znacznikami, bez znacznikow
+   i bez zmian w tresci. Plik zwykle juz istnieje: Write wymaga wczesniejszego Read, wiec przeczytaj go i nadpisz. Inna tresc na dysku to poprzedni stan,
+   ktory wlasnie zastepujesz — nie sprawdzasz jej i nie porownujesz z historia gita.
+b) Odczytaj plik z dysku: \`node -e "JSON.parse(require('fs').readFileSync('${plik}','utf8'));console.log('JSON-OK')"\`.
+   Bez wyniku JSON-OK zapisz plik jeszcze raz i powtorz odczyt.
+c) Pole stanZapisany w wyniku: true po odczycie z wynikiem JSON-OK, w kazdym innym przypadku false.
+Z tego pliku pipeline wznawia fazy po zatrzymaniu, dlatego tresc idzie na dysk bajt w bajt.
+--- POCZATEK STANU ---
+${tresc}
+--- KONIEC STANU ---`
+}
+
+function zapisPotwierdzony(wynik) {
+  return Boolean(wynik) && wynik.stanZapisany === true
+}
+
+// Stan po udanym execute fazy — zapisuje go domkniecie execute-wf (z baza fazy wstawiona w JS), zanim autopilot dostanie wynik.
+function stanPoExecute(stan, numer) {
+  return { ...stan, fazy: stan.fazy.map((f) => (f.numer === numer ? { ...f, execute: 'done' } : f)) }
+}
+// ── Koniec stanu fazy
 
 const WARMUP_RESULT = {
   type: 'object',
@@ -176,89 +299,26 @@ const WARMUP_RESULT = {
   required: ['status', 'detal'],
 }
 
-// Precheck: TANI, deterministyczny sygnal opt-in — oddzielony od ciezkiego env-up, zeby flake ciezkiego
-// agenta na projekcie opt-in NIE degradowal cicho E2E (patrz orkiestracja).
-// Od 2026-08-11 precheck czyta DWA niezalezne sygnaly: czy repo MA srodowisko (.env.e2e) i czy zadanie
-// go WYMAGA (checkboxy [E2E] w planie). Wczesniej pytal tylko o plik, wiec brak setupu byl nieodrozanialny
-// od swiadomej rezygnacji — regresja e3-core-loop: run przejechal 3 fazy i ~20h zanim ktokolwiek zauwazyl,
-// ze cztery scenariusze [E2E] fazy 3 nie maja gdzie sie wykonac.
-const E2E_PRECHECK = {
+// Srodowisko E2E na starcie (P14): jeden agent uruchamia `e2e.mjs start` i przepisuje jego JSON. Decyzje (STOP albo dalej)
+// liczy JS w `decyzjaSrodowiskaE2e`. Wczesniej dwa agenty: precheck (haiku) i env-up (opus) z przepisem srodowiska w prompcie.
+const E2E_START = {
   type: 'object',
   additionalProperties: false,
   properties: {
-    istnieje: { type: 'boolean', description: 'true = plik .env.e2e istnieje w korzeniu repo (srodowisko E2E skonfigurowane)' },
-    zadanieWymagaE2E: { type: 'boolean', description: 'true = plan zadania ma co najmniej jeden NIEZAZNACZONY checkbox z markerem [E2E] (zadanie deklaruje E2E jako deliverable)' },
-    liczbaScenariuszy: { type: 'integer', description: 'ile niezaznaczonych checkboxow [E2E] znaleziono w planie zadania (0 gdy zadnego)' },
-  },
-  required: ['istnieje', 'zadanieWymagaE2E', 'liczbaScenariuszy'],
-}
-
-const E2E_ENV_RESULT = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    status: { type: 'string', enum: ['gotowe', 'pominieto', 'niepowodzenie'] },
-    detal: { type: 'string', description: 'co postawiono / powod pominiecia lub niepowodzenia (BEZ wartosci sekretow)' },
-    platforma: { type: 'string', enum: ['ios', 'android', 'brak'], description: 'na ktorej platformie postawiono emulator (canary lecial na niej)' },
-    metro: { type: 'string', enum: ['uruchomione', 'zastane', 'brak'] },
-    simulator: { type: 'string', enum: ['gotowy', 'brak'] },
-    swap: { type: 'string', enum: ['brak', 'wykonany', 'zastany', 'utworzony', 'niepotrzebny'], description: 'stan swapu .env.local -> e2e: wykonany (backup zrobiony), zastany (.env.local.bak juz byl), utworzony (.env.local nie istnial, stworzony z e2e), niepotrzebny (.env.local juz na e2e bez .bak), brak (nie dotyczy)' },
-    canary: { type: 'string', enum: ['pass', 'fail', 'pominiety'], description: 'wynik canary: login konta e2e (REST) + przejscie apki przez logowanie do ekranu ZA auth — DOWOD ze flow ruszy' },
-    canaryTyp: {
-      type: 'string',
-      enum: ['auth', 'launch', 'pominiety'],
-      description: 'auth = canary przeszedl przez logowanie do ekranu za auth (mocny dowod); launch = tylko launchApp, bo repo nie ma .maestro/_canary.yaml (SLABY dowod — nie wykryje braku entitlements ani natywnego modulu ladowanego glebiej)',
-    },
-    devClient: {
-      type: 'string',
-      enum: ['aktualny', 'przestarzaly', 'brak'],
-      description: 'przestarzaly = binarka .app starsza niz package.json/Podfile.lock/app.json ALBO bez entitlements — natywne moduly z nowszych zaleznosci NIE sa w buildzie',
-    },
-  },
-  required: ['status', 'detal', 'platforma', 'metro', 'simulator', 'swap', 'canary', 'canaryTyp', 'devClient'],
-}
-
-// Bramka natywnych zaleznosci per faza (2026-08-08). Powod (run feedback-marcin-poprawki): Faza C dodala
-// expo-clipboard (przycisk "Kopiuj"), dev-client tego modulu nie mial, wiec KAZDY flow E2E dotykajacy tego
-// ekranu wywalal sie na "Cannot find native module ExpoClipboard". Pipeline nie mial pojecia, ze faza wlasnie
-// uniewaznila binarke — wyszlo to dopiero na completion-gate na SAMYM KONCU runu, po pieciu fazach pracy.
-// env-up sprawdza swiezosc raz, w bootstrapie; ta bramka pilnuje zmian POWSTALYCH W TRAKCIE runu.
-const NATYWNE_DEPS_RESULT = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    wymagaRebuildu: { type: 'boolean' },
-    nowe: { type: 'array', items: { type: 'string' }, description: 'pakiety dodane w tej fazie, ktore niosa kod natywny (podspec / katalog ios|android / config plugin)' },
+    status: { type: 'string', enum: ['pominieto', 'brak-srodowiska', 'niepowodzenie', 'gotowe', 'odroczone'] },
+    scenariusze: { type: 'integer', description: 'niezaznaczone scenariusze [E2E] zadania' },
+    figmaScreens: { type: 'boolean' },
+    envE2e: { type: 'boolean', description: 'czy repo ma .env.e2e' },
+    bazaE2e: { type: 'boolean', description: 'czy projekt ma baze e2e (Supabase) — wtedy db-sync per faza' },
+    serwer: { type: 'string', enum: ['uruchomione', 'obcy', 'brak'] },
+    url: { type: ['string', 'null'] },
+    log: { type: ['string', 'null'] },
+    bledy: { type: 'array', items: { type: 'string' } },
     detal: { type: 'string' },
+    naprawa: { type: 'string' },
+    stanZapisany: POLE_STANU,
   },
-  required: ['wymagaRebuildu', 'nowe', 'detal'],
-}
-
-// Re-check swiezosci dev-clienta PRZED review kazdej fazy (2026-08-08). Sprawdzenie jest BEZSTANOWE
-// (kilka `stat`-ow: mtime binarki vs lockfile/Podfile.lock/build.gradle/app.json), wiec dziala takze
-// po RESUME — a to jest dokladnie luka, ktorej bramka natywna nie pokrywa: faza wykonana we WCZESNIEJSZYM
-// runie nie wchodzi w galaz `execute`, wiec jej zmiany natywne nikt juz nie sprawdzal.
-// Dwustopniowosc jest celowa: tani detektor mowi ZE cos sie zmienilo, a precyzyjny sedzia
-// (natywneDepsPrompt) rozstrzyga CZY zmiana jest natywna — inaczej dodanie paczki czysto JS
-// przestawialoby lockfile i wywolywalo zbedny rebuild.
-const SWIEZOSC_RESULT = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    stan: { type: 'string', enum: ['aktualny', 'przestarzaly', 'nieznany'], description: 'nieznany = nie da sie odczytac mtime (brak emulatora/uprawnien) — NIE blokuj, ostrzez' },
-    mtimeBinarki: { type: ['integer', 'null'], description: 'epoch sekundy — punkt odciecia dla sedziego natywnosci' },
-    detal: { type: 'string' },
-  },
-  required: ['stan', 'detal'],
-}
-
-// SHA HEAD sprzed execute — punkt odniesienia dla bramki natywnych zaleznosci. Zdejmowany w JS przed
-// wywolaniem execute, zeby zakres diffu fazy byl faktem, a nie heurystyka po tresci commit message'y.
-const SHA_RESULT = {
-  type: 'object',
-  additionalProperties: false,
-  properties: { sha: { type: 'string', description: 'pelny SHA HEAD; pusty string gdy odczyt sie nie udal' } },
-  required: ['sha'],
+  required: ['status', 'scenariusze', 'figmaScreens', 'envE2e', 'bazaE2e', 'serwer', 'url', 'log', 'bledy', 'detal', 'naprawa', 'stanZapisany'],
 }
 
 const E2E_DB_SYNC_RESULT = {
@@ -267,8 +327,20 @@ const E2E_DB_SYNC_RESULT = {
   properties: {
     status: { type: 'string', enum: ['zsynchronizowano', 'aktualna', 'niepowodzenie'] },
     detal: { type: 'string', description: 'co zaaplikowano (migracje/seedy/konto) lub tresc bledu — blad SQL migracji to potencjalny DEFEKT KODU' },
+    advisors: { type: 'string', description: 'ostatnia linia stdout `e2e.mjs advisors` 1:1 (JSON w jednej linii); pusty string, gdy polecenie nie oddalo wyniku' },
   },
-  required: ['status', 'detal'],
+  required: ['status', 'detal', 'advisors'],
+}
+
+// Restart serwera E2E przed testerem fazy (P17): agent przepisuje ostatnia linie stdout skryptu jako string — JSON parsuje
+// i waliduje orkiestrator (`srodowiskoPoRestarcie`), bo agent przepisujacy pola potrafi je zgubic albo zmienic (P15).
+const E2E_RESTART = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    stdout: { type: 'string', description: 'ostatnia linia stdout `e2e.mjs restart` 1:1 (JSON w jednej linii)' },
+  },
+  required: ['stdout'],
 }
 
 const E2E_DOWN_RESULT = {
@@ -277,9 +349,9 @@ const E2E_DOWN_RESULT = {
   properties: {
     posprzatano: { type: 'boolean' },
     detal: { type: 'string' },
-    swapCofniety: { type: 'string', enum: ['tak', 'nie-dotyczy', 'blad'], description: 'czy rollback .env.local (z .bak) lub usuniecie utworzonego .env.local sie powiodl' },
+    stanZapisany: POLE_STANU,
   },
-  required: ['posprzatano', 'detal'],
+  required: ['posprzatano', 'detal', 'stanZapisany'],
 }
 
 const FIX_RESULT = {
@@ -295,33 +367,28 @@ const FIX_RESULT = {
       required: ['kod', 'test', 'e2e'],
     },
     e2eReweryfikacja: { type: 'string', description: 'X/Y passed lub "n/a"' },
-    walidacja: { type: 'string', enum: ['PASS', 'FAIL'] },
-    commity: { type: 'array', items: { type: 'string' } },
+    walidacja: { type: 'string', enum: ['PASS', 'FAIL', 'NIE-URUCHOMIONO'], description: 'NIE-URUCHOMIONO = komend nie dalo sie uruchomic przez srodowisko agenta (np. Docker w sandboxie), kod nie padl' },
+    walidacjaPrzyczyna: { type: 'string', description: 'przy NIE-URUCHOMIONO: co zablokowalo i ktore komendy zostaly do uruchomienia' },
+    commity: { type: 'array', items: { type: 'string' }, description: 'hashe commitow utworzonych w tym przebiegu — zakres kontroli fixa' },
     nienaprawione: { type: 'array', items: { type: 'string' } },
     nierozwiazaneP1: { type: 'integer', description: 'P1 ktorych fix NIE zamknal (krytyczne -> STOP)' },
     nierozwiazaneP2: { type: 'integer', description: 'P2 przeniesione do known-issues (graceful)' },
-    // Guard plikow binarnych (run team-os-onboarding-instalatory, 2026-07-26, repo web): fix wpisal do
+    // Guard plikow binarnych (run team-os-onboarding-instalatory, 2026-07-26): fix wpisal do
     // scripts/inbox/invite.mjs regex z SUROWYMI bajtami sterujacymi zamiast sekwencji \x.. — plik
     // przestal byc tekstem (git: "Bin 9804 -> 15506 bytes") i KAZDY kolejny agent padal na jego Read
     // (APIError), 6 prob z rzedu, run martwy po 2h47min. W required, bo pusta lista MUSI znaczyc
     // "sprawdzilem i czysto"; pole opcjonalne = agent moze pominac sprawdzenie i cicho wylaczyc guard.
+    // P14: wynik ponownego startu serwera po findingu „serwer aplikacji padl” — „martwy” przelacza faze bez przegladarki;
+    // nastepna faza zaczyna od restartu serwera (P17), wiec ten sam pad nie wraca jako FAIL w kazdej fazie. Poza required: stany i odpowiedzi sprzed P14.
+    serwerE2e: { type: 'string', enum: ['dziala', 'martwy', 'nie-dotyczy'], description: 'stan serwera E2E po fixie: dziala / martwy (start po padzie nieudany) / nie-dotyczy' },
     plikiBinarne: {
       type: 'array',
       items: { type: 'string' },
       description: 'pliki zmienione w tej fazie, ktore git widzi jako binarne (numstat "-"), a NIE sa legalnymi binariami — typowa przyczyna: surowe bajty sterujace w pliku zrodlowym',
     },
+    stanZapisany: POLE_STANU,
   },
-  required: ['naprawione', 'pozostaje', 'walidacja', 'nierozwiazaneP1', 'nierozwiazaneP2', 'plikiBinarne'],
-}
-
-const POSTFIX_VERDICT = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    nadalOtwarty: { type: 'boolean', description: 'true = problem wciaz istnieje w kodzie lub naprawa jest pozorna' },
-    uzasadnienie: { type: 'string' },
-  },
-  required: ['nadalOtwarty', 'uzasadnienie'],
+  required: ['naprawione', 'pozostaje', 'walidacja', 'nierozwiazaneP1', 'nierozwiazaneP2', 'plikiBinarne', 'stanZapisany'],
 }
 
 const VALIDATION_RESULT = {
@@ -332,16 +399,17 @@ const VALIDATION_RESULT = {
     typecheck: { type: 'string', enum: ['PASS', 'FAIL', 'SKIPPED'] },
     lint: { type: 'string', enum: ['PASS', 'FAIL', 'SKIPPED'] },
     testy: { type: 'string', description: 'PASS/FAIL z liczbami X/Y (+ adnotacje flake-infra)' },
-    expoDoctor: { type: 'string', enum: ['PASS', 'FAIL', 'n/a'] },
-    testyZmodyfikowane: { type: 'array', items: { type: 'string' }, description: 'pliki *.test.* ze ZMIENIONYMI istniejacymi asercjami w commitach fix(...) — sygnal test-weakeningu' },
+    build: { type: 'string', enum: ['PASS', 'FAIL', 'n/a'], description: 'krok build wg .claude/stack/walidacja.md' },
+    testyZmodyfikowane: { type: 'array', items: { type: 'string' }, description: 'pliki *.test.* ze ZMIENIONYMI istniejacymi asercjami w commitach fixa (poprawki po review / kontrola diffu naprawczego) — sygnal test-weakeningu' },
     e2eNieuruchomione: { type: 'array', items: { type: 'string' }, description: 'tresci checkboxow [E2E] wciaz NIEZAZNACZONYCH w planie zadania, ktore NIGDY nie przebiegly (bez suffixu "(FAIL:") — wymusza wynik=FAIL (completion-gate). Nie zalezy od istnienia .env.e2e: zrodlem prawdy o wymaganiu E2E jest plan, nie repo' },
     e2eFail: { type: 'array', items: { type: 'string' }, description: 'tresci checkboxow [E2E] z suffixem "(FAIL:" — flow przebiegl i padl na znanym defekcie (known-issues); wymusza wynik=FAIL, ale z inna instrukcja dla operatora (napraw kod, NIE zmieniaj na [Manual])' },
     e2eFazy: { type: 'array', items: { type: 'integer' }, description: 'numery faz (z naglowka "## Faza N"), w ktorych lezy co najmniej jeden niezaznaczony [E2E] z e2eNieuruchomione/e2eFail — orkiestrator cofa im review do pending' },
     knownIssuesZamkniete: { type: ['integer', 'null'], description: 'ile wpisow known-issues.md przeniesiono do sekcji "Zamkniete" (higiena, NIE wplywa na wynik)' },
     wynik: { type: 'string', enum: ['PASS', 'FAIL'] },
     bledy: { type: 'array', items: { type: 'string' } },
+    stanZapisany: POLE_STANU,
   },
-  required: ['wynik'],
+  required: ['wynik', 'stanZapisany'],
 }
 
 // ── Prompty leaf-agentow ──────────────────────────────────────────────────
@@ -351,9 +419,22 @@ function bootstrapPrompt(sciezka) {
 
 Folder zadania: ${sciezka}
 
-1. GIT: uruchom \`git branch --show-current\` i \`git status --short\`.
+1. GIT: uruchom \`git branch --show-current\` i \`git status --porcelain --untracked-files=all\`.
    Przeczytaj wymagany branch z dokumentacji w ${sciezka}/ (szukaj "Branch:").
-   Ustaw branch.zgodny (aktualny == wymagany lub wymagany == null) oraz branch.czysty (pusty status).
+   Ustaw branch.zgodny (aktualny == wymagany lub wymagany == null). Linie statusu wpisz 1:1 do wejscie.zmiany
+   (bez interpretacji — czy zmiany blokuja run, liczy orkiestrator).
+
+1a. DOCTOR: \`bash .claude/scripts/doctor/doctor.sh; echo "KOD=$?"\` (timeout Bash 300000). wejscie.doctorKod = liczba
+   z linii KOD=, wejscie.doctorWynik = linia zaczynajaca sie od "WYNIK:". Brak pliku skryptu -> doctorKod null, doctorWynik "".
+
+1b. DECYZJE NA GALEZI GLOWNEJ: wejscie.decyzje.glowna = "main", gdy \`git rev-parse --verify --quiet refs/heads/main\` zwraca SHA,
+   inaczej "master" przy tym samym sprawdzeniu, inaczej null (wtedy katalog false, linie []).
+   katalog: \`git cat-file -e <glowna>:docs/decisions && echo TAK || echo NIE\` -> TAK = true.
+   linie: \`git grep -e '^claude_md:' <glowna> -- 'docs/decisions/*.md'\` — kazda linia wyjscia 1:1 (brak trafien = []).
+
+1c. BLOKERY OPERATORA: \`node .claude/scripts/plan/plan.mjs blokery ${sciezka}\` — z JSON-u na stdout przepisz pola
+   checklista i blokery 1:1 do wejscie.blokery (bez oceny, czy pozycja jest juz zrobiona — liczy orkiestrator).
+   Brak skryptu albo kod wyjscia inny niz 0 -> wejscie.blokery = { checklista: null, blokery: [] }.
 
 2. STAN — najpierw sprawdz czy istnieje ${sciezka}/.autopilot-state.json:
 
@@ -369,6 +450,9 @@ Folder zadania: ${sciezka}
       checkboxow md — plik stanu jest ZRODLEM PRAWDY, checkboxy to tylko widok dla czlowieka.
       Pole "metryki" fazy (jesli obecne) PRZEPISZ 1:1 — nie licz go sam, nie uzupelniaj, nie zeruj;
       to zapis telemetrii z runu, w ktorym review sie odbylo. Gdy pola nie ma, pomin je (null).
+      Pole "baza" fazy (jesli obecne) przepisz 1:1 — od niej review liczy diff fazy po wznowieniu. Gdy pola nie ma, pomin je.
+      Pole "bazaZielona" (jesli obecne i nie null) przepisz 1:1 i ustaw wejscie.kodJakPrzyTescie:
+      \`git diff --quiet <bazaZielona.sha> HEAD -- . ':(exclude)docs' && echo TAK || echo NIE\` -> TAK = true, NIE = false.
       zrodloStanu = "state-json". Dodatkowo porownaj informacyjnie z plikami (np. istnieje
       ${sciezka}/review-faza-N.md a stan mowi review=pending) i wpisz różnice do rozbieznosci[]
       (NIE koryguj stanu samodzielnie).
@@ -394,6 +478,7 @@ Folder zadania: ${sciezka}
 3. zakonczenie: przy pierwszym parse ustaw walidacja/complete/compound = "pending"
    (chyba ze zadanie jest juz w docs/completed/ — wtedy "done").
 4. nazwaZadania = ostatni segment sciezki ${sciezka}.
+5. Bez pliku stanu albo bez pola bazaZielona: bazaZielona = null, wejscie.kodJakPrzyTescie = null.
 
 Zwroc obiekt zgodny ze schematem. Nie modyfikuj zadnych plikow — to read-only bootstrap.`
 }
@@ -409,36 +494,67 @@ ${trescJson}
 --- KONIEC TRESCI ---
 
 1. ZAPIS: uzyj narzedzia Write z dokladnie ta trescia (bez linii "--- POCZATEK/KONIEC TRESCI ---").
+   Plik zwykle juz istnieje: Write wymaga wczesniejszego Read, wiec przeczytaj go i nadpisz. Inna tresc na dysku to poprzedni stan,
+   ktory wlasnie zastepujesz — nie sprawdzasz jej i nie porownujesz z historia gita.
 2. WALIDACJA (obowiazkowa, nie pomijaj): odczytaj plik Z DYSKU i sprawdz, ze parsuje sie jako JSON:
    \`node -e "JSON.parse(require('fs').readFileSync('${sciezka}/.autopilot-state.json','utf8'));console.log('JSON-OK')"\`
    (brak node -> \`python3 -c "import json;json.load(open('${sciezka}/.autopilot-state.json'));print('JSON-OK')"\`).
    Wynik "JSON-OK" -> zwroc {zapisano:true, poprawnyJson:true}.
    Blad parsowania -> ZAPISZ PONOWNIE (raz) i zwaliduj jeszcze raz. Nadal blad -> {zapisano:false, poprawnyJson:false}.
-3. POWOD tej walidacji (run feedback-marcin-poprawki, 2026-08-06): przy przepisywaniu tresci przez agenta
-   w opisie findingu wszedl NIEZAESCAPOWANY cudzyslow — plik przestal byc JSON-em. To jest plik, z ktorego
-   pipeline odtwarza stan po awarii: uszkodzony albo wywroci nastepny bootstrap, albo cicho skasuje dowod,
-   ze cala faza zostala wykonana, i pipeline powtorzy kilka godzin pracy. Zapis bez odczytu = brak dowodu.
+3. POWOD tej walidacji: przepisujac tresc, agent potrafi wstawic do opisu findingu niezaescapowany cudzyslow
+   i plik przestaje byc JSON-em. To jest plik,
+   z ktorego pipeline odtwarza stan po awarii: uszkodzony albo wywroci nastepny bootstrap, albo cicho skasuje
+   dowod, ze cala faza zostala wykonana, i pipeline powtorzy kilka godzin pracy. Zapis bez odczytu = brak dowodu.
 
 Nie modyfikuj ZADNYCH innych plikow.`
 }
 
-function warmupPrompt(sciezka) {
-  return `Jestes rozgrzewka cache testowego pipeline'u dev-autopilot (folder zadania: ${sciezka}).
-CEL: zbudowac cache transformacji vitest (node_modules/.vite / optimizeDeps) PRZED fazami implementacji,
-zeby zaden pozniejszy agent nie trafil na zimny ~16-minutowy bieg.
+const TESTY_STARTU = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    wynik: { type: 'string', enum: ['PASS', 'FAIL', 'BRAK-TESTOW'] },
+    sha: { type: 'string', description: 'krotki hash HEAD, na ktorym biegly testy' },
+    komenda: { type: 'string', description: 'komenda do odtworzenia, np. "pnpm typecheck && pnpm test"' },
+    bledy: { type: 'array', items: { type: 'string' }, description: 'przy FAIL: plik testu albo typecheck + jednozdaniowy objaw' },
+  },
+  required: ['wynik', 'sha', 'komenda', 'bledy'],
+}
+
+// Zielony start (P4): testy na drzewie, od ktorego run zaczyna prace. Drzewo jest czyste (bramka czystosci wyzej),
+// wiec HEAD = kod startu; galaz moze juz niesc poprawke zastanego czerwonego testu z main.
+function testyStartuPrompt() {
+  return `Sprawdzasz, czy run dev-autopilot startuje z zielonego kodu: typecheck i pelne testy projektu na biezacym HEAD.
 ${BLOK_DLUGIE_KOMENDY}
 
-1. Wykryj runner: przeczytaj package.json. Rozgrzewka dotyczy WYLACZNIE vitest. Brak vitest
-   (inny runner lub brak testow) -> zwroc {status:"zbedne", detal:"<powod>"} i ZAKONCZ.
-2. Wybierz JEDEN test komponentu z najciezszym setupem: szukaj *.test.tsx importujacego
-   komponenty React Native (components/, app/, features/, src/ — transform react-native ->
-   react-native-web jest najdrozszy). Jesli W CALYM repo nie ma zadnego testu komponentu
-   (projekt greenfield): utworz TYMCZASOWY plik .autopilot-warmup.test.tsx w katalogu testowym
-   projektu z trywialnym renderem <View><Text>warmup</Text></View> i 1 asercja — to JEDYNY
-   wyjatek od zakazu modyfikacji plikow; USUN go w kroku 5.
-3. BIEG ZIMNY — OBOWIAZKOWO przez tlo (komenda moze trwac ~16 min, foreground NIE dokonczy):
-   uruchom \`<pm> vitest run <plik> --reporter=dot > /tmp/autopilot-warmup.log 2>&1\` przez Bash
-   z run_in_background (pm z lockfile: bun.lockb->bunx, pnpm->pnpm, yarn->yarn, npm->npx).
+1. \`git rev-parse --short HEAD\` -> sha.
+2. Komendy z package.json scripts (pm z lockfile: pnpm-lock -> pnpm, bun.lock/bun.lockb -> bun, yarn.lock -> yarn,
+   package-lock -> npm): typecheck (brak skryptu -> \`tsc --noEmit\` przy tsconfig.json, inaczej pomin) i test.
+   Brak skryptu test -> wynik "BRAK-TESTOW", komenda "", bledy [] i koniec.
+3. Uruchom typecheck, potem test wg BLOKU DLUGICH KOMEND (tlo + polling, flake infra wg procedury z bloku).
+   komenda = to, co uruchomiles, w jednej linii (np. "pnpm typecheck && pnpm test").
+4. Realny FAIL -> wynik "FAIL" i do bledy[] plik testu (albo "typecheck") z jednozdaniowym objawem. Nic nie naprawiaj:
+   decyzje o STOP-ie podejmuje orkiestrator, a operator naprawia kod sam.
+
+Nie modyfikuj plikow i nie commituj. Zwroc {wynik, sha, komenda, bledy}.`
+}
+
+function warmupPrompt(sciezka) {
+  return `Jestes rozgrzewka cache testowego pipeline'u dev-autopilot (folder zadania: ${sciezka}).
+CEL: zbudowac cache transformacji runnera testow PRZED fazami implementacji,
+zeby zaden pozniejszy agent nie trafil na zimny, milczacy bieg transform/prebundle.
+${BLOK_DLUGIE_KOMENDY}
+
+Runner, plik testu i komende biegu tego stacku podaje .claude/stack/walidacja.md, sekcja „Rozgrzewka cache” —
+przeczytaj ja przed krokiem 1.
+1. Wykryj runner: przeczytaj package.json. Rozgrzewka dotyczy WYLACZNIE runnera z sekcji „Rozgrzewka cache”. Brak tego
+   runnera (inny runner lub brak testow) -> zwroc {status:"zbedne", detal:"<powod>"} i ZAKONCZ.
+2. Wybierz JEDEN test z najciezszym setupem wg sekcji „Rozgrzewka cache”. Jesli W CALYM repo nie ma zadnego takiego testu
+   (projekt greenfield): utworz TYMCZASOWY test wg tej sekcji — to JEDYNY wyjatek od zakazu modyfikacji plikow;
+   USUN go w kroku 5.
+3. BIEG ZIMNY — OBOWIAZKOWO przez tlo (komenda moze milczec dlugo na zimnym cache, foreground NIE dokonczy):
+   uruchom komende biegu z sekcji „Rozgrzewka cache” z przekierowaniem \`> /tmp/autopilot-warmup.log 2>&1\` przez Bash
+   z run_in_background.
    POLLUJ co ~45-60s: \`tail -5 /tmp/autopilot-warmup.log\` + sprawdzenie czy proces zyje.
    Czekaj do zakonczenia (budzet ~25 min). Zanotuj laczny czas jako czasZimnySek.
    WYNIK testu (pass/fail asercji) jest NIEISTOTNY — liczy sie ukonczenie procesu (= zapis cache).
@@ -451,262 +567,84 @@ ${BLOK_DLUGIE_KOMENDY}
 Poza wyjatkiem z kroku 2 NIE modyfikuj zadnych plikow. Zwroc {status, detal, czasZimnySek, czasKontrolnySek}.`
 }
 
-function e2ePrecheckPrompt(sciezka) {
-  return `Jestes precheck-agentem E2E pipeline'u dev-autopilot. Zadanie: zebrac DWA niezalezne sygnaly.
-NIE interpretuj ich i NIE wyciagaj wnioskow — decyzje podejmuje orkiestrator.
-
-1. CZY SRODOWISKO ISTNIEJE: \`test -f "$(git rev-parse --show-toplevel)/.env.e2e" && echo TAK || echo NIE\`.
-   TAK -> istnieje:true, NIE -> istnieje:false. NIE czytaj zawartosci pliku (sekrety).
-
-2. CZY ZADANIE WYMAGA E2E: \`grep -hE '^- \\[ \\].*\\[E2E\\]' ${sciezka}/*-zadania.md | grep -vcE 'Operator:|\\[P[123]\\]'\`
-   (brak trafien = 0 — grep konczy sie wtedy kodem 1, to NIE jest blad). Marker [E2E] oznacza scenariusz,
-   ktory ma byc wykonany przez Maestro na realnym emulatorze. Liczysz WYLACZNIE niezaznaczone \`- [ ]\`;
-   pozycje juz odhaczone, pozycje z markerem [Manual] (swiadomie recznie przez operatora), kopie z prefiksem
-   "Operator:" w sekcjach "## Operator checklist faza N" oraz pozycje findingow z tokenem [P1]/[P2]/[P3] w sekcjach
-   "## Do poprawy po review fazy N" (linie zrodlowe z planu nigdy go nie maja) sie NIE licza.
-   Wynik -> liczbaScenariuszy; zadanieWymagaE2E = (liczbaScenariuszy > 0).
-
-Zwroc {istnieje, zadanieWymagaE2E, liczbaScenariuszy}. Nic wiecej nie rob.`
+// Repo bez aplikacji (projekt od zera, P17) skrypt rozpoznaje sam i zwraca status odroczone zamiast STOP-u.
+function e2eStartPrompt(sciezka) {
+  return `Uruchom w korzeniu repo dokladnie jedno polecenie i przepisz jego wynik:
+\`node .claude/scripts/e2e/e2e.mjs start --zadanie ${sciezka}\`
+Narzedzie Bash wywolaj z timeout 600000 (start serwera czeka do 500 s) i uruchom polecenie jeden raz: powtorka postawilaby
+drugi serwer obok pierwszego. Skrypt sprawdza, czy zadanie potrzebuje przegladarki, sprawdza .env.e2e i uruchamia serwer aplikacji
+w tle. Kod wyjscia 0 albo 1 to wynik (STOP liczy orkiestrator): ostatnia linia stdout to JSON — zwroc jego pola 1:1. Kod 3
+(JSON z polem "wyjatek") albo brak JSON-a: status "niepowodzenie", bledy = [tresc wyjatku albo ostatnie linie wyjscia],
+detal = to samo, naprawa = "Uruchom recznie: node .claude/scripts/e2e/e2e.mjs sprawdz --zadanie ${sciezka}", scenariusze 0,
+figmaScreens false, envE2e i bazaE2e false, serwer "brak", url i log null. Plikow repo nie zmieniasz (poza zapisem stanu,
+jesli polecenie go zawiera).`
 }
 
-function e2eEnvUpPrompt() {
-  return `Jestes agentem srodowiska E2E pipeline'u dev-autopilot. Twoim zadaniem jest postawic srodowisko testow
-Maestro (Metro + emulator z dev clientem, baza = DEDYKOWANY projekt Supabase e2e z .env.e2e, NIGDY dev/prod)
-i UDOWODNIC canary'm, ze flow realnie ruszy — zeby reviewer E2E i fix wykonaly scenariusze zamiast klasyfikowac
-je jako OPERATOR. Status "gotowe" jest ZAKAZANY dopoki canary nie przejdzie. NIGDY nie loguj wartosci z .env.e2e.
-
-KOMPLET POL W KAZDEJ SCIEZCE ZWROTU (twarde): schemat wymaga WSZYSTKICH pol takze wtedy, gdy przerywasz
-na wczesnym kroku. Dla etapow, do ktorych NIE doszedles, ustaw wartosci "nie dotarlem tutaj", a nie zgadywane:
-platforma:"brak", metro:"brak", simulator:"brak", swap:"brak" (gdy kroku 2 nie wykonales), canary:"pominiety",
-canaryTyp:"pominiety", devClient:"brak". Nigdy nie raportuj etapu, ktorego nie wykonales, jako zaliczonego —
-to caly sens tej bramki.
-${BLOK_DLUGIE_KOMENDY}
-
-0. SELF-SKIP: jesli w korzeniu repo NIE ma pliku .env.e2e -> zwroc
-   {status:"pominieto", detal:"brak .env.e2e — E2E w trybie OPERATOR (setup: .claude/templates/e2e-env/README.md)",
-    platforma:"brak", metro:"brak", simulator:"brak", swap:"brak", canary:"pominiety", canaryTyp:"pominiety", devClient:"brak"} i ZAKONCZ.
-
-1. BEZPIECZENSTWO (twarde — kazdy blad = status "niepowodzenie"):
-   a) \`git check-ignore -q .env.e2e\` — exit != 0 (plik NIE jest gitignorowany) -> niepowodzenie,
-      detal:"dopisz .env.e2e do .gitignore — plik zawiera sekrety".
-   a2) \`git check-ignore -q .env.local.bak\` — exit != 0 -> niepowodzenie, detal:"dopisz .env.local.bak
-      do .gitignore (one-time, jak .env.e2e) — backup swapu zawiera sekrety dev, a nieignorowany zablokowalby
-      nastepny run na bramce czystosci brancha (bootstrap STOP 'niezacommitowane zmiany')".
-   b) Wymagane klucze w .env.e2e: EXPO_PUBLIC_SUPABASE_URL, EXPO_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_E2E_DB_URL,
-      SUPABASE_E2E_SERVICE_ROLE_KEY, E2E_TEST_EMAIL, E2E_TEST_PASSWORD. Brak -> niepowodzenie z LISTA NAZW brakow.
-   c) GUARD TOZSAMOSCI: EXPO_PUBLIC_SUPABASE_URL z .env.e2e musi byc ROZNY od URL-a DEV. Zrodlo URL-a dev:
-      \`.env.local.bak\` jesli istnieje (= aktywny swap, .env.local trzyma teraz e2e), inaczej \`.env.local\`, inaczej \`.env\`.
-      Identyczny e2e==dev = to nie dedykowany projekt e2e -> niepowodzenie (ochrona bazy dev/prod).
-
-2. AUTO-SWAP .env.local -> e2e (zautomatyzowane — env-up WOLNO modyfikowac .env.local, bo env-down cofnie):
-   Dev-client inline'uje EXPO_PUBLIC_* z PLIKU \`.env.local\` przy starcie Metro; \`source .env.e2e\` tego NIE
-   repointuje (lekcja etap-12b: falszywe "gotowe" na .env.local celujacym w dev). Ustal stan i zadzialaj:
-   - Jesli \`.env.local.bak\` ISTNIEJE -> swap juz aktywny z wczesniejszego runu/crasha. Zweryfikuj ze EXPO_PUBLIC_SUPABASE_URL
-     w \`.env.local\` == e2e; jesli tak -> swap:"zastany", kontynuuj. Jesli NIE -> niepowodzenie (niespojny stan: .bak
-     istnieje ale .env.local nie na e2e; operator musi recznie rozstrzygnac).
-   - Inaczej jesli \`.env.local\` ISTNIEJE i jego EXPO_PUBLIC_SUPABASE_URL != e2e -> WYKONAJ swap:
-     \`cp .env.local .env.local.bak\` (backup), potem nadpisz w \`.env.local\` WSZYSTKIE klucze EXPO_PUBLIC_* wartosciami
-     z .env.e2e (tylko te klucze; reszty .env.local nie ruszaj). swap:"wykonany". Po swapie Metro MUSI wstac na nowo (krok 4).
-   - Inaczej jesli \`.env.local\` ISTNIEJE i juz == e2e (bez .bak) -> swap:"niepotrzebny", kontynuuj.
-   - Inaczej (\`.env.local\` NIE istnieje) -> stworz \`.env.local\` z kluczami EXPO_PUBLIC_* z .env.e2e; ZWERYFIKUJ
-     \`git check-ignore -q .env.local\` (typowy .gitignore Expo ma \`.env*.local\`) — nieignorowany -> usun go i zwroc
-     niepowodzenie (inaczej brudzi working tree). swap:"utworzony" (env-down USUNIE ten plik, nie bedzie .bak do przywrocenia).
-
-3. NARZEDZIA (preflight — brak = niepowodzenie z instrukcja, nie probuj dalej):
-   a) \`maestro --version\` — brak Maestro CLI -> niepowodzenie, detal:"zainstaluj Maestro: curl -fsSL https://get.maestro.mobile.dev | bash".
-   b) \`java -version\` — Maestro wymaga Java 17+; brak lub <17 -> niepowodzenie, detal:"zainstaluj Java 17+ (JAVA_HOME) — wymog Maestro 2.0+".
-
-4. METRO (deterministycznie — koniec ruletki "zastanego Metro"):
-   \`curl -s localhost:8081/status\`.
-   - Odpowiada I proces na porcie NALEZY DO NAS — zweryfikuj TOZSAMOSC, nie samo istnienie pliku .pid:
-     \`lsof -ti:8081\` musi zawierac \`cat /tmp/autopilot-metro.pid\` (plik .pid przezywa smierc procesu; na porcie
-     moze juz siedziec CUDZE Metro na dev — dokladnie klasa false-greena, ktora eliminujemy) — I swap w kroku 2 byl
-     "zastany"/"niepotrzebny" (nie zmienialismy env w tym runie) -> metro:"zastane", uzyj.
-   - W KAZDYM innym przypadku gdy Metro odpowiada (pid z portu != nasz .pid, brak .pid, ALBO swap "wykonany"/"utworzony")
-     -> RESTART: zwolnij port \`lsof -ti:8081 | xargs kill 2>/dev/null\` (usun tez stary /tmp/autopilot-metro.pid), potem jak nizej.
-     Powod: nie ufamy env-owi procesu, ktorego nie wstartowalismy PO swapie — bundle dev-clienta inline'uje env z momentu startu Metro.
-   - Metro nie odpowiada (lub po zwolnieniu portu) -> uruchom DETACHED z env e2e (pm z lockfile: bun.lockb->bun, pnpm->pnpm, yarn->yarn, npm->npm):
-     \`set -a; source .env.e2e; set +a; nohup <pm> start --clear > /tmp/autopilot-metro.log 2>&1 & echo $! > /tmp/autopilot-metro.pid\`
-     (npm przekazuje flagi po \`--\`: \`npm start -- --clear\`; bun/pnpm/yarn przyjmuja wprost).
-     Polluj \`curl -s localhost:8081/status\` co ~10s (max ~120s). Sukces -> metro:"uruchomione", timeout -> niepowodzenie (+ tail -20 logu).
-
-5. EMULATOR (iOS-first, z fallbackiem Android — canary poleci na wybranej platformie):
-   a) iOS: \`xcrun simctl list devices booted\` — jest booted iPhone -> platforma:"ios". Pusto: sprobuj bootnac
-      (\`xcrun simctl list devices available\` + \`xcrun simctl boot <udid>\`, odpytuj status). Dev client:
-      bundle id z app.json/app.config.* -> \`xcrun simctl listapps booted | grep <bundleId>\`. Jest -> simulator:"gotowy", platforma:"ios".
-   b) Gdy iOS niedostepny (brak Xcode/simctl) ALBO brak dev-clienta iOS: Android: \`adb devices\` — jest device/emulator online
-      -> platforma:"android"; dev client: \`adb shell pm list packages | grep <appId>\`. Jest -> simulator:"gotowy", platforma:"android".
-   c) Zaden emulator z dev-clientem (ani iOS ani Android) -> niepowodzenie, simulator:"brak", devClient:"brak", detal:"zainstaluj dev client (one-time):
-      iOS: bunx expo run:ios ; Android: bunx expo run:android (zostaw emulator BOOTED z zainstalowanym dev-clientem przed wznowieniem)".
-   d) SWIEZOSC DEV-CLIENTA (twardy gate — run feedback-marcin-poprawki 2026-08-06 stracil ~3h na tej klasie bledu
-      DWA razy: raz na module z merge'a sprzed runu, raz na module dodanym przez faze W TRAKCIE runu).
-      Krok (a)/(b) dowodzi tylko, ze binarka ISTNIEJE. Zainstalowany dev-client starszy niz natywne zaleznosci
-      NIE zawiera ich kodu — apka wywala sie dopiero na ekranie, ktory ich uzywa ("Cannot find native module X"),
-      czyli w srodku scenariusza E2E, po godzinach pracy pipeline'u.
-      iOS: sciezke binarki wez z \`xcrun simctl get_app_container booted <bundleId>\`; Android:
-      \`adb shell pm path <appId>\` (mtime przez \`adb shell stat -c %Y <sciezka>\`; gdy odczyt sie nie uda —
-      np. "Permission denied" — POMIN gate swiezosci na Androidzie z ostrzezeniem w detal, devClient:"aktualny";
-      NIE rob z tego STOP-u i NIE udawaj, ze sprawdziles).
-      Porownaj jej mtime z mtime KAZDEGO z: ios/Podfile.lock (jesli jest), android/build.gradle (jesli jest),
-      app.json / app.config.*, oraz lockfile (bun.lock/bun.lockb/pnpm-lock.yaml/yarn.lock/package-lock.json).
-      Uzyj \`stat -f %m <plik>\` (macOS) lub \`stat -c %Y\` (Linux).
-      CELOWO NIE porownujemy z package.json: jego mtime zmienia kazdy \`git checkout\`, \`stash pop\`, swiezy
-      \`clone\` i kazda edycja pola "scripts", wiec bramka zadalaby 10-minutowego rebuildu przy zerowej zmianie
-      natywnej. Zmiane ZALEZNOSCI lapie osobna, tresciowa bramka po execute (patrz natywneDepsPrompt) oraz
-      lockfile powyzej — lockfile rusza sie tylko przy realnej zmianie drzewa zaleznosci.
-      Binarka STARSZA od ktoregokolwiek z nich -> devClient:"przestarzaly" -> NIEPOWODZENIE, detal:
-      "dev-client (<data>) starszy niz <plik> (<data>) — natywne moduly z nowszych zaleznosci nie sa w buildzie.
-      Rebuild: bunx expo prebuild && (cd ios && pod install) && xcodebuild -workspace ios/*.xcworkspace -scheme <scheme>
-      -configuration Debug -sdk iphonesimulator CODE_SIGN_IDENTITY='-' (podpis ad-hoc, NIE CODE_SIGNING_ALLOWED=NO —
-      bez podpisu Xcode nie wstrzykuje entitlements i expo-secure-store traci dostep do keychaina),
-      potem xcrun simctl install booted <sciezka .app>".
-   e) PODPIS I ENTITLEMENTS (iOS, tylko gdy platforma:"ios") —
-      \`codesign -d --entitlements - --xml <sciezka .app> 2>&1\` (flaga --xml jest ISTOTNA: bez niej starsze
-      toolchainy zwracaja binarny blob z 8-bajtowym naglowkiem zamiast plisty, a agent szukajacy nazw uprawnien
-      w "smieciach" orzeka "pusto" i myli sie w obie strony).
-      BRAK PODPISU = NIEPOWODZENIE BEZWARUNKOWO: gdy wynik zawiera "code object is not signed at all" albo jest
-      pusty, ustaw devClient:"przestarzaly" i przerwij z ta sama instrukcja rebuildu co (d) — NIE badaj przy tym,
-      czy projekt deklaruje jakies konkretne uprawnienie. Powod (review adwersaryjny 2026-08-08): warunkowanie
-      tego na obecnosci applesignin/keychain-access-groups/associated-domains w app.json wylaczalo bramke
-      w NAJCZESTSZYM przypadku — apka uzywajaca tylko expo-secure-store nie deklaruje zadnego z nich,
-      bo keychain-access-groups wstrzykuje Xcode przy PODPISYWANIU, a nie app.json. Nie ma legalnego powodu,
-      by dev-client na symulatorze byl niepodpisany.
-      Skutek, przed ktorym to chroni: build z CODE_SIGNING_ALLOWED=NO uruchamia sie i przechodzi launchApp,
-      ale SecureStore nie zapisze sesji — logowanie "dziala", sesja nie przezywa restartu, a kazdy flow za auth
-      stoi na skeletonach. To jest false-green, ktory canary launch-only przepuszcza.
-      Podpis jest i entitlements sie wypisuja -> devClient:"aktualny".
-
-6. CANARY (DOWOD ze flow ruszy — bez tego "gotowe" jest ZAKAZANE; to naprawia luke "komponenty OK, ale nikt nie przeszedl calego toru"):
-   a) LOGIN konta e2e (REST, tanie, bez emulatora): password-grant na backend e2e:
-      \`curl -s -X POST "$EXPO_PUBLIC_SUPABASE_URL/auth/v1/token?grant_type=password" -H "apikey: $EXPO_PUBLIC_SUPABASE_ANON_KEY"
-      -H "Content-Type: application/json" -d '{"email":"'"$E2E_TEST_EMAIL"'","password":"'"$E2E_TEST_PASSWORD"'"}'\`
-      (zmienne z \`set -a; source .env.e2e; set +a\`). Odpowiedz zawiera access_token -> login OK (potwierdza: URL+anon key dzialaja,
-      konto e2e istnieje i haslo pasuje). Brak access_token / blad -> canary:"fail", niepowodzenie, detal z kodem/komunikatem
-      (typowo: konto nie istnieje -> db-sync je tworzy per faza, ale login MUSI dzialac zanim uznamy srodowisko za gotowe;
-      jesli konto jeszcze nie istnieje, utworz je teraz POST /auth/v1/admin/users z SUPABASE_E2E_SERVICE_ROLE_KEY, email_confirm:true, i powtorz login).
-   b) PRZEJSCIE APKI (Maestro) — canary ma dowodzic, ze flow ZA LOGOWANIEM ruszy, a nie tylko ze apka wstaje.
-      LEKCJA (run feedback-marcin-poprawki, 2026-08-06): canary launch-only konczyl sie na ekranie Welcome, ktory
-      nie wymaga sesji i nie laduje zadnego natywnego modulu poza rdzeniem. Dal ZIELONE swiatlo dwa razy pod rzad
-      srodowisku, na ktorym kazdy realny scenariusz padal (brak entitlements -> sesja nie utrwalana; brak modulu
-      natywnego -> crash na glebszym ekranie). Zielony canary ma znaczyc "flow ruszy", nie "apka sie otwiera".
-      - PREFEROWANE (canaryTyp:"auth"): jesli repo ma \`.maestro/_canary.yaml\` — uruchom WLASNIE JEGO,
-        w JEDNEJ komendzie razem z zaladowaniem env (kazde wywolanie Bash to NOWY proces — \`source\` z kroku 4
-        tu juz nie obowiazuje, a bez tego Maestro dostanie puste \`-e\` i canary padnie na SPRAWNYM srodowisku,
-        co wyglada jak zepsuty ekran logowania):
-        \`set -a; source .env.e2e; set +a; maestro test -e E2E_EMAIL="$E2E_TEST_EMAIL" -e E2E_PASSWORD="$E2E_TEST_PASSWORD" .maestro/_canary.yaml\`
-        Ten flow jest wersjonowany w repo (wzorzec: .claude/templates/e2e-env/_canary.yaml) i ma przejsc
-        logowanie oraz zaasertowac element na ekranie ZA auth. Exit 0 -> canary:"pass", canaryTyp:"auth".
-      - FALLBACK (canaryTyp:"launch"): brak \`.maestro/_canary.yaml\` -> stworz TYMCZASOWY \`/tmp/autopilot-canary.yaml\`
-        (POZA repo — osierocony plik w working tree blokowalby nastepny run na bramce czystosci brancha):
-        linia 1 \`appId: <bundleId/appId z app.json>\`, potem \`---\`, \`- launchApp\`, \`- takeScreenshot: /tmp/autopilot-canary\`
-        (sciezka ABSOLUTNA — relatywna wyladowalaby w cwd, czyli w repo). Uruchom \`maestro test /tmp/autopilot-canary.yaml\`.
-        Exit 0 -> canary:"pass", canaryTyp:"launch" ORAZ dopisz do detal ostrzezenie: "canary launch-only —
-        slaby dowod; dodaj .maestro/_canary.yaml (wzorzec: .claude/templates/e2e-env/_canary.yaml), zeby bramka
-        wykrywala brak entitlements i natywnych modulow ladowanych za logowaniem".
-        Na koncu usun /tmp/autopilot-canary.yaml i /tmp/autopilot-canary.png (pass czy fail).
-      Exit != 0 w obu wariantach -> canary:"fail", niepowodzenie (+ ostatnie linie outputu Maestro w detal).
-      Gdy flow padnie na "Cannot find native module" -> dopisz w detal, ze to przestarzaly dev-client (rebuild jak w 5d).
-
-7. status "gotowe" TYLKO gdy: bezpieczenstwo OK (1) I swap rozstrzygniety (2) I narzedzia OK (3) I Metro odpowiada wstale
-   z env e2e (4) I emulator gotowy z AKTUALNYM dev-clientem (5, w tym 5d swiezosc i 5e entitlements) I canary:"pass"
-   (6a login + 6b przejscie apki). Inaczej "niepowodzenie".
-   W polu detal streszcz co postawiono (platforma, swap, canary, canaryTyp, devClient) BEZ wartosci sekretow.`
+function e2eRestartPrompt(sciezka, numerFazy) {
+  return `Uruchom w korzeniu repo dokladnie jedno polecenie (Bash z timeout 600000 — start serwera czeka do 500 s; jedno wywolanie):
+\`node .claude/scripts/e2e/e2e.mjs restart --zadanie ${sciezka} --faza ${numerFazy}\`
+Skrypt zatrzymuje serwer aplikacji uruchomiony przez pipeline i uruchamia go od nowa; faza bez scenariuszy [E2E] i makiet — nic nie robi.
+Zwroc {stdout}: ostatnia linie stdout 1:1 (JSON w jednej linii), bez zmian. Brak JSON-a: stdout = ostatnie linie wyjscia.
+Plikow repo nie zmieniasz.`
 }
 
-function swiezoscPrompt(numerFazy) {
-  return `Jestes tanim detektorem swiezosci dev-clienta pipeline'u dev-autopilot (przed review fazy ${numerFazy}).
-JEDNO pytanie: czy binarka na emulatorze jest starsza niz konfiguracja natywna projektu?
-
-1. Ustal sciezke zainstalowanej apki: iOS \`xcrun simctl get_app_container booted <bundleId z app.json>\`,
-   Android \`adb shell pm path <appId>\`. Nie da sie ustalic (brak booted emulatora, blad odczytu) ->
-   {stan:"nieznany", mtimeBinarki:null, detal:"<powod>"} i ZAKONCZ. To NIE jest blad — nie blokuj runu.
-2. Odczytaj mtime binarki (\`stat -f %m\` macOS / \`stat -c %Y\` Linux; Android: \`adb shell stat -c %Y\`)
-   i mtime KAZDEGO z istniejacych: ios/Podfile.lock, android/build.gradle, app.json, app.config.js,
-   app.config.ts, bun.lock, bun.lockb, pnpm-lock.yaml, yarn.lock, package-lock.json.
-   package.json CELOWO pomijamy — jego mtime przestawia kazdy git checkout i edycja pola "scripts".
-3. Binarka nowsza od wszystkich -> {stan:"aktualny", mtimeBinarki:<epoch>, detal:"binarka nowsza niz konfiguracja natywna"}.
-   Binarka STARSZA od ktoregokolwiek -> {stan:"przestarzaly", mtimeBinarki:<epoch>,
-   detal:"binarka (<data>) starsza niz <plik> (<data>)"}.
-
-Read-only, nie buduj i nie instaluj. Zwroc obiekt zgodny ze schematem.`
-}
-
-function natywneDepsPrompt(numerFazy, zakresKomenda, kontekstZakresu) {
-  return `Jestes bramka natywnych zaleznosci pipeline'u dev-autopilot (po execute fazy ${numerFazy}).
-JEDNO pytanie: czy ta faza uniewaznila dev-clienta na emulatorze, czyli czy zmienila NATYWNA warstwe aplikacji?
-
-1. ZAKRES (${kontekstZakresu}) — uzyj DOKLADNIE tego polecenia; nie zgaduj po tresci commit message'y
-   i nie uzywaj origin/main (w repo bez remote'a ta referencja nie istnieje, a przy zadaniu wielofazowym
-   objelaby cudze fazy):
-   \`${zakresKomenda}\`
-2. Pusty diff -> {wymagaRebuildu:false, nowe:[], detal:"faza nie tknela zaleznosci ani konfiguracji natywnej"}.
-3. ZMIANY KONFIGURACJI NATYWNEJ (niezalezne od zaleznosci): dodany/zmieniony wpis w \`plugins\`, \`ios\`,
-   \`android\`, \`permissions\`, \`entitlements\` w app.json/app.config.* -> to samo uniewaznia binarke co nowy modul.
-   Wpisz taka zmiane do nowe[] jako "app.json:<sciezka-pola>" i ustaw wymagaRebuildu:true.
-4. Dla KAZDEGO pakietu DODANEGO lub PODBITEGO (takze zmiana wersji w lockfile) rozstrzygnij natywnosc
-   Z DYSKU, nie po nazwie:
-   - \`node_modules/<pkg>/expo-module.config.json\` (najpewniejszy marker modulu Expo),
-   - \`ls node_modules/<pkg>/ios node_modules/<pkg>/android 2>/dev/null\`,
-   - \`find node_modules/<pkg> -maxdepth 2 \\( -name "*.podspec" -o -name "build.gradle" \\) 2>/dev/null\`,
-   - \`node_modules/<pkg>/app.plugin.js\` albo pole "expo" w jego package.json (config plugin).
-   FAIL-CLOSED: jesli katalogu \`node_modules/<pkg>\` NIE MA (pakiet dopisany bez instalacji, hoisting do
-   korzenia workspace, swiezy clone bez \`install\`) — NIE mozesz rozstrzygnac, wiec traktuj go jak NATYWNY
-   i dopisz w detal "nierozstrzygniety (brak node_modules/<pkg>) — potraktowany jak natywny".
-   Koszt falszywego STOP-u to jeden rebuild; koszt przeoczenia to caly run padajacy na E2E.
-   Pakiet z zainstalowanym katalogiem i BEZ zadnego z markerow -> czysto JS, nie wymaga rebuildu.
-5. Lista niepusta -> {wymagaRebuildu:true, nowe:[...], detal:"<pozycja> — <dowod>"}.
-
-Read-only: nie modyfikuj plikow, nie instaluj, nie buduj. Zwroc obiekt zgodny ze schematem.`
-}
-
-function e2eDbSyncPrompt(sciezka, numerFazy) {
+function e2eDbSyncPrompt(sciezka, numerFazy, baza) {
   return `Jestes agentem synchronizacji bazy e2e pipeline'u dev-autopilot (zadanie: ${sciezka}, faza ${numerFazy}).
-Cel: dedykowany projekt Supabase e2e ma miec migracje i seedy tej fazy PRZED testami Maestro.
-Ten projekt WOLNO modyfikowac autonomicznie — to nie jest baza dev/prod (guard tozsamosci zrobil env-up).
+Cel: dedykowany projekt Supabase e2e ma miec migracje i seedy tej fazy PRZED testami E2E w przegladarce.
+Ten projekt wolno modyfikowac autonomicznie — to nie jest baza dev/prod (guard tozsamosci zrobil start srodowiska).
 NIGDY nie loguj wartosci sekretow z .env.e2e.
 ${BLOK_DLUGIE_KOMENDY}
 
 1. Wczytaj SUPABASE_E2E_DB_URL i SUPABASE_E2E_SERVICE_ROLE_KEY z .env.e2e (do uzycia, nie do logu).
-2. MIGRACJE — realny apply: \`supabase db push --db-url "$SUPABASE_E2E_DB_URL" --include-all\`
-   (non-interactive: dodaj --yes jesli CLI wspiera, inaczej \`echo Y |\`). To pierwsza PRAWDZIWA
+2. MIGRACJE — najpierw \`node .claude/scripts/e2e/e2e.mjs suma\`: kod 1 = migracja z sumy zmieniona albo usunieta ->
+   status "niepowodzenie" z trafieniami w detal, bez db push (zmieniona wypchnieta migracja nie trafia do bazy e2e). Potem realny apply: \`supabase db push --db-url "$SUPABASE_E2E_DB_URL" --include-all --yes\`
+   (\`--yes\` obowiazkowe: CLI 3 bez terminala odrzuca zmiane hostowanej bazy bez niego, odpowiedz podana potokiem nic nie potwierdza; w v2 to ta sama flaga globalna). To pierwsza PRAWDZIWA
    weryfikacja SQL migracji w pipeline (testy migracji w repo to regex na pliku). Blad SQL ->
    status "niepowodzenie" z pelna trescia bledu w detal — to moze byc DEFEKT KODU migracji, nie infra.
-3. SEED: znajdz seedy powiazane z flow tej fazy — pliki *-seed.sql w .maestro/. Zrodla nazw flow/seedow
+3. SEED: znajdz seedy powiazane z flow tej fazy — pliki *-seed.sql w katalogu seedow stacku (\`e2e.katalogSeedow\`
+   w .claude/stack/profil.json, dalej <seedy>). Zrodla nazw flow/seedow
    fazy ${numerFazy} w ${sciezka}/*-zadania.md (WSZYSTKIE, nie tylko "Weryfikacja:"): (a) kazda linia z markerem
-   [E2E] (prefiks Test: i Weryfikacja:) — sciezka flow i ewentualne "(seed: .maestro/<x>-seed.sql)";
-   (b) checkboxy implementacyjne "Stwórz (e2e flow):" / "Modyfikuj (e2e flow):" / "Stwórz (e2e seed):" tej fazy
-   (niosa dokladne sciezki); (c) fallback: kazdy .maestro/*-seed.sql dodany lub zmieniony w commitach tej fazy.
-   Seed o nazwie <flow>-seed.sql dobieraj po nazwie flow; seed wskazany jawnie — po sciezce. Aplikuj kazdy:
-   \`psql "$SUPABASE_E2E_DB_URL" -f <plik>\` (brak psql -> sprobuj \`supabase db query\` lub odnotuj
-   w detal). Bledy duplikatow przy nieidempotentnym seedzie odnotuj, nie failuj.
+   [E2E] (prefiks Test: i Weryfikacja:) — identyfikator flow (pierwszy backtick w linii) i ewentualne jawne
+   "(seed: <seedy>/<x>-seed.sql)"; (b) checkboxy implementacyjne "Stwórz (e2e seed):" tej fazy (niosa dokladne
+   sciezki); (c) fallback: kazdy <seedy>/*-seed.sql dodany lub zmieniony w commitach tej fazy.
+   Jawny "(seed: …)" WYGRYWA (scenariusz moze uzywac cudzego seeda); konwencje <flow>-seed.sql dobieraj
+   po identyfikatorze flow tylko gdy linia nie wskazuje seeda jawnie. Aplikuj kazdy
+   WYLACZNIE przez \`psql "$SUPABASE_E2E_DB_URL" -v ON_ERROR_STOP=1 -f <plik>\`.
+   ZAKAZ \`supabase db query -f\` jako fallbacku: CLI wysyla plik jako JEDNO prepared statement, wiec
+   seed z \`begin; do $$ ... $$; commit;\` pada na "cannot insert multiple commands into a prepared
+   statement" (42601) — to narzedzie do jednozdaniowych sprawdzen, nie do seedow. Brak psql ->
+   status "niepowodzenie" z instrukcja instalacji w detal (brew install libpq / apt install postgresql-client).
+   Bledy duplikatow przy nieidempotentnym seedzie odnotuj, nie failuj.
 4. KONTO TESTOWE: sprawdz czy user E2E_TEST_EMAIL istnieje (GET /auth/v1/admin/users przez
    service_role). Brak -> utworz (POST /auth/v1/admin/users, email_confirm:true, haslo E2E_TEST_PASSWORD).
 
-Zwroc {status, detal}: "zsynchronizowano" (cos zaaplikowano), "aktualna" (nic do zrobienia),
+5. ADVISORS — lint bazy e2e po migracjach fazy, tylko gdy krok 2 przeszedl (db push bez bledu):
+   \`node .claude/scripts/e2e/e2e.mjs advisors${baza ? ` --baza ${baza}` : ''}\`. Ostatnia linie stdout (JSON w jednej linii)
+   zwroc 1:1 w polu advisors. Kod 1 (bledy ERROR albo blad API) to wynik lintu, nie niepowodzenie synchronizacji — status
+   ustalasz z krokow 2–4. Po bledzie kroku 2 advisors = "" (baza bez migracji fazy dalaby falszywe „ok”). Tokenu nie wypisujesz.
+
+Zwroc {status, detal, advisors}: "zsynchronizowano" (cos zaaplikowano), "aktualna" (nic do zrobienia),
 "niepowodzenie" (+ co dokladnie padlo).`
 }
 
-function e2eEnvDownPrompt(swap) {
-  return `Sprzatanie srodowiska E2E dev-autopilot. Zabij WYLACZNIE procesy uruchomione przez pipeline i cofnij swap env.
-
-1. METRO: jesli istnieje /tmp/autopilot-metro.pid -> zabij TYLKO gdy tozsamosc sie zgadza:
-   \`lsof -ti:8081\` zawiera \`cat /tmp/autopilot-metro.pid\` -> \`kill $(cat /tmp/autopilot-metro.pid)\`.
-   PID z pliku nieobecny na porcie = proces juz nie zyje albo PID zostal przetworzony przez system —
-   NIE zabijaj na slepo (recykling PID moglby trafic cudzy proces). W obu przypadkach usun
-   /tmp/autopilot-metro.pid i /tmp/autopilot-metro.log.
-   Metro "zastane" (pid z portu != nasz .pid) zostaw w spokoju — nie nalezy do nas.
-2. EMULATORA NIE wylaczaj (tani w utrzymaniu, drogi w boot).
-3. COFNIJ SWAP .env.local (env-up zglosil swap:"${swap}"):
-   - "wykonany" lub "zastany" -> przywroc oryginal: \`mv -f .env.local.bak .env.local\` (jesli .bak istnieje).
-     Potem ASSERT: EXPO_PUBLIC_SUPABASE_URL w .env.local NIE moze byc rowny wartosci e2e (czyli wrocil dev) — jesli
-     nadal e2e, to rollback sie nie udal: swapCofniety:"blad", zaznacz w detal (operator musi recznie przywrocic .env.local z .bak).
-   - "utworzony" -> usun plik ktory stworzylismy: \`rm -f .env.local\` (nie bylo oryginalu do przywrocenia).
-   - "niepotrzebny" / "brak" / puste -> swapCofniety:"nie-dotyczy", nic nie ruszaj.
-   Sukces rollbacku -> swapCofniety:"tak".
-Zwroc {posprzatano, detal, swapCofniety}. Nie loguj wartosci sekretow.`
+function e2eEnvDownPrompt(sciezka) {
+  return `Sprzatanie srodowiska E2E dev-autopilot: \`node .claude/scripts/e2e/e2e.mjs stop --zadanie "${sciezka}"\` (zatrzymuje wylacznie
+serwer uruchomiony przez start — plik PID; serwer zastany zostaje; niesledzone zrzuty z korzenia repo przenosi do katalogu zadania).
+Zwroc {posprzatano, detal} z JSON-a skryptu.`
 }
 
-function fixPrompt(sciezka, numerFazy, otwarteFindingi) {
+// Zwiniecie sekcji "Do poprawy" robi fix, ktory i tak edytuje plik zadan (P7; wczesniej osobny agent po fixie, plan B8).
+// Plik zadan czytaja planner, tester E2E i scribe kazdej nastepnej fazy; pelna tresc findingow zostaje w review-faza-N.md.
+function blokZwinieciaDoPoprawy(sciezka, numerFazy) {
+  return `ZWINIECIE SEKCJI "Do poprawy" (po naprawach, przed commitem): w sekcji "## Do poprawy po review fazy ${numerFazy}" pliku ${sciezka}/*-zadania.md
+usun wiersze zaznaczone (\`- [x]\`) i wstaw w ich miejsce jedna linie:
+\`Zamkniete cyklem fix: <liczba usunietych wierszy> pozycji — pelna tresc findingow i uzasadnienia w \`review-faza-${numerFazy}.md\`.\`
+Wiersze niezaznaczone (\`- [ ]\`) zostaja doslownie, razem z adnotacjami: dev-docs-complete zbiera z nich otwarte [P1]/[P2]
+do domkniecia zadania i do smoke'u operatora. Pozostale sekcje pliku, w tym "## Operator checklist faza ${numerFazy}", zostaja bez zmian.
+Plik zadan czytaja kolejne fazy, a pelna tresc findingow jest w raporcie review — w pliku zadan wystarczy slad cyklu fix.`
+}
+
+function fixPrompt(sciezka, numerFazy, otwarteFindingi, srodowiskoE2E) {
   return `Jestes czescia pipeline'u dev-autopilot. Naprawiasz problemy z review fazy ${numerFazy}.
 WAZNE: to JEDYNY przebieg fix tej fazy — po nim NIE ma ponownego review. Twoj raport jest
 OSTATECZNYM zrodlem prawdy o stanie findingow, wiec klasyfikuj uczciwie czego nie zamknales.
@@ -717,33 +655,85 @@ Numer fazy: ${numerFazy}
 OTWARTE FINDINGI DO NAPRAWY (lista autorytatywna — przekazana przez orkiestratora):
 ${JSON.stringify(otwarteFindingi, null, 2)}
 
-Pelny kontekst kazdego findingu: ${sciezka}/review-faza-${numerFazy}.md.
+FINDINGI Z PREFIKSEM "[z przerwanego review tej fazy — potwierdz, czy nadal aktualny]": to findingi
+z POPRZEDNIEGO podejscia do tej fazy, ktore zatrzymalo sie na awarii srodowiska (nie na jakosci kodu).
+Biezacy przebieg reviewerow ich NIE potwierdzil — mogl ich nie znalezc, ale kod mogl tez zostac
+w miedzyczasie zmieniony. Przy kazdym takim findingu NAJPIERW otworz wskazany plik i sprawdz, czy
+defekt nadal tam jest. Jesli JEST — napraw normalnie, wg klasyfikacji nizej. Jesli GO NIE MA (kod
+juz poprawiony, plik usuniety, opis nieaktualny) — NIE wymuszaj zmiany: policz go jako zamkniety
+i napisz w raporcie jednym zdaniem, ze defekt nie wystepuje. Nigdy nie zgaduj — sprawdz w pliku.
+
+Pelny kontekst kazdego findingu: ${sciezka}/review-faza-${numerFazy}.md — czytasz tylko wpisy swoich findingow
+(\`grep -n '<plik findingu>' ${sciezka}/review-faza-${numerFazy}.md\`, potem zakres \`sed -n\`), nie caly raport
+(uwaga: findingi przeniesione opisano w raporcie z POPRZEDNIEGO podejscia, wiec ich pelnej tresci
+moze tam nie byc — wtedy zrodlem jest opis z listy powyzej).
 Checkboxy w sekcji "Do poprawy po review fazy ${numerFazy}" w ${sciezka}/*-zadania.md odznaczaj
 w miare napraw (to widok dla czlowieka).
 
-Napraw WSZYSTKIE z listy (sa to P1 blocking i P2 important; P3 nie ma na liscie).
+KOLEJNOSC PRACY (lista zawiera P1 i P2; P3 z tej fazy sa w ${sciezka}/known-issues.md i nie sa do naprawy):
+1. NAJPIERW wszystkie P1 (blocking). Kazdy musi zostac zamkniety albo policzony w nierozwiazaneP1.
+2. POTEM wszystkie P2 (important).
+
+MIEJSCE ZMIAN: zmieniasz kod wskazany przez findingi i testy do nich. Zmiana w pliku, ktorego nie wskazuje zaden
+finding, wraca do cofniecia — kontrola fixa porownuje pliki commitow z lista findingow (K-7); pliki w ${sciezka}/ to ksiegowosc.
+REGULY PROJEKTU dla poprawianych plikow, przed naprawa: \`node .claude/scripts/wiedza/wiedza.mjs wycinek --pliki <pliki z pola plik findingow, bez :linia, po przecinku>\`
+(pole tresc; pusta — brak regul dla tych plikow). To reguly z poprzednich zadan tego projektu, ktore builder dostal w prompcie;
+poprawka lamiaca ktorakolwiek z nich to nowy defekt w miejscu, ktorego po fixie nie przeglada zaden reviewer.
+NAPRAWA P1: najpierw test, ktory odtwarza defekt i pada na obecnym kodzie, potem poprawka. Kontrola fixa uruchamia
+ten test na kodzie sprzed poprawki (K-6); test zielony przed poprawka albo jego brak wraca do tury poprawek.
 
 KLASYFIKUJ kazdy finding przed naprawa:
 - Typ KOD (blad implementacji/security/perf/architektury): napraw kod -> uruchom unit testy -> odznacz checkbox.
 - Typ TEST (brakujacy test): NIE ruszaj kodu produkcyjnego, napisz test (min 1 asercja, nie assertion-free)
   zgodnie z planem w docs/plans/ -> uruchom -> odznacz.
-- Typ E2E (weryfikacja E2E): napraw przyczyne (takze: NAPISZ brakujacy .maestro/<flow>.yaml wg Pliki:/Scenariusze
-  testowe: IU, gdy finding mowi "brak flow") -> re-uruchom Maestro na emulatorze (.maestro/<flow>.yaml, exit 0 +
-  assertVisible) -> odznacz DOPIERO po PASS (nie na "naprawilem kod"). Zrodlowy checkbox identyfikuj TOLERANCYJNIE:
-  po sciezce flow .maestro/<x>.yaml (pole plik / linia "checkbox:" z opisu) albo po tresci po normalizacji (bez markera,
-  bez suffixow) — nie po literalnym "[E2E]". JEDEN FLOW = WIELE LINII: po PASS odznacz KAZDA niezaznaczona linie
-  "Test:/Weryfikacja: … [E2E]" tej fazy wskazujaca ten sam flow (nie tylko te z "checkbox:"), usun z nich suffix
-  "(SKIP — …)"/"(FAIL: …)" i odhacz/usun odpowiadajace kopie "Operator: …" w "## Operator checklist faza ${numerFazy}".
-  Po PASS odznacz TAKZE zrodlowy checkbox tej fazy w ${sciezka}/*-zadania.md — "- [ ] Test: [E2E] ..." lub
-  "- [ ] Weryfikacja: [E2E] ..." — nie tylko pozycje w "Do poprawy". Po fix NIE ma re-review, wiec nikt inny
-  go nie odznaczy, a completion-gate (grep niezaznaczonych [E2E]) zatrzymalby run mimo realnego PASS.
+- Typ E2E (weryfikacja E2E): napraw przyczyne (takze: NAPISZ brakujacy seed <flow>-seed.sql w katalogu \`e2e.katalogSeedow\` z .claude/stack/profil.json wg IU,
+  gdy finding mowi "brak seeda") -> re-uruchom scenariusz narzedziem jazdy wg .claude/stack/fix-e2e.md, sekcja
+  „Ponowne odegranie scenariusza” (przed odegraniem zaaplikuj seed flow przez psql na "$SUPABASE_E2E_DB_URL") -> odznacz
+  DOPIERO po PASS (nie na "naprawilem kod"). Zrodlowy checkbox identyfikuj TOLERANCYJNIE: NAJPIERW po
+  identyfikatorze flow (pierwszy backtick w linii = ten z linii "checkbox:" opisu findingu), FALLBACK po tresci
+  po normalizacji (bez markera, bez suffixow) dla linii bez identyfikatora — nie po literalnym "[E2E]".
+  JEDEN FLOW = WIELE LINII: po PASS odznacz KAZDA
+  niezaznaczona linie "Test:/Weryfikacja: … [E2E]" tej fazy wskazujaca ten sam flow (nie tylko te z "checkbox:"),
+  usun z nich suffix "(SKIP — …)"/"(FAIL: …)" i odhacz/usun odpowiadajace kopie "Operator: …"
+  w "## Operator checklist faza ${numerFazy}". Po PASS odznacz TAKZE zrodlowy checkbox tej fazy
+  w ${sciezka}/*-zadania.md — "- [ ] Test: [E2E] ..." lub "- [ ] Weryfikacja: [E2E] ..." — nie tylko pozycje
+  w "Do poprawy". Po fix NIE ma re-review, wiec nikt inny go nie odznaczy, a completion-gate
+  (grep niezaznaczonych [E2E]) zatrzymalby run mimo realnego PASS.
+  ${srodowiskoE2E === 'gotowe'
+    ? `Finding "serwer aplikacji padl" (kod fazy polozyl serwer): po probie naprawy — takze gdy naprawa sie nie udala — uruchom
+  serwer od nowa: \`node .claude/scripts/e2e/e2e.mjs start --zadanie ${sciezka}\` (Bash z timeout 600000, jedno wywolanie).
+  Status "gotowe" -> odegraj scenariusz i zwroc serwerE2e: "dziala". Inny status -> przenies scenariusze tej fazy na reczne
+  poleceniem nizej z przyczyna srodowisko i zwroc serwerE2e: "martwy" (orkiestrator puszcza faze bez przegladarki, nastepna zaczyna od restartu).
+  Bez findingu "serwer aplikacji padl" zwroc serwerE2e: "nie-dotyczy".
+  Ponowne odegranie niewykonalne nie z winy kodu (aplikacja nie odpowiada, limit uslugi zewnetrznej, popup OAuth) ->`
+    : `SRODOWISKO E2E NIEDOSTEPNE W TYM RUNIE (${srodowiskoE2E}): przyczyne napraw (kod, seed), ale scenariusza nie odgrywaj ->`}
+  przenies flow do recznego sprawdzenia: \`node .claude/scripts/e2e/e2e.mjs manual --zadanie ${sciezka} --faza ${numerFazy} --flow <identyfikator> --przyczyna <srodowisko|limit-zewnetrzny|harness> --powod "<co naprawiles i dlaczego recznie>"\`
+  (identyfikator = pierwszy backtick linii "checkbox:" findingu). Odznacz pozycje w "Do poprawy"; nie licz jej w nierozwiazaneP2.
 
-ZAKAZ TEST-WEAKENINGU (twardy): NIE modyfikuj istniejacych testow ani asercji zeby przeszly —
-napraw IMPLEMENTACJE. Mozesz testy DODAWAC. Oslabienie/usuniecie asercji = niedopuszczalne;
-walidacja koncowa audytuje git diff testow w commitach fix i zglosi kazda taka zmiane.
+FINDING WIZUALNY (rozjazd z makieta: opis wskazuje ekran makiety, np. „z makiety <ekran>” albo visual-diff/<ekran>-figma.png):
+wyglad docelowy bierzesz z opisu ekranu w planie tego zadania. Katalog makiet = katalog pliku z linii SPEC.md planu zadania
+(\`grep -m1 'SPEC.md' ${sciezka}/*-plan.md\`); opis ekranu = \`<katalog>/ekrany/<ekran>.md\` (wymiary, odstepy, kolory, tokeny,
+teksty), a bez tego pliku — sekcja ekranu w \`<katalog>/SPEC.md\` (\`grep -n '<ekran>'\`, potem \`sed -n\`). PNG makiety i zrzutu
+podajesz w raporcie tylko jako sciezke i nie otwierasz ich narzedziem Read: obraz zostaje w kontekscie kazdej kolejnej tury
+(rzad 1–3 tys. tokenow na obraz), a opis ekranu ma te same wymiary i teksty. Poprawke sprawdzasz w aplikacji bez zrzutu
+wg .claude/stack/fix-e2e.md, sekcja „Sprawdzenie poprawki wizualnej” (elementy, teksty, wymiary, kolory).
 
-Kolejnosc: KOD -> TEST -> E2E. Po naprawach: pelna walidacja (typecheck, test, expo-doctor —
-komendy z package.json; NIE eas build), commit \`fix([nazwa]): poprawki po review fazy ${numerFazy}\`,
+ZAKAZ TEST-WEAKENINGU (twardy): NIE oslabiaj asercji zachowania, zeby test przeszedl — napraw IMPLEMENTACJE. Mozesz testy
+DODAWAC. Oslabienie/usuniecie asercji = niedopuszczalne; walidacja koncowa audytuje git diff testow fixa i zglosi kazda taka zmiane.
+Dozwolone, z uzasadnieniem w commicie: atrape odtwarzajaca sekwencje wywolan przepisujesz, gdy finding wymaga zmiany tej sekwencji
+(aa-exam: P2 zostal nienaprawiony, bo atrapa znala dokladne 4 zapytania); test opisujacy zachowanie, ktore finding kaze zmienic.
+
+GRANICE PLANU: finding, ktorego naprawa przekracza sekcje „Granice zakresu” planu, dodaje zaleznosc albo runner (npm install) albo zmienia
+zachowanie dla uzytkownika w sposob, ktorego nie ma w planie, NIE jest do automatycznej naprawy: zostaw kod, wpisz do nienaprawione[]
+z prefiksem "OPERATOR: <plik:linia> — <co trzeba rozstrzygnac>" i dopisz P2 do known-issues. Zmiany bez findingu kontrola diffu cofa,
+wiec ich nie dokladaj (aa-exam: oslabiony limit magic-linkow, usuniete zdarzenie Sentry).
+Komendy walidacji, ktorych nie da sie uruchomic przez srodowisko agenta (sandbox blokuje Dockera albo port, brak uslugi), to nie FAIL:
+zwroc walidacja "NIE-URUCHOMIONO" z walidacjaPrzyczyna (co zablokowalo, ktore komendy zostaly), zacommituj zmiany jak zwykle. FAIL oznacza, ze kod albo test padl.
+
+${blokZwinieciaDoPoprawy(sciezka, numerFazy)}
+
+Kolejnosc: KOD -> TEST -> E2E. Po naprawach: pelna walidacja (typecheck, test, build —
+komendy z package.json), commit \`fix(${sciezka.split('/').pop()}): poprawki po review fazy ${numerFazy}\` (temat dokladnie taki — walidacja koncowa po nim rozpoznaje commity fixa),
 staguj tylko zmienione pliki.
 ${BLOK_DLUGIE_KOMENDY}
 
@@ -755,10 +745,9 @@ Plik, ktory git widzi jako binarny, ma w numstat "-" zamiast liczb dodanych/usun
 Do plikiBinarne[] wpisz KAZDY taki plik POZA legalnymi binariami (.png .jpg .jpeg .gif .webp .avif
 .ico .bmp, .woff .woff2 .ttf .otf, .pdf .zip .gz .mp4 .mp3, bun.lockb) — plik zrodlowy lub tekstowy
 na tej liscie to AWARIA pipeline'u, nie znalezisko.
-POWOD (run team-os-onboarding-instalatory, 2026-07-26, repo web): fix zapisal do scripts/inbox/invite.mjs regex
-z SUROWYMI bajtami sterujacymi (literalne U+0000, U+001F, U+007F) zamiast sekwencji ucieczki
-\\x00-\\x1f\\x7f-\\x9f. Plik przestal byc tekstem, a kazdy kolejny agent rozlaczal sie przy jego Read
-(APIError) — 6 prob z rzedu i caly run byl martwy. Zapisujac regexy/stringi z bajtami sterujacymi
+POWOD: regex albo string z SUROWYMI bajtami sterujacymi (literalne U+0000, U+001F, U+007F) zamiast sekwencji
+ucieczki \\x00-\\x1f\\x7f-\\x9f robi z pliku zrodlowego plik binarny, a kazdy kolejny agent rozlacza sie
+przy jego Read (APIError) — run staje. Zapisujac regexy/stringi z bajtami sterujacymi
 uzywaj WYLACZNIE sekwencji ucieczki.
 NIE probuj naprawiac takiego pliku w tym przebiegu — jego Read zabije rowniez CIEBIE. Zwroc go na liscie.
 Gdy nic nie znalazles, zwroc pusta liste (pole jest obowiazkowe: brak listy = orkiestrator nie wie, czy sprawdziles).
@@ -770,7 +759,7 @@ NIE dopisuj duplikatu. Format: "## Faza ${numerFazy}\\nPozostaje N problemow P2 
 Po zapisie upewnij sie ze jest DOKLADNIE jeden naglowek "## Faza ${numerFazy}".
 Jesli nierozwiazany P2 jest typu E2E: w KAZDEJ zrodlowej linii "- [ ] Test: [E2E] ..." / "- [ ] Weryfikacja: [E2E] ..."
 tej fazy wskazujacej ten flow ZASTAP istniejacy suffix "(SKIP — …)"/"(FAIL: …)" (jesli jest) JEDNYM nowym
-" (FAIL: <skrot bledu Maestro> — known-issues faza ${numerFazy})" — na linii ma byc dokladnie jeden suffix; NIE odznaczaj jej.
+" (FAIL: <skrot bledu z przebiegu> — known-issues faza ${numerFazy})" — na linii ma byc dokladnie jeden suffix; NIE odznaczaj jej.
 Completion-gate rozroznia po tym suffixie "przebiegl i padl na defekcie" od "nigdy nie uruchomiony"; bez
 niego operator dostalby falszywa instrukcje "odpal lub zmien na [Manual]" dla znanego defektu.
 
@@ -780,40 +769,256 @@ nierozwiazaneP2 (P2 przeniesione do known-issues), walidacja (PASS/FAIL pelnej w
 plikiBinarne (pliki zrodlowe, ktore przestaly byc tekstem -> orkiestrator zrobi STOP).`
 }
 
-function postFixVerifyPrompt(sciezka, numerFazy, finding) {
-  return `Jestes NIEZALEZNYM weryfikatorem naprawy po cyklu fix fazy ${numerFazy} (zadanie: ${sciezka}).
-Agent fix zadeklarowal, ze ponizszy finding P1 zostal naprawiony. NIE ufaj deklaracji — sprawdz KOD.
+// ── Kontrola diffu naprawczego (P8: listy K-1…K-7 katalogu A) ─────────────
+// Po fixie nie ma re-review, wiec commity fixa oglada jeden agent kontroli. Dawna kontrola (regresje + nowe bramki)
+// zlapala 0 z 30 defektow urodzonych w fixie (test review), pre-skan haiku dal 199 trafien bez defektu, a verify-fix
+// sprawdzal sama deklaracje naprawy P1. Listy K daja polecenie per klasa defektu, K-6 zastepuje verify-fix (test P1
+// pada na kodzie sprzed poprawki), bramki P6 biegna na plikach fixa (w tym niezmiennosc migracji). Pole kazdej listy
+// jest wymagane: pusta lista ma wpis, czego i czym szukano.
 
-FINDING [${finding.severity}/${finding.typ}] ${finding.plik}:
-${finding.opis}
+const WYNIK_LISTY_KONTROLI = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sprawdzono: { type: 'string', description: 'co i jaka komenda sprawdzono — takze przy zerze pozycji albo gdy warunek listy nie zachodzi' },
+    pozycje: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          plik: { type: 'string', description: 'plik:linia' },
+          opis: { type: 'string', description: 'co commity fixa zmienily albo pominely i co poprawic' },
+        },
+        required: ['plik', 'opis'],
+      },
+    },
+  },
+  required: ['sprawdzono', 'pozycje'],
+}
 
-1. Przeczytaj aktualny stan pliku ${finding.plik} (i powiazanych) oraz commit(y) fix tej fazy
-   (git log --oneline --grep="^fix(" + git show odpowiedniego commita).
-2. Ocen MERYTORYCZNIE: czy naprawa adresuje PRZYCZYNE findingu, czy tylko objaw / czy jest pozorna
-   (np. wyciszenie, obejscie, zmiana nieistotnego fragmentu).
-3. Kontekst findingu: ${sciezka}/review-faza-${numerFazy}.md (jesli istnieje).
+// K-6: agent podaje wyniki testow P1, pozycje liczy JS (pozycjeKontroliFixa).
+const WYNIK_K6 = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    sprawdzono: WYNIK_LISTY_KONTROLI.properties.sprawdzono,
+    testy: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          finding: { type: 'string', description: 'plik:linia findingu P1' },
+          test: { type: ['string', 'null'], description: 'plik testu dodanego przez fix dla tego P1; null = fix nie dodal testu' },
+          czerwonyPrzedPoprawka: { type: 'boolean', description: 'true = test pada na rodzicu najstarszego commita fixa' },
+        },
+        required: ['finding', 'test', 'czerwonyPrzedPoprawka'],
+      },
+    },
+  },
+  required: ['sprawdzono', 'testy'],
+}
 
-Zwroc {nadalOtwarty, uzasadnienie}. nadalOtwarty=true gdy problem wciaz istnieje lub naprawa jest pozorna.
-Read-only — nie modyfikuj plikow.`
+const KONTROLA_FIXA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    listy: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        'K-1': WYNIK_LISTY_KONTROLI, 'K-2': WYNIK_LISTY_KONTROLI, 'K-3': WYNIK_LISTY_KONTROLI, 'K-4': WYNIK_LISTY_KONTROLI,
+        'K-5': WYNIK_LISTY_KONTROLI, 'K-6': WYNIK_K6, 'K-7': WYNIK_LISTY_KONTROLI,
+      },
+      required: ['K-1', 'K-2', 'K-3', 'K-4', 'K-5', 'K-6', 'K-7'],
+    },
+    bramki: WYNIK_LISTY_KONTROLI,
+  },
+  required: ['listy', 'bramki'],
+}
+
+// Zakres diffu fixa podany wprost z FixResult.commity — bez tego agent szukal "pierwszego commita fixa tej fazy"
+// grepem po calej historii zadania (pre-skan: mediana 20 wywolan narzedzi na jeden diff). Gdy fix nie podal hashy,
+// zostaje grep po komunikacie commita fixa tej fazy.
+// `pliki` (tura poprawkowa, P20 A9): diff tylko plikow z pozycji kontroli zamiast pelnego diffu fixa — w etapie 3 vibersi
+// pelny `git diff` to 51% wejscia agenta fix:poprawka (50k zn).
+function zakresFixa(numerFazy, commity, pliki = []) {
+  const hashe = (Array.isArray(commity) ? commity : [])
+    .map((c) => String(c).trim().split(/\s+/)[0])
+    .filter((h) => /^[0-9a-f]{7,40}$/i.test(h))
+  const odKogo = hashe.length ? '<najstarszy>' : '<pierwszy-commit-fixa>'
+  const diff = pliki.length
+    ? `Diff do poprawek (tylko pliki z pozycji): \`git diff ${odKogo}^ -- ${pliki.map((p) => `'${p}'`).join(' ')}\`. Pelnego diffu fixa nie czytasz; plik spoza tej listy czytasz zakresami, gdy pozycja tego wymaga.`
+    : `Diff fixa: \`git diff ${odKogo}^..HEAD\`.`
+  return hashe.length
+    ? `Zakres: commity fixa tej fazy (z raportu agenta fixa): ${hashe.join(' ')}.
+Najstarszy: ostatni wiersz \`git log --no-walk --format=%h ${hashe.join(' ')}\`. ${diff}`
+    : `Zakres: \`git log --oneline --grep="^fix("\` -> pierwszy commit fixa fazy ${numerFazy} (komunikat konczy sie "fazy ${numerFazy}"); ten commit jest najstarszym commitem fixa.
+${diff}`
+}
+
+// Sciezki plikow z pozycji kontroli fixa ("plik:linia" -> plik), bez duplikatow. Polecenie git dostaje je w apostrofach,
+// wiec `[id]`, `(grupa)` i `$id` z tras Next/TanStack przechodza; wpis z odstepem, apostrofem albo znakiem sterujacym
+// i "?" pomijany.
+function plikiPozycji(pozycje) {
+  const sciezki = (Array.isArray(pozycje) ? pozycje : []).map((p) => String((p && p.plik) || '').replace(/:\d.*$/, '').trim())
+  return [...new Set(sciezki.filter((s) => /^[^\s'"`\\?]+$/.test(s) && !/[\p{Cc}]/u.test(s) && !s.startsWith('-')))]
+}
+
+// Pozycje do tury poprawkowej z wyniku fix:kontrola: pozycje list K-1…K-7 i bramek ze zrodlem. K-6 liczy JS z testow P1:
+// test brakujacy albo zielony na kodzie sprzed poprawki nie odtwarza defektu (zastepuje dawny verify-fix).
+function pozycjeKontroliFixa(kontrola) {
+  const listy = (kontrola && kontrola.listy) || {}
+  const zList = Object.keys(listy).sort().flatMap((id) => {
+    if (id !== 'K-6') return (listy[id].pozycje || []).map((p) => ({ zrodlo: id, plik: p.plik, opis: p.opis }))
+    return (listy[id].testy || []).filter((t) => t.czerwonyPrzedPoprawka !== true).map((t) => ({
+      zrodlo: 'K-6',
+      plik: t.finding,
+      opis: t.test
+        ? `test ${t.test} przechodzi na kodzie sprzed poprawki — nie odtwarza defektu P1; popraw test tak, zeby padal przed poprawka`
+        : 'naprawa P1 bez testu — dopisz test, ktory pada na kodzie sprzed poprawki',
+    }))
+  })
+  const zBramek = ((kontrola && kontrola.bramki && kontrola.bramki.pozycje) || []).map((p) => ({ zrodlo: 'bramki', plik: p.plik, opis: p.opis }))
+  return [...zList, ...zBramek]
+}
+
+function kontrolaFixaPrompt(sciezka, numerFazy, commity, findingi, zastrzezone = []) {
+  const p1 = findingi.filter((f) => f.severity === 'P1').map((f) => f.plik)
+  const worktree = `/tmp/kontrola-fixa-faza-${numerFazy}`
+  const plikBramek = `/tmp/bramki-fix-${String(sciezka).replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}-faza-${numerFazy}.json`
+  return `Kontrola commitow fixa fazy ${numerFazy} (zadanie: ${sciezka}). Po fixie nie ma re-review: oceniasz to, co commity
+fixa zmienily albo pominely, wg list K-1…K-7 i bramek mechanicznych. Kodu nie poprawiasz — pozycje z wyniku dostaje
+jedna tura poprawek.
+
+${zakresFixa(numerFazy, commity)}
+
+Findingi, ktore fix naprawial (lista orkiestratora):
+${JSON.stringify(findingi, null, 2)}
+${zastrzezone.length ? `
+ZASTRZEZONE DLA OPERATORA (fix celowo tego nie ruszyl; to nie sa pozycje do poprawy, nawet gdy ryzyko jest realne, opisz je tylko w sprawdzono):
+${JSON.stringify(zastrzezone, null, 2)}
+` : ''}
+Wynik kazdej listy ma pole sprawdzono: co i jaka komenda sprawdziles, takze przy zerze pozycji i gdy warunek listy
+nie zachodzi. Pozycja = {plik: "plik:linia", opis: co commity fixa zmienily albo pominely i co poprawic}. Problemy kodu
+sprzed fixa nie sa pozycjami — ocenialo je review fazy.
+
+K-1 (regresja, zmiana kontraktu): dla kazdej zmienionej linii commitow fixa wypisz zachowanie przed i po oraz finding,
+ktory tego wymagal. Zmiana zachowania bez findingu (nowe pole odpowiedzi, dolozony sygnal, zmieniony kontrakt) to pozycja.
+K-2 (gdy diff fixa dodaje albo zmienia bramke walidacyjna: wyrazenie regularne, allowlista, limit rozmiaru, porownanie
+originu, sprawdzenie roli, parsowanie wejscia): dla kazdej bramki wypisz trzy konkretne wejscia obejscia i test odmowy,
+czyli test, ze zle wejscie zostaje odrzucone. Bramka bez testu odmowy to pozycja z wejsciami obejscia w opisie.
+K-3 (defekt urodzony w fixie): wykonaj na diffie fixa piec list correctness; kazdy defekt to pozycja.
+  L-COR-1: kazda operacja zmieniajaca stan (zapis do bazy, wywolanie z efektem, wysylka) ze wszystkimi drogami do niej
+  (handler, trasa, retry, job, inny modul) i plikiem:linia bramki na kazdej drodze. Droga bez bramki, ktora maja inne
+  drogi do tej operacji, to defekt.
+  L-COR-2: dla kazdego await w sciezce zapisu: co widzi uzytkownik przy odrzuceniu obietnicy i jaki stan zostaje zapisany
+  czesciowo. Odpowiedz "nic", "wyjatek bez obslugi" albo "stan rozjechany" to defekt.
+  L-COR-3 (gdy diff fixa ma await): kazda wartosc odczytana przed await i uzyta po nim oraz kazdy sygnal zatrzymania
+  petli lub ponowien, z informacja, czy po await jest porownanie numeru generacji albo AbortSignal. Uzycie bez porownania
+  i petla ponowien bez sufitu to defekt.
+  L-COR-4: kazdy useEffect, subskrypcja, timer, listener, jednorazowy znacznik (ref "juz zrobione") i stan wyliczany
+  z propsow, ktore fix dodal albo zmienil: cleanup, skutek podwojnego wywolania w StrictMode, chwila zdjecia znacznika
+  i zrodlo prawdy stanu wyliczanego. Brak cleanupu, znacznik zdejmowany za wczesnie albo za pozno i kopia stanu, ktora
+  rozjezdza sie ze zrodlem, to defekt.
+  L-COR-5: kazda galaz bledu, ktora fix dodal albo zmienil (catch, wynik odmowy, komunikat bledu, stan po nieudanym zapisie):
+  droga, ktora do niej prowadzi, i co widzi uzytkownik w kazdym stanie widoku po bledzie (pusta lista, inny uklad, wznowienie).
+  Galaz nieosiagalna, komunikat, ktory w ktoryms stanie sie nie renderuje, i blad znikajacy bez sladu to defekt.
+K-4 (gdy fix zmienil albo usunal nazwe: funkcja, stala, pole, trasa, klucz tekstu): dla kazdej starej nazwy uruchom
+\`git grep -n '<stara nazwa>'\` w calym repo, w tym docs/ i CLAUDE.md. Trafienie poza diffem fixa to pozycja.
+K-5: dla kazdej funkcji i bloku zmienionego przez fix wypisz komentarz, JSDoc i akapit dokumentacji, ktory go opisuje,
+z ocena zgodnosci. Opis niezgodny z kodem po fixie to pozycja.
+K-6 (P1 naprawiane przez fix: ${p1.length ? p1.join(', ') : 'brak — zwroc testy: [] i wpisz to w sprawdzono'}): dla kazdego P1 wskaz
+test dodany przez fix i uruchom go na rodzicu najstarszego commita fixa. Worktree: \`git worktree add --detach ${worktree} <najstarszy>^\`
+(gdy katalog zostal z poprzedniego przebiegu, najpierw \`git worktree remove --force ${worktree}\`), skopiuj do niego plik testu
+z HEAD, dowiaz zaleznosci (\`ln -s "$(git rev-parse --show-toplevel)/node_modules" ${worktree}/node_modules\`, w monorepo takze
+node_modules pakietu z testem), uruchom sam ten plik testu komenda testow z package.json, na koniec
+\`git worktree remove --force ${worktree}\`. Wpis: {finding: plik:linia P1, test: plik testu albo null, czerwonyPrzedPoprawka:
+czy test padl na kodzie sprzed poprawki}. Czy wpis jest pozycja, liczy orkiestrator.
+K-7: wypisz pliki commitow fixa, ktorych nie wskazuje zaden finding z listy ani test do niego. Zmiana w takim pliku to
+pozycja do cofniecia. Pliki w ${sciezka}/ pomin: checkboxy, zwiniecie "Do poprawy" i known-issues to ksiegowosc zlecona fixowi.
+
+Bramki mechaniczne na plikach fixa (drzewo robocze = stan po fixie):
+\`node .claude/scripts/bramki/bramki.mjs --baza <najstarszy>^ > ${plikBramek}; echo "kod: $?"\`, potem Read ${plikBramek}.
+Kazde trafienie bramki ze statusem porazka to pozycja w bramki.pozycje, opis "<bramka>: <regula> — <opis>" (migracje
+i migracjeSuma = edycja wypchnietej migracji). Status blad, brak i pominieta wpisz w bramki.sprawdzono; ostrzezenia
+eslint i trafienia strykera pomijasz.
+
+Repo zostaje bez zmian: piszesz jedynie worktree K-6 i plik wyniku bramek w /tmp, nie commitujesz.
+${BLOK_DLUGIE_KOMENDY}`
+}
+
+function fixPoprawkaPrompt(sciezka, numerFazy, pozycje, commity) {
+  return `Jestes czescia pipeline'u dev-autopilot. To JEDYNA tura poprawek po kontroli commita fix fazy ${numerFazy}.
+Kontrola diffu naprawczego znalazla ponizsze pozycje — to rzeczy, ktore wprowadzil albo pominal
+sam fix, nie nowe findingi z review.
+
+Folder zadania: ${sciezka}
+${zakresFixa(numerFazy, commity, plikiPozycji(pozycje))}
+
+DO POPRAWY (lista autorytatywna):
+${JSON.stringify(pozycje, null, 2)}
+
+Zasady wg pola zrodlo:
+- K-1, K-3: cofnij zmiane zachowania, o ktora nie prosil zaden finding, albo napraw defekt wprowadzony przez fix.
+- K-2: dopisz test odmowy — po jednym na wejscie obejscia z opisu; test sprawdza, ze bramka odrzuca zle wejscie.
+- K-4: zaktualizuj odwolania do starej nazwy wskazane w opisie (kod, docs/, CLAUDE.md).
+- K-5: popraw komentarz, JSDoc albo akapit dokumentacji, zeby opisywal kod po fixie.
+- K-6: test P1 ma padac na kodzie sprzed poprawki — dopisz brakujacy test albo przerob test dodany przez fix, zeby
+  odtwarzal defekt.
+- K-7: cofnij zmiane w pliku, ktorego nie wskazuje zaden finding (\`git diff <najstarszy commit fixa>^ -- <plik>\`).
+- bramki: napraw trafienie w kodzie wg reguly; edycja wypchnietej migracji = przywroc plik z rodzica najstarszego
+  commita fixa, a zmiane schematu zapisz nowa migracja. Reguly nie wylaczasz (eslint-disable, zmiana konfiguracji).
+Testow sprzed fixa nie oslabiasz i nie zmieniasz, zeby przeszly (reguly kodu, sekcja Testowanie).
+Pozycja, ktorej zamkniecie zmienia zachowanie dla uzytkownika spoza planu albo przekracza „Granice zakresu”, zostaje niezrobiona: wpis w nienaprawione[]
+z prefiksem "OPERATOR: " (piszemy_wirale T1: odpinanie Facebooka weszlo tu bez decyzji, w konflikcie z R11).
+Komendy walidacji, ktorych nie da sie uruchomic przez srodowisko agenta (sandbox blokuje Dockera albo port, brak uslugi), to nie FAIL:
+zwroc walidacja "NIE-URUCHOMIONO" z walidacjaPrzyczyna (co zablokowalo, ktore komendy zostaly), zacommituj zmiany jak zwykle. FAIL oznacza, ze kod albo test padl.
+
+Po poprawkach: pelna walidacja (typecheck, test, build — komendy z package.json), commit
+\`fix(${sciezka.split('/').pop()}): kontrola diffu naprawczego fazy ${numerFazy}\` (temat dokladnie taki) z jawnym pathspec zmienionych plikow
+(ZAKAZ \`git add -A\` i \`git add .\`). Gdy ktorejs pozycji NIE da sie zamknac bez ruszania kodu spoza tej
+fazy — zostaw ja i opisz w nienaprawione[]; to nie jest bramka blokujaca faze.
+BILANS MUSI SIE ZGADZAC: naprawione + liczba wpisow w nienaprawione[] == liczba pozycji z listy. Kazda
+pozycja, ktorej nie naprawiles, MA swoj wpis w nienaprawione[] w formacie "<plik:linia> — <jedno zdanie,
+co stoi na przeszkodzie>" (np. "rzutowanie na granicy zewnetrznego SDK, dubler klienta Supabase").
+Orkiestrator liczy roznice i pozycje bez sladu wypisuje jako ostrzezenie — "PASS" walidacji nie
+zastepuje uzasadnienia.
+${BLOK_DLUGIE_KOMENDY}
+
+Zwroc {naprawione, pozostaje, walidacja, nierozwiazaneP1: 0, nierozwiazaneP2: 0, plikiBinarne, nienaprawione}.`
+}
+
+// Commity fixa zadania po tresci tematu (P19), nie po prefiksie `fix(`: builder nadaje `fix(` takze implementacji (vibersi
+// etap-2-poprawki: execute 3184223 „fix(...): licznik wyswietlen…”) i walidacja zglaszala jego zmiany testow jako test-weakening
+// fixa. Tematy z polecen fixa (`fixPrompt`) i kontroli diffu naprawczego z nazwa zadania w zakresie (galaz bywa wspolna dla
+// zadania i jego poprawek); zakres = galaz od main.
+function komendaCommitowFixa(sciezka) {
+  const zadanie = sciezka.split('/').pop()
+  return `git log --format=%h --fixed-strings --grep="fix(${zadanie}): poprawki po review fazy " --grep="fix(${zadanie}): kontrola diffu naprawczego fazy " "$(git merge-base HEAD main 2>/dev/null || git merge-base HEAD master)"..HEAD`
 }
 
 function finalValidationPrompt(sciezka) {
   return `Wykonaj pelna walidacje calego projektu po autopilocie (folder zadania: ${sciezka}).
 ${BLOK_DLUGIE_KOMENDY}
 
-KROK 1 — odkryj komendy (NIE zgaduj): przeczytaj package.json scripts (typecheck/lint/test/check),
+KROK 1 — odkryj komendy (NIE zgaduj): przeczytaj package.json scripts (typecheck/lint/test/build/check),
 wykryj package manager (bun.lockb->bun, pnpm-lock->pnpm, yarn.lock->yarn, package-lock->npm).
-Brak skryptu typecheck -> sprobuj tsc --noEmit jesli jest tsconfig.json. Stack Expo: zamiast build uzyj
-\`bunx expo-doctor\` (NIE eas build). Makefile/pyproject/Cargo — uzyj wlasciwych narzedzi.
+Brak skryptu typecheck -> sprobuj tsc --noEmit jesli jest tsconfig.json. Build: krok build wg .claude/stack/walidacja.md,
+sekcja „Runner testów i build”. Brak kroku build wg tej sekcji -> ustaw build="n/a".
 
 KROK 2 — uruchom w kolejnosci: typecheck -> lint (jesli jest) -> test (pelny suite, wg BLOKU
-DLUGICH KOMEND: tlo + polling; flake infra obsluz wg procedury z bloku i DOKONCZ lancuch) -> expo-doctor.
+DLUGICH KOMEND: tlo + polling; flake infra obsluz wg procedury z bloku i DOKONCZ lancuch) -> build.
+Test = skrypt \`test\` ORAZ kazdy skrypt \`test:*\` bez \`e2e\` w nazwie (np. \`test:scripts\`, runnery shell) — kazdy osobno,
+wynik kazdego w detalu testu (kopia zasady w BLOK_KOMEND_PROJEKTU dev-pr-wf.js).
 Zatrzymaj sie dopiero na REALNYM FAIL (flake infra PASS-w-izolacji nie jest FAIL).
 
-KROK 3 — AUDYT TESTOW PO FIXACH: \`git log --oneline --grep="^fix(" \` dla commitow fix tego zadania,
-potem \`git diff <zakres>\` zawezony do plikow *.test.* — szukaj ZMIAN W ISTNIEJACYCH asercjach/testach
-(usuniecie testu, oslabienie expect, zmiana oczekiwanej wartosci). Nowe testy sa OK. Kazda modyfikacje
-istniejacego testu wpisz do testyZmodyfikowane[] (to sygnal test-weakeningu do raportu, nie auto-FAIL).
+KROK 3 — AUDYT TESTOW PO FIXACH: commity fixa tego zadania wylacznie z \`${komendaCommitowFixa(sciezka)}\`
+(tematy fixa i kontroli diffu naprawczego; prefiks \`fix(\` maja tez commity implementacji — te nie sa fixem). Pogrupuj je po fazie (koncowka tematu „fazy N”).
+Dla kazdej fazy diff NETTO testow: \`git diff <najstarszy commit fixa fazy>^ <najnowszy commit fixa fazy> -- '*.test.*' '*.spec.*'\` (zmiana cofnieta przez kontrole diffu znika,
+aa-exam: fad2ed6 i bc36900 wygladaly jak oslabienie). Szukaj ZMIAN W ISTNIEJACYCH testach. Nowe testy sa OK. Pusta lista commitow = testyZmodyfikowane: [].
+Kazda zmiane wpisz do testyZmodyfikowane[] jako "<plik> — asercja: <co oslabiono lub usunieto>" albo "<plik> — atrapa/setup: <co przepisano>" (sygnal do raportu, nie auto-FAIL).
 
 KROK 4 — jesli REALNY FAIL i potrafisz naprawic prosty problem (import, typ) — napraw, commituj,
 uruchom ponownie. Jak nie potrafisz — zapisz liste bledow z lokalizacjami i ustaw wynik=FAIL,
@@ -832,14 +1037,14 @@ Rozdziel trafienia na DWIE listy:
   w known-issues.md). wynik=FAIL, bledy[] += "N scenariuszy [E2E] przebieglo i padlo na defekcie — patrz
   known-issues.md (faza N). NIE zmieniaj ich na [Manual]: to ukryloby znany defekt; napraw kod i odpal flow ponownie."
 - pozostale -> e2eNieuruchomione[] — scenariusz NIGDY nie przebiegl. wynik=FAIL, bledy[] += "N scenariuszy [E2E]
-  nieuruchomionych — sprint NIE moze sie zamknac z cicho pominietym E2E (regresja etap-11/12b). Operator musi je
+  nieuruchomionych — sprint NIE moze sie zamknac z cicho pominietym E2E. Operator musi je
   odpalic LUB przeniesc do Operator checklist ze zmiana markera [E2E] -> [Manual], jesli scenariusz ma byc
   swiadomie wykonany recznie."
-UWAGA (2026-08-11, regresja e3-core-loop): ten gate NIE zalezy juz od istnienia \`.env.e2e\`. Wczesniej brak
-pliku wylaczal bramke, wiec zadanie pelne scenariuszy [E2E] moglo zamknac sie cicho jako "OPERATOR" —
-dokladnie ten scenariusz, przed ktorym gate mial chronic. Zrodlem prawdy o tym, czy E2E jest wymagane,
+UWAGA: ten gate NIE zalezy od istnienia \`.env.e2e\`. Gdyby brak pliku wylaczal bramke, zadanie pelne
+scenariuszy [E2E] mogloby zamknac sie cicho jako "OPERATOR" — dokladnie ten scenariusz, przed ktorym
+gate ma chronic (regresja e3-core-loop, mobile). Zrodlem prawdy o tym, czy E2E jest wymagane,
 jest PLAN ZADANIA, a nie zawartosc repo.
-NIE probuj sam odpalac Maestro — to gate raportujacy, blokuje archiwizacje.
+NIE probuj sam odpalac scenariuszy w przegladarce — to gate raportujacy, blokuje archiwizacje.
 
 KROK 6 — PRZEGLAD known-issues.md (higiena, nie bramka — nie zmienia wyniku PASS/FAIL):
 Jesli ${sciezka}/known-issues.md istnieje, zweryfikuj KAZDY wpis wzgledem AKTUALNEGO kodu (nie wzgledem tego,
@@ -856,8 +1061,8 @@ a kolejny run autopilota zatrzyma sie w bootstrapie na bramce czystosci brancha 
 poprawka higieniczna zablokowalaby wznowienie. Na sciezce FAIL jest to szczegolnie istotne, bo archiwizacja
 (dev-docs-complete-wf), ktora normalnie commituje docs/active + docs/completed + smoke operatora + wyjscia compound
 (pathspec jawny, nie blanket docs/), w ogole sie nie wykona.
-POWOD (run feedback-marcin-poprawki): wpisy z faz 2 i 3 byly domkniete w pozniejszych fazach, ale plik dalej
-prezentowal je jako otwarte problemy — operator czytal miedzy runami nieprawdziwy obraz stanu projektu.
+POWOD (run feedback-marcin-poprawki, mobile): wpisy z faz 2 i 3 byly domkniete w pozniejszych fazach, ale plik
+dalej prezentowal je jako otwarte problemy — operator czytal miedzy runami nieprawdziwy obraz stanu projektu.
 
 Zwroc obiekt zgodny ze schematem ValidationResult.`
 }
@@ -865,6 +1070,8 @@ Zwroc obiekt zgodny ze schematem ValidationResult.`
 // ── Helpery orkiestratora (deterministycznie, w JS) ───────────────────────
 
 // Filar 3: liczniki i gate liczone z findings[], nie z self-reportu scribe'a.
+// Efort kazdego agent() jest jawny w opcjach (tabela D6, pilnuje __tests__/klasy-rol.test.mjs); haiku bez efortu.
+
 function policzFindingi(findings) {
   const istotne = (findings || []).filter((f) => f.typ !== 'OPERATOR')
   return {
@@ -875,11 +1082,304 @@ function policzFindingi(findings) {
   }
 }
 
+// Fix naprawia tylko P1/P2 (P8; odwraca plan B1 z 2026-09-03). Fix naprawial 98% findingow lacznie z P3 (138 z 225),
+// a kazda zmiana w kodzie to nowa powierzchnia dla defektow urodzonych w fixie — po fixie nie ma re-review. P3 zapisuje
+// scribe do known-issues (sekcja "## P3 faza N"), skad ida do opisu PR i bota.
+// OPERATOR zostaje poza fixem — to warunki srodowiskowe, ida do "## Operator checklist faza N" i smoke'u operatora.
 function otwartePoReview(findings) {
   return (findings || [])
     .filter((f) => f.typ !== 'OPERATOR' && (f.severity === 'P1' || f.severity === 'P2'))
     .map((f) => ({ severity: f.severity, typ: f.typ, plik: f.plik, opis: f.opis }))
 }
+
+// Stan sprzed P8 trzyma P3 w otwarteFindingi (plan B1 slal je do fixa). Przy wznowieniu P3 wychodza z listy fixa
+// do known-issues; faza po review bez P1/P2 nie ma czego naprawiac. Funkcja nie zmienia wejscia — orkiestrator
+// podmienia stan dopiero po potwierdzonym zapisie known-issues, zeby P3 nie zniknely przy padzie agenta.
+function odlozP3ZeStanu(fazy) {
+  const odlozone = []
+  const po = fazy.map((f) => {
+    const p3 = f.otwarteFindingi.filter((x) => x.severity === 'P3')
+    if (!p3.length) return f
+    odlozone.push({ faza: f.numer, findingi: p3 })
+    const otwarteFindingi = f.otwarteFindingi.filter((x) => x.severity !== 'P3')
+    const fix = f.review === 'done' && f.fix === 'pending' && !otwarteFindingi.length ? 'none' : f.fix
+    return { ...f, otwarteFindingi, fix }
+  })
+  return { fazy: po, odlozone }
+}
+
+// Sekcja "## P3 faza N" ma ten sam format co u scribe'a w dev-docs-review-wf.js — walidacja koncowa przeglada ja
+// jak kazdy wpis known-issues, smoke operatora ja pomija, opis PR bierze ja do "Swiadomie nienaprawione".
+function p3KnownIssuesPrompt(sciezka, odlozone) {
+  const sekcje = odlozone.map(({ faza, findingi }) => `## P3 faza ${faza}\n${findingi.map((f) => `- 🟡 [P3] ${f.plik} — ${f.opis}`).join('\n')}`).join('\n\n')
+  return `Zapisz nity P3 do ${sciezka}/known-issues.md. Stan pipeline'u sprzed zmiany trzymal je na liscie fixa; fix naprawia
+teraz P1 i P2, a P3 zostaja w known-issues.
+
+Sekcje (tresc gotowa, przenies wiersze bez zmian):
+--- POCZATEK SEKCJI ---
+${sekcje}
+--- KONIEC SEKCJI ---
+
+1. Plik nie istnieje: utworz go z ta trescia (bez linii POCZATEK/KONIEC SEKCJI).
+2. Plik istnieje: dla kazdej sekcji "## P3 faza N" — naglowek juz jest: dopisz pod nim wiersze, ktorych tam nie ma
+   (ten sam plik:linia i ten sam opis = ten sam wiersz), bez duplikatow i bez usuwania istniejacych; naglowka nie ma:
+   wstaw cala sekcje przed "## Zamkniete" (gdy jest), inaczej na koncu pliku. Pozostale sekcje zostaja bez zmian.
+3. \`git add ${sciezka}/known-issues.md\` i ${instrukcjaCommita('docs(known-issues): P3 ze stanu sprzed zmiany fixa')}
+   Gdy plik juz mial wszystkie wiersze, nie commituj.
+Zwroc zapisano=true, gdy wszystkie wiersze sa w pliku (dopisane teraz albo juz byly), i hash commita albo null.`
+}
+
+// Scalenie findingow, gdy faza jest reviewowana PONOWNIE (audyt 2026-09-06, N2).
+//
+// Bloker srodowiska i pad testera E2E zostawiaja `faza.review = 'pending'` CELOWO: findingi E2E
+// powstaly na zepsutym srodowisku i po naprawie wymagaja swiezego werdyktu. Ale powtorka nadpisywala
+// cala liste, wiec razem z ocena E2E przepadala ocena KODU — a ta z awaria srodowiska nie miala nic
+// wspolnego. W oferty-online (faza 6) kosztowalo to 11 findingow P3 typu KOD/TEST przy jednym STOP-ie.
+//
+// Zasada: powtarzamy ocene SRODOWISKA, nie ocene kodu. Findingi typu E2E z poprzedniego podejscia
+// odpadaja (tester wystawi nowe), reszta wraca na liste oznaczona jako przeniesiona.
+function polaczFindingiPoPowtorce(nowe, poprzednie) {
+  const swieze = nowe || []
+  const doPrzeniesienia = (poprzednie || []).filter((f) => f.typ !== 'E2E')
+  if (!doPrzeniesienia.length) return swieze
+
+  // Dedup po pliku ORAZ tresci: w jednym pliku bywa wiele osobnych defektow, wiec sam plik to za
+  // grube sito. Poczatek opisu wystarcza — reviewer opisujacy ten sam defekt zaczyna tak samo,
+  // a rozne defekty rozjezdzaja sie w pierwszym zdaniu.
+  const kluczem = (f) => `${f.plik}|${(f.opis || '').slice(0, 60).toLowerCase()}`
+  const juzJest = new Set(swieze.map(kluczem))
+
+  const przeniesione = doPrzeniesienia
+    .filter((f) => !juzJest.has(kluczem(f)))
+    .map((f) => ({
+      severity: f.severity,
+      typ: f.typ,
+      plik: f.plik,
+      // Oznaczenie jest istotne dla fixa i dla raportu: agent ma wiedziec, ze tego findingu NIE
+      // potwierdzil biezacy przebieg reviewerow, wiec najpierw sprawdza, czy defekt nadal istnieje.
+      opis: `[z przerwanego review tej fazy — potwierdz, czy nadal aktualny] ${f.opis}`,
+    }))
+  if (przeniesione.length) {
+    log(`Powtorka review: przenosze ${przeniesione.length} finding(ow) z przerwanego podejscia (E2E pominiete — tester wystawil swiezy werdykt)`)
+  }
+  return [...swieze, ...przeniesione]
+}
+
+// ── Bramka wejscia (P4) ───────────────────────────────────────────────────
+// Przed pierwsza faza: czystosc drzewa, doctor, zielony start. Agenci zbieraja dane (bootstrap) i wykonuja (commit,
+// testy); decyzja zapada tutaj, w funkcjach czystych (__tests__/start-koniec.test.mjs). Brak srodowiska ma wyjsc przed
+// startem, nie w domknieciu fazy: zastany czerwony test zatrzymywal run dopiero po zaplaceniu za execute (smoke P0).
+
+// Sciezki z linii `git status --porcelain` (rename `a -> b` daje obie strony, cudzyslow przy spacjach zdjety).
+function sciezkiZmian(linie) {
+  return linie.flatMap((l) => l.slice(3).split(' -> ')).map((s) => s.replace(/^"(.*)"$/, '$1'))
+}
+
+function komendaSwiezegoRunu(sciezka) {
+  return `/dev-autopilot-wf ${sciezka}`
+}
+
+// Zielony start sprawdzamy przed pierwsza faza. Gdy faza ma execute=done, kod faz testuje juz domkniecie execute.
+function decyzjaWejscia(sciezka, wejscie, fazy, cache) {
+  const uwagi = []
+  const poza = sciezkiZmian(wejscie.zmiany).filter((s) => s !== sciezka && !s.startsWith(`${sciezka}/`))
+  if (poza.length) {
+    return {
+      stop: {
+        powod: `niezacommitowane zmiany poza katalogiem zadania: ${poza.join(', ')}`,
+        naprawa: `Sprawdz \`git status --short\`, zacommituj albo odloz te zmiany (\`git stash -u\`), potem swiezy run: ${komendaSwiezegoRunu(sciezka)}`,
+      },
+      commitZadania: false, testyStartu: false, uwagi,
+    }
+  }
+  if (wejscie.doctorKod === 1) {
+    return {
+      stop: {
+        powod: `start: doctor — ${wejscie.doctorWynik || 'brak obowiazkowego narzedzia'}`,
+        naprawa: `Usun braki wg kolumny Instalacja (\`bash .claude/scripts/doctor/doctor.sh\` pokazuje tabele; runner testow: wpis do configu), potem swiezy run: ${komendaSwiezegoRunu(sciezka)}`,
+      },
+      commitZadania: false, testyStartu: false, uwagi,
+    }
+  }
+  if (wejscie.doctorKod !== 0) uwagi.push(`doctor bez wyniku (kod ${wejscie.doctorKod ?? 'brak'}) — sprawdzenie narzedzi pominiete`)
+  let testyStartu = true
+  if (fazy.some((f) => f.execute === 'done')) {
+    testyStartu = false
+    uwagi.push('zielony start pominiety: zadanie w toku, kod faz testuje domkniecie execute')
+  } else if (cache && cache.wynik === 'PASS' && wejscie.kodJakPrzyTescie === true) {
+    testyStartu = false
+    uwagi.push(`zielony start z cache: testy PASS na ${cache.sha}, od tego czasu zmiany tylko w docs/`)
+  }
+  return { stop: null, commitZadania: wejscie.zmiany.length > 0, testyStartu, uwagi }
+}
+
+// Czerwony wynik nie trafia do cache: po naprawie testy ida jeszcze raz. Brak wyniku nie zatrzymuje runu (padniety agent
+// to nie dowod czerwonego kodu) — wtedy run zachowuje sie jak przed P4, a domkniecie fazy i tak uruchomi testy.
+function decyzjaTestowStartu(wynik, sciezka) {
+  if (!wynik) return { stop: null, cache: null, uwaga: 'testy startu bez wyniku (agent null) — zielony start niepotwierdzony' }
+  if (wynik.wynik === 'BRAK-TESTOW') return { stop: null, cache: null, uwaga: 'projekt bez skryptu testow — zielony start nie dotyczy' }
+  if (wynik.wynik === 'FAIL') {
+    return {
+      stop: {
+        powod: `start: testy na starcie galezi czerwone (${wynik.sha}): ${(wynik.bledy || []).join(' | ') || 'brak szczegolow'}`,
+        naprawa: `Odtworz: \`${wynik.komenda}\`. Czerwony test zastany na main napraw na main i wciagnij do galezi (\`git merge main\`) albo commitem na galezi zadania. Potem swiezy run: ${komendaSwiezegoRunu(sciezka)}`,
+      },
+      cache: null, uwaga: null,
+    }
+  }
+  return { stop: null, cache: { sha: wynik.sha, wynik: 'PASS' }, uwaga: null }
+}
+
+// CLAUDE.md uzgadnia sie z kodem po merge'u PR (/dev-pr --claude-md), nie przy archiwizacji (P4). Kazdy plik decyzji na
+// galezi glownej z `do-uzgodnienia` zatrzymuje kolejne zadanie: wg reguly „tylko ostatni” pominiete uzgodnienie zostaloby
+// nieuzgodnione na zawsze (decyzja operatora 2026-10-02). Linie z `git grep -e '^claude_md:' <glowna> -- 'docs/decisions/*.md'`.
+function decyzjaClaudeMd(decyzje, sciezka) {
+  if (!decyzje.glowna || !decyzje.katalog) {
+    return { stop: null, uwaga: `brak docs/decisions/ na galezi glownej (${decyzje.glowna || 'nie ustalono'}) — warunek CLAUDE.md po merge'u pominiety` }
+  }
+  const pliki = decyzje.linie
+    .map((l) => l.slice(decyzje.glowna.length + 1).match(/^(docs\/decisions\/([^:]+)\.md):claude_md:\s*(\S+)/))
+    .filter((m) => m && m[3] === 'do-uzgodnienia')
+    .map((m) => ({ plik: m[1], zadanie: m[2].replace(/^\d{4}-\d{2}-\d{2}-/, '') }))
+  if (!pliki.length) return { stop: null, uwaga: null }
+  return {
+    stop: {
+      powod: `start: CLAUDE.md nieuzgodniony po merge'u — ${pliki.map((p) => p.plik).join(', ')} (claude_md: do-uzgodnienia)`,
+      naprawa: `\`git switch ${decyzje.glowna}\` (z remote takze \`git pull --ff-only\`), potem ${pliki.map((p) => `/dev-pr --claude-md ${p.zadanie}`).join(', ')} (albo recznie claude_md: uzgodniono i commit na ${decyzje.glowna}), wroc na galaz zadania i swiezy run: ${komendaSwiezegoRunu(sciezka)}`,
+    },
+    uwaga: null,
+  }
+}
+
+// Blokery operatora per faza (P25 A1). Pozycja `[blokuje: faza N]` z checklisty przygotowania byla tylko widokiem w planie
+// zadania, wiec vibersi etap 5 przeszedl fazy 3–6 bez serwera Hono w E2E. Teraz nieodhaczona pozycja fazy N albo wczesniejszej
+// (wznowienie po STOP-ie) zatrzymuje run przed faza N. `blokery` = wynik `plan.mjs blokery` z bootstrapu; odhaczenie to zmiana
+// poza katalogiem zadania, wiec naprawa ma commit checklisty (inaczej bramka czystosci swiezego runu na nim stanie).
+function decyzjaBlokeraFazy(numerFazy, blokery, sciezka) {
+  const otwarte = blokery.blokery.filter((b) => b.faza <= numerFazy)
+  if (!otwarte.length) return null
+  const lista = otwarte.map((b) => `${blokery.checklista}:${b.linia} — ${b.tresc}`).join('; ')
+  return {
+    powod: `Faza ${numerFazy}: nieodhaczony bloker operatora w checkliscie przygotowania — ${otwarte.map((b) => b.tresc).join('; ')}`,
+    naprawa: `Wykonaj pozycje i odhacz je ([x]): ${lista}. Zacommituj checkliste: \`git add ${blokery.checklista} && git commit -m "docs: przygotowanie operatora przed faza ${numerFazy}"\`, potem swiezy run (te same args, BEZ resumeFromRunId): ${komendaSwiezegoRunu(sciezka)}`,
+  }
+}
+
+function fazyUkonczone(fazy) {
+  return fazy.filter((f) => f.execute === 'done' && f.review === 'done' && (f.fix === 'done' || f.fix === 'none')).length
+}
+
+// Srodowisko E2E (P14, PANEL-WEJSCIE §2 pkt 6). Na starcie niesprawne srodowisko = STOP przed faza 1 z naprawa ze skryptu
+// (wtedy jest najtaniej); w trakcie runu awaria srodowiska nie zatrzymuje runu — scenariusze ida na [Manual] z powodem,
+// a nastepna faza zaczyna od restartu serwera (P17). Baza e2e (db-sync, advisors) dziala niezaleznie od przegladarki:
+// zadanie bez scenariuszy tez ja dostaje, gdy start przepuscil guard tozsamosci.
+// `wynik` = JSON `e2e.mjs start` od agenta albo null po dwoch probach.
+function decyzjaSrodowiskaE2e(wynik, sciezka) {
+  const swiezy = `Po naprawie swiezy run (te same args, BEZ resumeFromRunId): ${komendaSwiezegoRunu(sciezka)}`
+  if (!wynik) {
+    return {
+      stop: {
+        powod: 'start: agent e2e:start zwrocil null 2x — wynik sprawdzenia srodowiska nieznany',
+        naprawa: `Sprawdz recznie: \`node .claude/scripts/e2e/e2e.mjs sprawdz --zadanie ${sciezka}\`. Dwa nulle bez wywolan narzedzi to zwykle przeciazenie API (529), nie srodowisko — odczekaj kilkanascie minut. ${swiezy}`,
+      },
+      aktywne: false, srodowisko: 'brak', bazaE2e: false,
+    }
+  }
+  if (wynik.status === 'brak-srodowiska' || wynik.status === 'niepowodzenie') {
+    return { stop: { powod: `start: srodowisko E2E — ${wynik.detal}`, naprawa: `${wynik.naprawa} ${swiezy}` }, aktywne: false, srodowisko: wynik.status, bazaE2e: false }
+  }
+  // Projekt od zera (P17): przed faza 1 nie ma aplikacji — srodowisko sprawdzone, serwer wystartuje restart fazy.
+  if (wynik.status === 'odroczone') return { stop: null, aktywne: true, srodowisko: 'odroczone', bazaE2e: wynik.bazaE2e }
+  const aktywne = wynik.status === 'gotowe' && wynik.serwer !== 'brak'
+  return { stop: null, aktywne, srodowisko: aktywne ? 'gotowe' : 'pominieto', bazaE2e: Boolean(wynik.bazaE2e) }
+}
+
+/** @param {unknown} tekst ostatnia linia stdout skryptu od agenta @returns {Record<string, unknown> | null} */
+function jsonZeStdout(tekst) {
+  const linia = String(tekst || '').trim().split('\n').pop() || ''
+  try {
+    const w = JSON.parse(linia)
+    return w && typeof w === 'object' && !Array.isArray(w) ? w : null
+  } catch (e) {
+    if (!(e instanceof SyntaxError)) throw e
+    return null
+  }
+}
+
+// Restart serwera przed testerem fazy (P17), wynik `e2e.mjs restart`: gotowe -> przegladarka w tej fazie; pominieto -> faza
+// bez scenariuszy i makiet; niepowodzenie -> 'martwe' w tej fazie, a ogon logu idzie do review (serwer polozony kodem fazy to
+// defekt do fixa, nie awaria srodowiska). Do konca runu tylko brak odpowiedzi w limicie startu: kazda nastepna proba to znowu
+// do 500 s czekania. Nieczytelny wynik = srodowisko bez zmian (pad agenta to nie awaria srodowiska).
+// Obcy serwer na porcie (P19, pole `obcy`): faza bez przegladarki z przyczyna dla testera, bez logu dla correctness (przyczyna
+// poza kodem); nastepna faza sprawdza port od nowa.
+function srodowiskoPoRestarcie(stdout) {
+  const w = jsonZeStdout(stdout)
+  const detal = w ? String(w.detal || '') : `wynik restartu nieczytelny: ${String(stdout || '').slice(0, 200)}`
+  const nasz = Boolean(w) && w.serwer === 'uruchomione'
+  const obcy = Boolean(w) && w.serwer === 'obcy'
+  if (w && w.status === 'gotowe') return { srodowisko: 'gotowe', trwale: false, nasz, obcy, detal }
+  if (w && w.status === 'pominieto') return { srodowisko: 'pominieto', trwale: false, nasz, obcy, detal }
+  if (w && w.status === 'niepowodzenie') {
+    // Krok stacku przed serwerem (Expo: urzadzenie, plik env) padl jeszcze przed startem: jak przy obcym serwerze przyczyna poza kodem fazy.
+    const pozaKodem = obcy || w.krokStacku === true
+    return { srodowisko: 'martwe', trwale: !pozaKodem && /nie odpowiada po \d+ s/.test(detal), nasz, obcy, detal: pozaKodem && w.naprawa ? `${detal}. ${w.naprawa}` : detal, przyczyna: pozaKodem ? detal : null, przebudowa: w.przebudowa === true ? { detal, naprawa: String(w.naprawa || '') } : null }
+  }
+  return { srodowisko: null, trwale: false, nasz, obcy, detal }
+}
+
+// Bramka po fazie (`.claude/stack/po-fazie.md`, sekcja „Przebudowa”): faza zmienila warstwe natywna, a restart serwera tego nie usunie.
+// STOP przed testerem, zamiast SKIP-ow w tej i kazdej nastepnej fazie. Execute jest juz zapisany, wiec swiezy run wchodzi prosto w review.
+function decyzjaPrzebudowy(po, numerFazy, sciezka) {
+  if (!po.przebudowa) return null
+  return {
+    powod: `Faza ${numerFazy}: ${po.przebudowa.detal}. Tester padlby na brakujacym module natywnym w tej i kazdej nastepnej fazie.`,
+    naprawa: `${po.przebudowa.naprawa} Opis: .claude/stack/po-fazie.md, sekcja „Przebudowa”. Sprawdzenie: node .claude/scripts/e2e/e2e.mjs restart --zadanie ${sciezka} --faza ${numerFazy}. Potem swiezy run (te same args, BEZ resumeFromRunId): execute tej fazy jest zapisany jako done, wiec run wejdzie prosto w review.`,
+  }
+}
+
+// Advisors bazy e2e po db-sync (P17): JSON `e2e.mjs advisors` od agenta -> wejscie security w review. Pola walidowane, bo
+// przepisuje je agent; brak albo nieczytelny wynik = null (security sprawdza migracje recznie, jak przy statusie brak).
+const STATUSY_ADVISORS = ['ok', 'porazka', 'blad', 'brak', 'pominieta']
+function advisorsZWyniku(tekst) {
+  const w = jsonZeStdout(tekst)
+  if (!w || !STATUSY_ADVISORS.includes(String(w.status))) return null
+  const lista = (x) => (Array.isArray(x) ? x.filter((t) => t && typeof t.regula === 'string').map((t) => ({ regula: t.regula, opis: String(t.opis || '') })) : [])
+  return { status: String(w.status), ref: typeof w.ref === 'string' ? w.ref : null, bledy: lista(w.bledy), ostrzezenia: lista(w.ostrzezenia), detal: String(w.detal || ''), naprawa: String(w.naprawa || '') }
+}
+
+// Bloker srodowiska wykryty w review (dev server, DNS bazy) przelacza srodowisko na `martwe` do konca fazy: fix przenosi
+// scenariusze na [Manual] zamiast je odgrywac. Nastepna faza zaczyna od restartu serwera (P17) — serwer starszy niz kod
+// (vibersi: brak vite.config.ts przy starcie) to najczestsza przyczyna blokera i restart ja usuwa.
+function srodowiskoPoReview(srodowisko, review) {
+  return review && review.blokerSrodowiska && review.blokerSrodowiska.wykryty ? 'martwe' : srodowisko
+}
+
+// Sygnatury blokera srodowiska stacku (D12) z JSON-u `e2e.mjs restart` (adapter): tylko wpisy z wzorcem, klasa i znana polityka
+// — review-wf kompiluje je i sprawdza przed sygnaturami rdzenia. Brak albo nieczytelny wynik = [] (zostaja sygnatury rdzenia).
+function sygnaturyZRestartu(stdout) {
+  const w = jsonZeStdout(stdout)
+  const lista = w && Array.isArray(w.sygnaturyBlokera) ? w.sygnaturyBlokera : []
+  return lista.filter((s) => s && typeof s === 'object' && typeof s.wzorzec === 'string' && typeof s.klasa === 'string'
+    && ['manual-restart', 'stop-rebuild'].includes(s.polityka))
+}
+
+// Bloker z polityka stop-rebuild (D12, mobile: brak modulu natywnego, entitlements): restart serwera go nie usunie, a faza
+// na zepsutej binarce dalaby SKIP-y w kazdej nastepnej. STOP z naprawa adaptera; review zostaje pending, linie [E2E] bez zmian
+// (scribe ich nie ksiegowal) — swiezy run po przebudowie powtarza review fazy z testerem.
+function decyzjaBlokeraSrodowiska(review, numerFazy, sciezka) {
+  const b = review && review.blokerSrodowiska
+  if (!b || !b.wykryty || b.polityka !== 'stop-rebuild') return null
+  return {
+    powod: `Faza ${numerFazy}: srodowisko E2E wymaga przebudowy (${b.klasa}): "${b.dowod}". Review pozostaje pending, linie [E2E] bez zmian.`,
+    naprawa: `${b.naprawa} Po przebudowie swiezy run (te same args, BEZ resumeFromRunId): ${komendaSwiezegoRunu(sciezka)}`,
+  }
+}
+
+// Agent haiku wpisal raz Co-Authored-By w druga linie tematu (commit 2c97286, przeglad runow 19.09) — stopka bez pustej linii.
+function instrukcjaCommita(temat) {
+  return `\`git commit -m "${temat}"\` — temat w jednej linii. Stopke (np. Co-Authored-By) dopisujesz wylacznie drugim \`-m\`: git oddziela ja wtedy pusta linia.`
+}
+// ── Koniec bramki wejscia ─────────────────────────────────────────────────
 
 // ── Orkiestracja ──────────────────────────────────────────────────────────
 
@@ -893,231 +1393,31 @@ if (!sciezka) {
   }
 }
 
-const tokSpent = () => (typeof budget !== 'undefined' && budget && budget.spent ? budget.spent() : 0)
-
-// Stan runu zadeklarowany PRZED pierwsza bramka (2026-08-08). Powod: telemetria zapisuje sie teraz takze
-// na sciezkach STOP, a helper telemetrii nie moze siegac do bindingow w martwej strefie — kazda zmienna,
+// Stan runu zadeklarowany PRZED pierwsza bramka (port z mobile, 2026-08-08): stopRun czyta `raporty`, a kazda zmienna,
 // ktora czyta, musi istniec, zanim jakikolwiek STOP bedzie mogl zapasc.
-// UWAGA dla strojenia progow: tokRunStart mierzy odtad od POCZATKU runu (z bootstrapem, env-up i warmupem),
-// wczesniej liczyl dopiero od pierwszej fazy — wpisy sprzed 2026-08-08 maja nizsze tokenyRazemK przy tej
-// samej pracy. Bootstrap to realny koszt runu, wiec liczymy go, ale porownania miedzy epokami wymagaja uwagi.
-const tokRunStart = tokSpent()
+// Telemetria (It. 1): zapis i koszt robi skrypt po runie (.claude/scripts/telemetria/zbierz.mjs z hooka Stop) z pliku
+// harnessu i transkryptow — workflow nie wola agenta telemetrii i nie liczy tokenow z budzetu runu (tylko output, ~11% kosztu).
 const historia = {}
 const raporty = []
-let kolejka = []
-let e2eEnv = null
+let kolejka
 let stan = null
+// Stan fazy do zapisu (P7): tresc czekajaca na nastepnego agenta i tresc doklejona do jego polecenia.
+let stanDoZapisu = null
+let stanDoklejony = null
 let compound = null
-
-// Telemetria (best-effort): JEDNA linia JSONL do globalnego ~/.claude/telemetry/autopilot-runs.jsonl,
-// wspolnego dla wszystkich projektow na maszynie. Od 2026-08-08 wpis powstaje TAKZE przy STOP.
-// Powod (run feedback-marcin-poprawki): run trwal ~10h, spalil 136 agentow i zatrzymal sie 5x na bramkach,
-// a poniewaz nigdy nie doszedl do konca, nie zostawil ANI JEDNEJ linii telemetrii. Dane o tym, ile kosztuja
-// awarie srodowiskowe — czyli dokladnie to, czego potrzeba do strojenia bramek — przepadly w calosci.
-// Wpis STOP niesie status i powod, wiec analiza rozroznia "run sie udal" od "run padl na bramce X".
-async function zapiszTelemetrie(status, powod) {
-  const raportyTelemetrii = ((stan && stan.fazy) || [])
-    .map((f) => {
-      const zRunu = raporty.find((r) => r.faza === f.numer)
-      if (zRunu) return { ...zRunu, zrodlo: 'run' }
-      if (!f.metryki) return null
-      return {
-        faza: f.numer,
-        gate: null,
-        cykle: null,
-        tokeny: null,
-        // Swiadomie NIE utrwalamy tokenyEtapy w stanie: tokeny opisuja RUN, nie faze. Liczby z runu, ktory
-        // te faze zrobil, doklejone do wpisu innego runu podpieralyby jego koszt cudzymi danymi.
-        tokenyEtapy: null,
-        liczniki: f.metryki.liczniki || null,
-        fix: null,
-        e2eSync: 'n/a',
-        przebieg: skrotPrzebiegu(f.metryki.przebieg),
-        zrodlo: 'stan',
-      }
-    })
-    .filter(Boolean)
-  const zeStanu = raportyTelemetrii.filter((r) => r.zrodlo === 'stan').map((r) => r.faza)
-  if (zeStanu.length) log(`Telemetria: dokladam metryki faz z wczesniejszych runow: ${zeStanu.join(', ')}`)
-
-  const wpis = {
-    zadanie: (stan && stan.nazwaZadania) || 'nieznane',
-    status,
-    powod: powod || null,
-    fazyUkonczone: raporty.length,
-    // Ile faz ma ZADANIE (ze stanu), nie ile z nich zdazylo dac metryki — inaczej wczesny STOP raportowal
-    // "zadanie 1-fazowe" dla zadania o pieciu fazach i analiza pokrycia byla systematycznie zanizona.
-    fazyZadania: (stan && stan.fazy && stan.fazy.length) || raportyTelemetrii.length,
-    fazyZMetrykami: raportyTelemetrii.length,
-    raporty: raportyTelemetrii,
-    walidacja: status === 'OK' ? 'PASS' : null,
-    e2eSrodowisko: e2eEnv ? e2eEnv.status : 'brak',
-    e2eCanaryTyp: (e2eEnv && e2eEnv.canaryTyp) || null,
-    e2eDevClient: (e2eEnv && e2eEnv.devClient) || null,
-    solution: !!(compound && compound.plik),
-    tokenyRazemK: Math.round((tokSpent() - tokRunStart) / 1000),
-  }
-  const tele = await agent(
-    `Dopisz JEDNA linie telemetrii pipeline'u dev-autopilot do globalnego pliku ~/.claude/telemetry/autopilot-runs.jsonl.
-1. Bash: mkdir -p ~/.claude/telemetry
-2. Ustal: ts = \`date -Iseconds\`, projekt = \`basename "$(git rev-parse --show-toplevel)"\`.
-3. Wez ponizszy obiekt, dodaj do niego pola "ts" i "projekt", zserializuj do JEDNEJ linii JSON (bez pretty-print):
-${JSON.stringify(wpis)}
-4. Dopisz te linie na koncu pliku (append, >>). NIE nadpisuj istniejacej zawartosci.
-   Pola tekstowe (zwlaszcza "powod") zawieraja cudzyslowy i backticki — zapisuj przez heredoc z CYTOWANYM
-   delimiterem (\`cat >> plik <<'EOF'\`), nigdy przez \`echo "..."\` z interpolacja powloki.
-5. WALIDACJA (obowiazkowa): sprawdz, ze OSTATNIA linia pliku parsuje sie jako JSON:
-   \`tail -1 ~/.claude/telemetry/autopilot-runs.jsonl | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{JSON.parse(d);console.log('JSONL-OK')})"\`
-   "JSONL-OK" -> {zapisano:true, poprawnyJson:true}. Blad -> usun te wadliwa ostatnia linie
-   (\`sed -i '' -e '$d' <plik>\` na macOS) i zwroc {zapisano:false, poprawnyJson:false} — lepiej BRAK wpisu
-   niz linia, ktora psuje parsowanie calego pliku analitykom. To ta sama klasa bledu, ktora uszkodzila
-   .autopilot-state.json: model przepisujacy tekst z cudzyslowami bez sprawdzenia wyniku.
-Nie modyfikuj zadnych innych plikow.`,
-    { schema: ZAPIS_STANU, label: `telemetria:${status}`, model: 'haiku' }
-  )
-  if (!tele || !tele.zapisano) log('Telemetria: zapis nie powiodl sie (best-effort, run niezagrozony)')
-}
-
-// Kazde zatrzymanie runu przechodzi TEDY — inaczej bramka, ktora zadziala, nie zostawia po sobie danych.
-async function stopRun(obj) {
-  // try/catch jest KRYTYCZNY, nie ozdobny: telemetria wola agenta, a najczestsza przyczyna STOP-u bywa
-  // przeciazenie API (529). Gdyby to wywolanie RZUCILO, wyjatek poszedlby w gore i run zginalby BEZ
-  // zwrocenia obiektu STOP — operator stracilby `powod` i `naprawa`, czyli cala wartosc bramki.
-  // Null-guard w srodku zapiszTelemetrie chroni tylko przed `null`, nie przed wyjatkiem.
-  try {
-    await zapiszTelemetrie('STOP', obj.powod)
-  } catch (e) {
-    log(`Telemetria STOP nie zapisala sie (${e && e.message ? e.message : e}) — best-effort, komunikat STOP wraca normalnie`)
-  }
-  return { status: 'STOP', ...obj }
-}
-
-phase('Bootstrap')
-stan = await agent(bootstrapPrompt(sciezka), { schema: PLAN_STATE, label: 'bootstrap' })
-if (!stan) {
-  return await stopRun({ powod: 'bootstrap nie zwrocil stanu (agent null)' })
-}
-
-// Decyzja A: git zwalidowany w sesji przed odpaleniem; tu tylko bezpiecznik.
-if (!stan.branch.zgodny) {
-  return await stopRun({ powod: `branch mismatch: jestes na "${stan.branch.aktualny}", wymagany "${stan.branch.wymagany}"`, stan })
-}
-if (!stan.branch.czysty) {
-  return await stopRun({ powod: 'niezacommitowane zmiany — zacommituj/stash przed autopilotem (po awarii runu: NAJPIERW git status, kod faz zwykle JEST na dysku)', stan })
-}
-for (const r of stan.rozbieznosci || []) log(`Bootstrap rozbieznosc (informacyjna): ${r}`)
-
-// Filar 2: kolejka liczona w JS ze stanu — zero interpretacji LLM.
-kolejka = stan.fazy
-  .filter((f) => f.execute === 'pending' || f.review === 'pending' || f.fix === 'pending')
-  .map((f) => f.numer)
-
-log(`Autopilot: ${stan.nazwaZadania} (stan: ${stan.zrodloStanu}) — fazy do wykonania: ${kolejka.join(', ') || 'brak'}`)
-
-// Utrwalanie stanu: tresc liczona w JS, zapis przez tani leaf-agent (haiku). Best-effort z ostrzezeniem.
-async function zapiszStan() {
-  const tresc = JSON.stringify(
-    { wersja: 1, zadanie: stan.nazwaZadania, fazy: stan.fazy, zakonczenie: stan.zakonczenie },
-    null,
-    2
-  )
-  let w = await agent(zapiszStanPrompt(sciezka, tresc), { schema: ZAPIS_STANU, label: 'stan:zapis', model: 'haiku' })
-  // Nieudany zapis LUB plik, ktory nie sparsowal sie z dysku, to ten sam problem: stanu na dysku NIE MA.
-  // Jedna ponowna proba (na modelu glownym — haiku wlasnie pokazal, ze nie uniosl przepisania tresci).
-  if (!w || !w.zapisano || w.poprawnyJson === false) {
-    log(`Zapis .autopilot-state.json nieudany (${!w ? 'agent null' : w.poprawnyJson === false ? 'plik nie parsuje sie jako JSON' : 'zapisano=false'}) — ponawiam raz`)
-    w = await agent(zapiszStanPrompt(sciezka, tresc), { schema: ZAPIS_STANU, label: 'stan:zapis:retry' })
-  }
-  if (!w || !w.zapisano || w.poprawnyJson === false) {
-    log('OSTRZEZENIE: .autopilot-state.json NIE zostal poprawnie zapisany po 2 probach — resume bedzie polegac na parse md, a uszkodzony plik moze wywrocic nastepny bootstrap. Sprawdz go recznie przed kolejnym runem.')
-  }
-}
-
-// Srodowisko E2E PRZED warmupem: tani gate (precheck + wczesne checki env-up) zatrzymuje run
-// zanim zaplacimy za rozgrzewke cache. Metro hot-reloaduje working tree, wiec stawiamy raz per run.
-//
-// BRAMKA OPT-IN (2026-06-16, regresja etap-11): status decyduje czy run leci dalej.
-//   'pominieto'     = brak .env.e2e I zadanie nie ma zadnego [E2E] -> projekt faktycznie nie chce E2E ->
-//                     degradacja do OPERATOR. Gdy zadanie MA [E2E], run nie dochodzi tutaj — zatrzymuje
-//                     go bramka setupu wyzej (brak srodowiska != swiadoma rezygnacja).
-//   'niepowodzenie' = .env.e2e ISTNIEJE, ale srodowisko nie gotowe LUB canary nie przeszedl
-//                     -> HARD STOP w bootstrapie, PRZED jakakolwiek faza (E2E nie znika cicho do OPERATOR).
-//   'gotowe'        = Metro + emulator z dev-clientem + canary PASS -> E2E aktywne (DOWIEDZIONE, nie zadeklarowane).
-//
-// PRECHECK: tani, deterministyczny sygnal opt-in ODDZIELONY od ciezkiego env-up. Bez niego flake env-up
-// (null) na projekcie opt-in degradowalby cicho E2E — a completion-gate wylapalby to dopiero na KONCU runu
-// (najdrozszy moment). Z precheckiem: opt-in potwierdzony -> null env-up = STOP, nie degradacja.
-const precheck = await agent(e2ePrecheckPrompt(sciezka), { schema: E2E_PRECHECK, label: 'e2e:precheck', model: 'haiku', phase: 'Bootstrap' })
-const optIn = precheck ? precheck.istnieje : null // null = precheck padl (nie wiemy — env-up ma self-skip)
-
-// BRAMKA SETUPU (2026-08-11, regresja e3-core-loop): zadanie DEKLARUJE scenariusze [E2E], a repo nie ma
-// srodowiska. Wczesniej ta kombinacja byla nieodrozanialna od "projekt nie chce E2E" i degradowala sie
-// cicho do OPERATOR — run jechal przez wszystkie fazy, a brak srodowiska wychodzil dopiero na
-// completion-gate, czyli po zaplaceniu za CALA prace. Teraz STOP przed faza 1, gdy jest najtaniej.
-if (optIn === false && precheck.zadanieWymagaE2E) {
-  return await stopRun({
-    powod: `zadanie deklaruje ${precheck.liczbaScenariuszy} scenariuszy [E2E], a repo nie ma .env.e2e — srodowisko E2E nie jest skonfigurowane. Run zatrzymany PRZED faza 1: bez srodowiska te scenariusze i tak nie zostana wykonane, a etap nie domknie sie na completion-gate.`,
-    naprawa: 'Odpal `/e2e-setup` — skill przeprowadzi przez one-time setup (dedykowany projekt Supabase, .env.e2e, migracje, konto testowe, dev-client, canary jako DOWOD). Recznie: .claude/templates/e2e-env/README.md. Swiadomy opt-out (scenariusz wykonasz recznie): przenies te pozycje do "Operator checklist" i zmien marker [E2E] na [Manual] w pliku zadania. Po setupie odpal SWIEZY run (te same args, BEZ resumeFromRunId).',
-    stan,
-  })
-}
-
-if (optIn !== false) {
-  // Opt-in TAK lub nieznany -> odpal env-up (ma wlasny self-skip gdy .env.e2e faktycznie nie ma).
-  e2eEnv = await agent(e2eEnvUpPrompt(), { schema: E2E_ENV_RESULT, label: 'e2e:env-up', phase: 'Bootstrap' })
-  if (!e2eEnv && optIn === true) {
-    // Opt-in POTWIERDZONY przez precheck, a ciezki env-up padl -> jeden retry (infra hiccup bywa przejsciowy).
-    log('E2E env-up: agent zwrocil null przy potwierdzonym .env.e2e — retry raz')
-    e2eEnv = await agent(e2eEnvUpPrompt(), { schema: E2E_ENV_RESULT, label: 'e2e:env-up:retry', phase: 'Bootstrap' })
-    if (!e2eEnv) {
-      // Drugi null przy potwierdzonym opt-in -> STOP (nie degraduj cicho, jak przy 'niepowodzenie').
-      return await stopRun({
-        powod: 'E2E env-up zwrocil null 2x przy istniejacym .env.e2e (projekt opt-in E2E) — nie degraduje cicho do OPERATOR. To infra/agent hiccup, nie brak setupu.',
-        naprawa: 'Sprawdz srodowisko (Metro/emulator/Maestro) i odpal SWIEZY run (te same args, BEZ resumeFromRunId). UWAGA: dwa nulle POD RZAD bez zuzytych tokenow i bez wywolan narzedzi to zwykle przeciazenie API (529 Overloaded), a nie problem srodowiska — wtedy natychmiastowe ponawianie tylko dokłada ruchu. Odczekaj kilkanascie minut albo odpal run przez `/loop <interwal> /dev-autopilot-wf <sciezka>`; srodowisko zostaje postawione, wiec nic nie przepada.',
-        stan,
-      })
-    }
-  }
-}
-log(`E2E env: ${e2eEnv ? `${e2eEnv.status} (platforma: ${e2eEnv.platforma}, metro: ${e2eEnv.metro}, emulator: ${e2eEnv.simulator}, swap: ${e2eEnv.swap}, canary: ${e2eEnv.canary}/${e2eEnv.canaryTyp}, dev-client: ${e2eEnv.devClient}) — ${e2eEnv.detal}` : `pomijam E2E (${optIn === false ? 'brak .env.e2e, a zadanie nie deklaruje zadnego scenariusza [E2E] — projekt nie opt-in' : 'precheck padl i env-up null — infra'})`}`)
-// Canary launch-only przechodzi, ale niczego nie dowodzi poza tym, ze apka wstaje — ostrzegamy glosno,
-// bo to dokladnie ten wariant, ktory dwa razy wpuscil zepsute srodowisko do runu.
-if (e2eEnv && e2eEnv.status === 'gotowe' && e2eEnv.canaryTyp === 'launch') {
-  log('OSTRZEZENIE: canary launch-only (brak .maestro/_canary.yaml) — bramka NIE wykryje braku entitlements ani natywnego modulu ladowanego za logowaniem. Wzorzec: .claude/templates/e2e-env/_canary.yaml')
-}
-if (e2eEnv && e2eEnv.status === 'niepowodzenie') {
-  return await stopRun({
-    powod: `Srodowisko E2E nie gotowe, a .env.e2e istnieje (projekt wymaga E2E): ${e2eEnv.detal}`,
-    naprawa: 'Setup: .claude/templates/e2e-env/README.md. Najczestsze braki: PRZESTARZALY dev-client (binarka starsza niz package.json/Podfile.lock lub bez entitlements — rebuild komenda z detalu, podpis ad-hoc CODE_SIGN_IDENTITY=- , NIE CODE_SIGNING_ALLOWED=NO), brak dev-clienta na emulatorze (`bunx expo run:ios`/`run:android`, zostaw emulator BOOTED przed wznowieniem), Maestro CLI/Java 17+, albo canary login (konto E2E_TEST_EMAIL / anon key). Opt-out swiadomego runu headless: usun/zmien nazwe .env.e2e. Po setupie odpal SWIEZY run (te same args, BEZ resumeFromRunId — resume zwrociloby zcache\'owana porazke env-up; stan faz wznowi sie z .autopilot-state.json).',
-    e2eEnv,
-    stan,
-  })
-}
-const e2eAktywne = !!e2eEnv && e2eEnv.status === 'gotowe'
-// Stan swapu .env.local do przekazania env-down (rollback). Domyslnie 'brak' gdy E2E nieaktywne.
-const e2eSwap = (e2eEnv && e2eEnv.swap) || 'brak'
-
-// Filar 1: rozgrzewka cache vitest — PO bramce E2E (tani gate first). Self-skip gdy brak vitest; warm = sekundy.
-// Chroni tez walidacje koncowa przy pustej kolejce (np. resume po ukonczonych fazach na zimnej maszynie).
-const warmup = await agent(warmupPrompt(sciezka), { schema: WARMUP_RESULT, label: 'warmup:vitest', phase: 'Bootstrap' })
-if (!warmup) {
-  return await stopRun({ powod: 'rozgrzewka nie zwrocila wyniku (agent null)', stan })
-}
-log(`Rozgrzewka: ${warmup.status} — ${warmup.detal} (zimny: ${warmup.czasZimnySek ?? 'n/a'}s, kontrolny: ${warmup.czasKontrolnySek ?? 'n/a'}s)`)
-// Warmup to OPTYMALIZACJA, nie warunek poprawnosci — 'niepowodzenie' degraduje z ostrzezeniem,
-// nie zatrzymuje runu (prog <60s kontrolnego biegu jest maszyno-zalezny; na wolnym sprzecie
-// poprawny cache potrafi go przekroczyc). Agenci faz i tak maja BLOK_DLUGIE_KOMENDY (tlo+polling).
-if (warmup.status === 'niepowodzenie') {
-  log(`OSTRZEZENIE: rozgrzewka cache niepotwierdzona (${warmup.detal}) — kontynuuje; agenci faz musza scisle stosowac procedure tla dla zimnych biegow`)
-}
 
 // Normalizacja metryk przebiegu do SKROTU (schemat METRYKI_FAZY + telemetria): review-wf zwraca
 // pelny obiekt (pominieci = [{key,powod}]), a stan po resume trzyma juz skrot (pominieci = ['key']).
 // Jedna funkcja, zeby stan i telemetria mialy IDENTYCZNY kształt niezaleznie od zrodla.
 function skrotPrzebiegu(p) {
   if (!p) return null
+  // Tryb testera E2E do szwow stacku (IU-1.2) nazywal narzedzie jazdy; stan wznowionego zadania moze miec dawne nazwy.
+  const TRYB_E2E_DAWNY = { przegladarka: 'interaktywny', 'bez-przegladarki': 'bez-interakcji' }
   return {
     pominieci: (p.pominieci || []).map((x) => (typeof x === 'string' ? x : x.key)),
+    // null = przebieg ze STARSZEGO stanu, ktory tego pola nie zna (patrz METRYKI_FAZY) — konsument
+    // telemetrii ma widziec brak danych, nie zgadywany tryb.
+    e2eTryb: TRYB_E2E_DAWNY[p.e2eTryb] || p.e2eTryb || null,
     znalezione: p.znalezione,
     poDedupJs: p.poDedupJs,
     poDedupSem: p.poDedupSem,
@@ -1130,7 +1430,345 @@ function skrotPrzebiegu(p) {
     e2ePass: p.e2ePass ?? null,
     e2eFail: p.e2eFail ?? null,
     e2eSkip: p.e2eSkip ?? null,
+    e2eManual: p.e2eManual ?? null,
+    // Metryki kosztu review (audyt 2026-09-06, N3). Do tej pory review-wf je liczyl, ale ta funkcja
+    // ich NIE przepisywala — a to ona decyduje, co wchodzi do stanu i do wpisu JSONL. Bez nich
+    // telemetria pokazywala `dossier: undefined` we wszystkich fazach i progi 2 oraz pozycje A7/B4
+    // planu naprawy nie mialy na czym stanac. null = przebieg ze starszego runu, ktory tego nie zna.
+    dossier: p.dossier ?? null,
+    sceptycy: p.sceptycy
+      ? { p1: p.sceptycy.p1 ?? null, p2Grupy: p.sceptycy.p2Grupy ?? null, p2Findingi: p.sceptycy.p2Findingi ?? null }
+      : null,
+    sceptyk: p.sceptyk
+      ? {
+          agree: p.sceptyk.agree ?? null,
+          disagree_evidence: p.sceptyk.disagree_evidence ?? null,
+          disagree_concern: p.sceptyk.disagree_concern ?? null,
+          degradacje: p.sceptyk.degradacje ?? null,
+        }
+      : null,
+    tiery: p.tiery || null,
   }
+}
+
+// Podsumowanie tury poprawkowej po kontroli diffu naprawczego (audyt 2026-09-06, N9).
+// Do tej pory do stanu i telemetrii szlo tylko {pozycje, naprawione, walidacja} — a agent poprawki
+// podaje w nienaprawione[] uzasadnienia pozycji, ktorych nie ruszyl, i orkiestrator je WYRZUCAL.
+// Dowod: oferty-online faza 5 — 61 pozycji, 55 naprawionych, walidacja PASS; commit opisuje 4 swiadome
+// wyjatki (granica zewnetrznego SDK), wiec 2 pozycje nie mialy zadnego sladu. `bezSladu` to dokladnie
+// ta luka: policzona deterministycznie, zeby PASS przy 55/61 nie udawal PASS przy 61/61.
+// Kolejnosc po autopilocie w jednym polu: raport sesji konczyl sie gotowa komenda PR, a smoke byl tylko sciezka (aa-exam, 03.11).
+function nastepneKroki({ smoke, raporty, propozycjeBramek, czesci, zadanie }) {
+  const kroki = []
+  if (smoke) kroki.push(`Smoke w nowej sesji: wklej ramke „Jak kontynuować w nowej sesji” z ${smoke}.`)
+  const akcje = []
+  const operator = raporty.reduce((s, r) => s + (r?.liczniki?.operator || 0), 0)
+  if (operator) akcje.push(`${operator} findingow OPERATOR w sekcjach „Operator checklist”`)
+  const decyzje = raporty.flatMap((r) => r?.doDecyzjiOperatora || [])
+  if (decyzje.length) akcje.push(`zmiany spoza planu do decyzji: ${decyzje.join('; ')}`)
+  const p2 = raporty.reduce((s, r) => s + (r?.fix?.nierozwiazaneP2 || 0), 0)
+  if (p2) akcje.push(`${p2} nierozwiazanych P2 w known-issues`)
+  if (propozycjeBramek.length) akcje.push(`${propozycjeBramek.length} propozycji bramek z compoundu`)
+  if (akcje.length) kroki.push(`Akcje operatora: ${akcje.join(', ')}.`)
+  kroki.push(`Po smoke'u: \`/clear\`, potem \`/dev-pr${czesci ? ' --czesc 1' : ''}\` (zadanie ${zadanie}).`)
+  return kroki
+}
+
+// Pozycje zostawione operatorowi: fix i tura poprawkowa oznaczaja je prefiksem, a orkiestrator pilnuje, ze kontrola ich nie zawraca.
+function pozycjeOperatora(nienaprawione) {
+  return (Array.isArray(nienaprawione) ? nienaprawione : []).filter((x) => typeof x === 'string' && /^OPERATOR:/i.test(x.trim()))
+}
+
+// Agent bez dostepu do walidacji to nie zepsuty kod (piszemy_wirale T1, faza 6: sesja uruchomila te same testy, 1010/1010).
+function stopBezWalidacji(numerFazy, kto, przyczyna) {
+  return {
+    powod: `Faza ${numerFazy}: ${kto} nie mogl uruchomic walidacji (${przyczyna || 'bez przyczyny'}). Kod jest zacommitowany, ale niesprawdzony; to nie dowod, ze jest zepsuty.`,
+    naprawa: 'Uruchom w sesji typecheck, testy i build. Zielone = SWIEZY run (te same args, BEZ resumeFromRunId): naprawy sie nie powtorza, faza pojdzie dalej. Czerwone = napraw, zacommituj, potem swiezy run.',
+  }
+}
+
+function podsumujKontroleFixa(pozycje, poprawka) {
+  const pominiete = Array.isArray(poprawka.nienaprawione) ? poprawka.nienaprawione.filter((x) => typeof x === 'string' && x.trim()) : []
+  const naprawione = Number.isInteger(poprawka.naprawione) ? poprawka.naprawione : 0
+  return {
+    pozycje,
+    naprawione,
+    walidacja: poprawka.walidacja,
+    pominiete,
+    bezSladu: Math.max(0, pozycje - naprawione - pominiete.length),
+  }
+}
+
+// Wynik sprzatania artefaktow przy STOP-ie (plan B2).
+const P3_KNOWN_ISSUES = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    zapisano: { type: 'boolean', description: 'true, gdy kazdy wiersz P3 jest w known-issues.md (dopisany teraz albo juz byl)' },
+    commit: { type: ['string', 'null'], description: 'krotki hash nowego commita albo null' },
+  },
+  required: ['zapisano', 'commit'],
+}
+
+const COMMIT_ARTEFAKTOW = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    zacommitowano: { type: 'boolean', description: 'true tylko gdy powstal NOWY commit; false takze wtedy, gdy nie bylo czego commitowac' },
+    commit: { type: ['string', 'null'], description: 'krotki hash nowego commita albo null' },
+    brudnePozaZadaniem: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'sciezki z `git status --short` SPOZA katalogu zadania — nietkniete, ida do komunikatu STOP',
+    },
+    stanZapisany: POLE_STANU,
+  },
+  required: ['zacommitowano', 'brudnePozaZadaniem', 'stanZapisany'],
+}
+
+// Najczestszy STOP w telemetrii (6 na 39 runow) to "niezacommitowane zmiany" — i ZAWSZE bezposrednio
+// po innym zatrzymaniu. Mechanizm: zapis stanu tworzy .autopilot-state.json, scribe zapisuje
+// review-faza-N.md, po czym run staje na bramce i NIKT tego nie commituje. Bootstrap nastepnego runu
+// widzi brudne drzewo i zatrzymuje sie na bramce czystosci — operator dostaje falszywy STOP o cudzych
+// zmianach, ktorych nie ma, i musi recznie zacommitowac artefakty pipeline'u.
+//
+// Sprzatamy WYLACZNIE `docs/active/<zadanie>/` (plan B2, wariant rekomendowany). Kod fazy zostaje
+// nietkniety, a semantyka bramki czystosci sie nie zmienia: ona dalej chroni przed uruchomieniem
+// autopilota na cudzych zmianach — tyle ze te zmiany to juz NIE sa nasze wlasne artefakty.
+async function zacommitujArtefaktyStop(faza) {
+  // Przed bootstrapem nie znamy ani zadania, ani sciezki — nie ma czego i gdzie commitowac.
+  if (!sciezka || !stan || !stan.nazwaZadania) return null
+  // Bramka brancha jest WCZESNIEJ niz ten commit i nie wolno jej ominac: przy STOP-ie "branch mismatch"
+  // siedzimy na cudzej galezi (typowo main), a artefakty zadania naleza do feature/<zadanie>. Commit
+  // tutaj wsadzilby dokumentacje zadania do niewlasciwej historii — gorzej niz brudne drzewo.
+  if (stan.branch && stan.branch.zgodny === false) {
+    log('Commit artefaktow przy STOP pominiety — jestesmy na niewlasciwym branchu, artefakty zostaja w drzewie')
+    return null
+  }
+  const opisFazy = Number.isInteger(faza) ? ` (faza ${faza})` : ''
+  return await zacommitujKatalogZadania(`docs(${stan.nazwaZadania}): stan pipeline'u po STOP${opisFazy}`, 'stop:commit-artefaktow')
+}
+
+// Commit WYLACZNIE katalogu zadania: przy STOP-ie (artefakty pipeline'u) i na starcie (zmiany operatora w katalogu
+// zadania, rek. 4 przegladu runow — wczesniej falszywy STOP "niezacommitowane zmiany" po edycji zadan).
+async function zacommitujKatalogZadania(temat, etykieta) {
+  // Przy STOP-ie zrzuty testera z korzenia repo (sciezka wzgledna liczona od katalogu demona agent-browser) idzie
+  // najpierw do katalogu zadania — inaczej zostaja poza commitem i bramka czystosci nastepnego runu na nich staje (P22 A3).
+  const zrzuty = etykieta === 'stop:commit-artefaktow'
+    ? `0. \`node .claude/scripts/e2e/e2e.mjs zrzuty --zadanie "${sciezka}"\` — skrypt przenosi niesledzone zrzuty z korzenia repo
+   do katalogu zadania; to jedyna zmiana plikow w tym kroku.\n`
+    : ''
+  const polecenie = `Zacommituj tylko zmiany w katalogu zadania \`${sciezka}/\` — to pliki zadania i artefakty pipeline'u,
+a brudne drzewo zatrzymuje bootstrap kolejnego runu na bramce czystosci.
+
+${zrzuty}1. \`git status --short\` — zapamietaj pelna liste.
+2. Z tej listy wyodrebnij sciezki SPOZA \`${sciezka}/\`. Nie dotykaj ich w zaden sposob: nie dodawaj,
+   nie stashuj, nie cofaj. Zwroc je w brudnePozaZadaniem[] — ida do komunikatu dla operatora.
+3. Jesli w \`${sciezka}/\` sa jakiekolwiek zmiany (zmodyfikowane, nowe lub usuniete):
+   \`git add ${sciezka}/\` — dokladnie ten pathspec, bez \`git add -A\` i \`git add .\` — a potem
+   ${instrukcjaCommita(temat)}
+   Zwroc zacommitowano=true i krotki hash z \`git rev-parse --short HEAD\`.
+4. Jesli w \`${sciezka}/\` nie ma zmian — nic nie commituj, zwroc zacommitowano=false i commit=null.
+5. Gdy \`git commit\` zwroci blad (np. hook odrzucil), nie obchodz go flagami (\`--no-verify\`,
+   \`-f\`): zwroc zacommitowano=false i commit=null. Falszywy commit jest gorszy niz brudne drzewo.
+
+Nie modyfikuj plikow, nie uruchamiaj testow, nie przelaczaj brancha.`
+  // Przy STOP-ie agent najpierw zapisuje zalegly stan (P7), wiec plik stanu trafia do tego samego commita.
+  return etykieta === 'stop:commit-artefaktow'
+    ? await agent(zeStanem(polecenie), { schema: COMMIT_ARTEFAKTOW, agentType: 'klasa-mechaniczny', label: 'stop:commit-artefaktow' })
+    : await agent(polecenie, { schema: COMMIT_ARTEFAKTOW, agentType: 'klasa-mechaniczny', label: 'start:commit-zadania' })
+}
+
+// Kazde zatrzymanie runu przechodzi TEDY — inaczej bramka, ktora zadziala, nie zostawia po sobie danych.
+async function stopRun(obj) {
+  // try/catch, bo to wywolanie wola agenta, a najczestsza przyczyna STOP-u bywa przeciazenie API (529).
+  // Rzucony wyjatek zabralby operatorowi komunikat bramki (`powod`, `naprawa`).
+  let artefakty = null
+  try {
+    artefakty = await zacommitujArtefaktyStop(obj.faza)
+  } catch (e) {
+    log(`Commit artefaktow przy STOP nie powiodl sie (${e && e.message ? e.message : e}) — best-effort, komunikat STOP wraca normalnie`)
+  }
+  // Stan oznaczony przed STOP-em zapisuje agent commita; gdy go pominieto, padl albo nie potwierdzil — zapis zapasowy.
+  try {
+    await potwierdzStan(artefakty)
+    await zapiszZaleglyStan()
+  } catch (e) {
+    log(`Zapis stanu przy STOP nie powiodl sie (${e && e.message ? e.message : e}) — sprawdz .autopilot-state.json przed swiezym runem`)
+  }
+  let powod = obj.powod
+  if (artefakty) {
+    if (artefakty.zacommitowano) {
+      log(`Artefakty pipeline'u zacommitowane przed STOP-em: ${artefakty.commit || '(brak hasha)'} — bootstrap nastepnego runu nie stanie na bramce czystosci`)
+    }
+    const brudne = artefakty.brudnePozaZadaniem || []
+    if (brudne.length) {
+      powod = `${powod} UWAGA: poza katalogiem zadania zostaly niezacommitowane zmiany (${brudne.join(', ')}) — NIE tknelismy ich, ale bramka czystosci nastepnego runu na nich stanie.`
+    }
+  }
+  // Fazy domkniete w zadaniu (nie w tym runie): STOP na fazie 3 z 3 po dwoch zielonych to nie porazka calego zadania.
+  const ukonczone = stan && Array.isArray(stan.fazy) ? fazyUkonczone(stan.fazy) : null
+  return { status: 'STOP', ...obj, powod, fazyUkonczone: ukonczone, artefaktyStop: artefakty }
+}
+
+phase('Bootstrap')
+stan = await agent(bootstrapPrompt(sciezka), { schema: PLAN_STATE, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: 'bootstrap' })
+if (!stan) {
+  return await stopRun({ powod: 'bootstrap nie zwrocil stanu (agent null)' })
+}
+
+// Decyzja A: git zwalidowany w sesji przed odpaleniem; tu tylko bezpiecznik.
+if (!stan.branch.zgodny) {
+  return await stopRun({ powod: `branch mismatch: jestes na "${stan.branch.aktualny}", wymagany "${stan.branch.wymagany}"`, stan })
+}
+for (const r of stan.rozbieznosci || []) log(`Bootstrap rozbieznosc (informacyjna): ${r}`)
+
+// Bramka wejscia (P4): STOP z gotowa komenda przed pierwsza faza, decyzja w decyzjaWejscia.
+const wejscie = decyzjaWejscia(sciezka, stan.wejscie, stan.fazy, stan.bazaZielona || null)
+for (const u of wejscie.uwagi) log(`Bramka wejscia: ${u}`)
+if (wejscie.stop) {
+  return await stopRun({ ...wejscie.stop, stan })
+}
+const claudeMd = decyzjaClaudeMd(stan.wejscie.decyzje, sciezka)
+if (claudeMd.uwaga) log(`Bramka wejscia: ${claudeMd.uwaga}`)
+if (claudeMd.stop) {
+  return await stopRun({ ...claudeMd.stop, stan })
+}
+if (wejscie.commitZadania) {
+  const commitZadania = await zacommitujKatalogZadania(`docs(${stan.nazwaZadania}): zmiany w katalogu zadania przed runem`, 'start:commit-zadania')
+  if (!commitZadania || !commitZadania.zacommitowano || commitZadania.brudnePozaZadaniem.length) {
+    return await stopRun({
+      powod: `niezacommitowane zmiany w katalogu zadania — commit na starcie sie nie udal${commitZadania && commitZadania.brudnePozaZadaniem.length ? ` (poza zadaniem: ${commitZadania.brudnePozaZadaniem.join(', ')})` : ''}`,
+      naprawa: `Zacommituj recznie: \`git add ${sciezka}/ && git commit -m "docs(${stan.nazwaZadania}): zmiany w katalogu zadania"\`, potem swiezy run: ${komendaSwiezegoRunu(sciezka)}`,
+      stan,
+    })
+  }
+  log(`Bramka wejscia: zmiany w katalogu zadania zacommitowane (${commitZadania.commit || 'brak hasha'})`)
+}
+// Bloker pierwszej fazy kolejki (P25 A1) przed testami startu, srodowiskiem E2E i rozgrzewka — STOP tani i z dokladnym
+// powodem; fazy dalsze sprawdza petla przed kazda faza.
+const pierwszaFaza = stan.fazy.find((f) => f.execute === 'pending' || f.review === 'pending' || f.fix === 'pending')
+const blokerStartu = pierwszaFaza ? decyzjaBlokeraFazy(pierwszaFaza.numer, stan.wejscie.blokery, sciezka) : null
+if (blokerStartu) {
+  return await stopRun({ ...blokerStartu, faza: pierwszaFaza.numer, stan })
+}
+if (wejscie.testyStartu) {
+  const testy = await agent(testyStartuPrompt(), { schema: TESTY_STARTU, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: 'start:testy' })
+  const d = decyzjaTestowStartu(testy, sciezka)
+  if (d.stop) return await stopRun({ ...d.stop, stan })
+  if (d.uwaga) log(`Bramka wejscia: ${d.uwaga}`)
+  if (d.cache) {
+    stan.bazaZielona = d.cache
+    log(`Bramka wejscia: zielony start (${testy.komenda}) na ${d.cache.sha}`)
+    // Zapisuje e2e:start (nastepny agent); STOP srodowiska E2E commituje katalog zadania, wiec swiezy run wezmie wynik z cache.
+    oznaczStan()
+  }
+}
+
+// Stan sprzed P8 (P3 na liscie fixa): P3 do known-issues, potem stan bez nich. Bez zapisu P3 zniknelyby przy wznowieniu.
+const p3ZeStanu = odlozP3ZeStanu(stan.fazy)
+if (p3ZeStanu.odlozone.length) {
+  const zapisP3 = await agent(p3KnownIssuesPrompt(sciezka, p3ZeStanu.odlozone), { schema: P3_KNOWN_ISSUES, agentType: 'klasa-mechaniczny', label: 'start:p3-known-issues' })
+  if (!zapisP3 || !zapisP3.zapisano) {
+    return await stopRun({
+      powod: `stan sprzed zmiany fixa trzyma P3 na liscie fixa (fazy ${p3ZeStanu.odlozone.map((o) => o.faza).join(', ')}), a zapis do known-issues.md sie nie udal`,
+      naprawa: `Sprawdz ${sciezka}/known-issues.md i odpal swiezy run: ${komendaSwiezegoRunu(sciezka)}`,
+      stan,
+    })
+  }
+  stan.fazy = p3ZeStanu.fazy
+  oznaczStan()
+  log(`Stan sprzed zmiany fixa: ${p3ZeStanu.odlozone.reduce((n, o) => n + o.findingi.length, 0)}x P3 przeniesione do known-issues (fix naprawia P1/P2)`)
+}
+
+// Filar 2: kolejka liczona w JS ze stanu — zero interpretacji LLM.
+kolejka = stan.fazy
+  .filter((f) => f.execute === 'pending' || f.review === 'pending' || f.fix === 'pending')
+  .map((f) => f.numer)
+
+log(`Autopilot: ${stan.nazwaZadania} (stan: ${stan.zrodloStanu}) — fazy do wykonania: ${kolejka.join(', ') || 'brak'}`)
+
+// Zapis zapasowy: tani leaf-agent (haiku) przed pod-workflowem i po niepotwierdzonym zapisie nastepcy. Best-effort z ostrzezeniem.
+async function zapiszStan(tresc) {
+  let w = await agent(zapiszStanPrompt(sciezka, tresc), { schema: ZAPIS_STANU, agentType: 'klasa-mechaniczny', label: 'stan:zapis' })
+  // Nieudany zapis LUB plik, ktory nie sparsowal sie z dysku, to ten sam problem: stanu na dysku NIE MA.
+  // Jedna ponowna proba (na modelu glownym — haiku wlasnie pokazal, ze nie uniosl przepisania tresci).
+  if (!w || !w.zapisano || w.poprawnyJson === false) {
+    log(`Zapis .autopilot-state.json nieudany (${!w ? 'agent null' : w.poprawnyJson === false ? 'plik nie parsuje sie jako JSON' : 'zapisano=false'}) — ponawiam raz`)
+    w = await agent(zapiszStanPrompt(sciezka, tresc), { schema: ZAPIS_STANU, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: 'stan:zapis:retry' })
+  }
+  if (!w || !w.zapisano || w.poprawnyJson === false) {
+    log('OSTRZEZENIE: .autopilot-state.json NIE zostal poprawnie zapisany po 2 probach — resume bedzie polegac na parse md, a uszkodzony plik moze wywrocic nastepny bootstrap. Sprawdz go recznie przed kolejnym runem.')
+  }
+}
+
+// Stan fazy (P7): oznaczStan() liczy tresc w JS po kazdej zmianie stanu; zapisuje ja nastepny agent z doklejonym blokiem
+// (zeStanem + potwierdzStan). Przed pod-workflowem zalegly stan idzie do agenta stan:zapis; po complete-wf zapisu nie ma.
+function oznaczStan() {
+  stanDoZapisu = trescStanu(stan)
+}
+
+function zeStanem(polecenie) {
+  if (!stanDoZapisu) return polecenie
+  stanDoklejony = stanDoZapisu
+  stanDoZapisu = null
+  return `${polecenie}\n\nPrzed zadaniem opisanym wyzej wykonaj zapis stanu. Ten zapis jest czescia zadania, takze gdy polecenie wyzej zabrania zmian w plikach.\n${blokZapisuStanu(sciezka, stanDoklejony)}`
+}
+
+async function potwierdzStan(wynik) {
+  const tresc = stanDoklejony
+  stanDoklejony = null
+  if (!tresc || zapisPotwierdzony(wynik)) return
+  log(`Zapis stanu doklejony do agenta niepotwierdzony (${wynik ? `stanZapisany=${wynik.stanZapisany}` : 'agent null'}) — zapis zapasowy`)
+  await zapiszStan(tresc)
+}
+
+async function zapiszZaleglyStan() {
+  if (!stanDoZapisu) return
+  const tresc = stanDoZapisu
+  stanDoZapisu = null
+  await zapiszStan(tresc)
+}
+
+// Srodowisko E2E PRZED warmupem (P14): jedno polecenie skryptu — czy zadanie potrzebuje przegladarki, sprawdzenie .env.e2e
+// (sekcja Doctor) i start serwera aplikacji. Scenariusze [E2E] przy niesprawnym srodowisku = STOP przed faza 1 z naprawa ze skryptu,
+// nigdy cicha degradacja do recznego. Agent zapisuje tez stan zalegly po bramce wejscia.
+// Projekt od zera (P17, vibersi): repo bez aplikacji = start odroczony zamiast STOP-u (rozpoznanie po strukturze repo w skrypcie).
+let e2eStart = await agent(zeStanem(e2eStartPrompt(sciezka)), { schema: E2E_START, agentType: 'klasa-mechaniczny', label: 'e2e:start', phase: 'Bootstrap' })
+await potwierdzStan(e2eStart)
+if (!e2eStart) {
+  log('E2E start: agent zwrocil null — retry raz')
+  e2eStart = await agent(e2eStartPrompt(sciezka), { schema: E2E_START, agentType: 'klasa-mechaniczny', label: 'e2e:start:retry', phase: 'Bootstrap' })
+}
+const srodowiskoStartu = decyzjaSrodowiskaE2e(e2eStart, sciezka)
+log(`E2E start: ${e2eStart ? `${e2eStart.status} (serwer: ${e2eStart.serwer}, scenariusze: ${e2eStart.scenariusze}) — ${e2eStart.detal}` : 'agent zwrocil null 2x'}`)
+if (srodowiskoStartu.stop) {
+  return await stopRun({ ...srodowiskoStartu.stop, e2eStart, stan })
+}
+// Srodowisko w runie: 'gotowe' | 'pominieto' | 'odroczone' (projekt od zera) | 'martwe' (awaria — srodowiskoPoReview, restart);
+// review-wf daje testerowi przegladarke tylko przy 'gotowe'. Przy srodowisku w runie kazda faza zaczyna review od restartu
+// serwera (P17): serwer z bootstrapu nie widzial plikow konfiguracji powstalych w fazach (vibersi: 500 w fazie 4). Awaria
+// z review albo fixa trwa do nastepnej fazy (restart ja zdejmuje); serwer, ktory nie wstal po restarcie — do konca runu.
+let srodowiskoE2E = srodowiskoStartu.srodowisko
+const bazaE2e = srodowiskoStartu.bazaE2e
+const e2eWRunie = srodowiskoStartu.aktywne
+let e2eTrwaleMartwe = false
+let serwerNasz = Boolean(e2eStart) && e2eStart.serwer === 'uruchomione'
+// Telemetria run.e2eSrodowisko: czy ktoras faza miala przegladarke (stan ostatniej fazy mowi tylko o niej).
+let e2eBylaPrzegladarka = srodowiskoE2E === 'gotowe'
+
+// Filar 1: rozgrzewka cache vitest — PO bramce E2E (tani gate first). Self-skip gdy brak vitest; warm = sekundy.
+// Chroni tez walidacje koncowa przy pustej kolejce (np. resume po ukonczonych fazach na zimnej maszynie).
+const warmup = await agent(warmupPrompt(sciezka), { schema: WARMUP_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: 'warmup:vitest', phase: 'Bootstrap' })
+if (!warmup) {
+  return await stopRun({ powod: 'rozgrzewka nie zwrocila wyniku (agent null)', stan })
+}
+log(`Rozgrzewka: ${warmup.status} — ${warmup.detal} (zimny: ${warmup.czasZimnySek ?? 'n/a'}s, kontrolny: ${warmup.czasKontrolnySek ?? 'n/a'}s)`)
+// Warmup to OPTYMALIZACJA, nie warunek poprawnosci — 'niepowodzenie' degraduje z ostrzezeniem,
+// nie zatrzymuje runu (prog <60s kontrolnego biegu jest maszyno-zalezny; na wolnym sprzecie
+// poprawny cache potrafi go przekroczyc). Agenci faz i tak maja BLOK_DLUGIE_KOMENDY (tlo+polling).
+if (warmup.status === 'niepowodzenie') {
+  log(`OSTRZEZENIE: rozgrzewka cache niepotwierdzona (${warmup.detal}) — kontynuuje; agenci faz musza scisle stosowac procedure tla dla zimnych biegow`)
 }
 
 for (const numerFazy of kolejka) {
@@ -1139,130 +1777,111 @@ for (const numerFazy of kolejka) {
     return await stopRun({ powod: `kolejka zawiera faze ${numerFazy} nieobecna w fazy[] — niespojny stan bootstrapu`, raporty })
   }
   phase(`Faza ${numerFazy}`)
-  const tokFazaStart = tokSpent()
+  const bloker = decyzjaBlokeraFazy(numerFazy, stan.wejscie.blokery, sciezka)
+  if (bloker) {
+    return await stopRun({ ...bloker, faza: numerFazy, raporty })
+  }
   let gateFazy = 'CZYSTE'
   let cykle = 0
   let e2eSync = null
+  let advisorsFazy = null
+  // Ogon logu restartu, po ktorym serwer nie wstal (P17) — wejscie correctness: serwer polozony kodem fazy to defekt.
+  let restartBlad = null
+  // Obcy serwer na porcie E2E po restarcie (P19) — przyczyna trybu bez przegladarki dla testera (powod linii [Manual]).
+  let przyczynaBezPrzegladarki = null
+  // Sygnatury blokera srodowiska stacku z adaptera (D12) — z JSON-u restartu do detekcji w review fazy.
+  let sygnaturyBlokera = []
   // Metryki fazy: przy resume review moze byc juz 'done' i review-wf sie NIE odpali — wtedy liczniki
   // i przebieg czytamy z faza.metryki utrwalonych w stanie (bez tego telemetria dostawala null).
   const metrykiZeStanu = faza.metryki || {}
   let licznikiFazy = metrykiZeStanu.liczniki || null
   let przebiegFazy = metrykiZeStanu.przebieg || null
   let fixInfo = null
-  // Atrybucja tokenow per etap: "faza = 298k" nie mowi, czy placimy za buildery, czy za reviewerow,
-  // wiec kazdy etap ma wlasny akumulator. null (a NIE 0) = etapu w tym runie nie bylo (przy resume byl
-  // juz 'done'); 0 = wykonal sie i nic nie kosztowal. Dopisujemy delte na KONCU bloku etapu — sciezki
-  // STOP wracaja przed raporty.push, wiec ich pomiar i tak nie ma gdzie trafic.
-  const tokEtapy = { execute: null, review: null, fix: null }
-  // += zamiast =, bo etap moze wykonac sie wielokrotnie (cykle fixa) — wtedy koszt ma sie SUMOWAC.
-  const dopiszEtap = (etap, start) => { tokEtapy[etap] = (tokEtapy[etap] || 0) + (tokSpent() - start) }
+  // Wynik kontroli diffu naprawczego (plan B5) — do raportu fazy i telemetrii.
+  let kontrolaFixa = null
+  let doDecyzjiOperatora = []
 
   // 1) EXECUTE — tylko gdy pending (resume nigdy nie powtarza ukonczonego execute, w tym migracji).
+  // Dossier fazy z domkniecia (P7) idzie do review; faza wznowiona z execute: done go nie ma — review-wf odtwarza je
+  // zapasowym agentem (kod mogl sie zmienic po STOP-ie, plik w /tmp bylby nieaktualny) z baza fazy utrwalona w stanie.
+  // Stan „execute done” z baza zapisuje domkniecie execute-wf (args.stanPoExecute); bez potwierdzenia — zapis zapasowy.
+  let dossierZExecute = null
   if (faza.execute === 'pending') {
-    const tokEtapStart = tokSpent()
-    // Punkt odniesienia dla bramki natywnych zaleznosci — zdejmowany PRZED execute, wiec zakres diffu fazy
-    // jest deterministyczny (bez tego bramka zgadywala zakres po commit message'ach, a fallback
-    // `origin/main...HEAD` obejmowal wszystkie wczesniejsze fazy i STOP-owalby run w kolko).
-    let shaPrzed = ''
-    if (e2eAktywne) {
-      const s = await agent(
-        'Uruchom `git rev-parse HEAD` i zwroc {sha:"<pelny sha>"}. Gdy komenda zawiedzie, zwroc {sha:""}. Nic wiecej nie rob, nie modyfikuj plikow.',
-        { schema: SHA_RESULT, label: `sha-przed:faza-${numerFazy}`, model: 'haiku' }
-      )
-      shaPrzed = (s && s.sha) || ''
-    }
-    const exec = await workflow('dev-docs-execute-wf', { sciezka, faza: numerFazy })
+    await zapiszZaleglyStan()
+    const exec = await workflow('dev-docs-execute-wf', { sciezka, faza: numerFazy, stanPoExecute: trescStanu(stanPoExecute(stan, numerFazy)) })
     if (!exec || exec.status !== 'completed') {
+      // Domkniecie mialo zapisac stan tylko przy completed; gdy mimo to potwierdzilo zapis, STOP nadpisuje go stanem z pamieci.
+      if (exec && exec.stanZapisany) oznaczStan()
       return await stopRun({ powod: `execute fazy ${numerFazy} zwrocil "${exec ? exec.status : 'null'}"${exec && exec.problem ? `: ${exec.problem}` : ''}`, faza: numerFazy, exec, raporty })
     }
     faza.execute = 'done'
-    await zapiszStan()
-    log(`Faza ${numerFazy}: Execute OK (${exec.iu.length} IU)`)
-    dopiszEtap('execute', tokEtapStart)
-
-    // BRAMKA NATYWNYCH ZALEZNOSCI (2026-08-08) — tylko przy aktywnym E2E i tylko po swiezym execute.
-    // Faza, ktora dodala pakiet z kodem natywnym, wlasnie uniewaznila dev-clienta na emulatorze:
-    // binarka go nie zawiera, wiec kazdy flow dotykajacy nowego ekranu padnie na "Cannot find native module".
-    // Zatrzymujemy TU, przed review i przed testerem E2E — inaczej problem wychodzi na completion-gate,
-    // po calym runie (tak bylo z expo-clipboard w fazie C, run feedback-marcin-poprawki).
-    // Stan ma execute=done, wiec swiezy run po rebuildzie wejdzie prosto w review tej fazy — nic nie przepada.
-    if (e2eAktywne && shaPrzed) {
-      const nat = await agent(
-        natywneDepsPrompt(
-          numerFazy,
-          `git diff ${shaPrzed}..HEAD -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json`,
-          'SHA zdjety przez orkiestratora TUZ PRZED execute tej fazy, wiec zakres jest deterministyczny'
-        ),
-        { schema: NATYWNE_DEPS_RESULT, label: `natywne-deps:faza-${numerFazy}` }
-      )
-      if (nat && nat.wymagaRebuildu) {
-        return await stopRun({
-          powod: `Faza ${numerFazy} dodala zaleznosci z kodem natywnym: ${nat.nowe.join(', ')}. Dev-client na emulatorze ich NIE zawiera — scenariusze E2E tej i kolejnych faz padna na "Cannot find native module". ${nat.detal}`,
-          naprawa: 'Przebuduj dev-clienta i zainstaluj na emulatorze: `bunx expo prebuild` -> `(cd ios && pod install)` -> `xcodebuild -workspace ios/*.xcworkspace -scheme <scheme> -configuration Debug -sdk iphonesimulator CODE_SIGN_IDENTITY="-"` (podpis ad-hoc — CODE_SIGNING_ALLOWED=NO odbiera entitlements i psuje SecureStore) -> `xcrun simctl install booted <.app>`. Android: `bunx expo run:android`. Potem SWIEZY run (te same args, BEZ resumeFromRunId) — execute tej fazy jest juz zapisany jako done, wiec run wejdzie prosto w review.',
-          faza: numerFazy, natywne: nat, raporty,
-        })
-      }
-      if (!nat) log(`Faza ${numerFazy}: bramka natywnych zaleznosci zwrocila null — przepuszczam z ostrzezeniem (sprawdz recznie, czy faza nie dodala modulu natywnego)`)
-    } else if (e2eAktywne) {
-      log(`Faza ${numerFazy}: bramka natywnych zaleznosci POMINIETA — nie udalo sie odczytac SHA sprzed execute, wiec zakres diffu fazy byłby zgadywany. Sprawdz recznie, czy faza nie dodala modulu natywnego.`)
+    faza.baza = exec.baza || null
+    dossierZExecute = exec.dossier || null
+    if (!zapisPotwierdzony(exec)) {
+      log(`Faza ${numerFazy}: domkniecie nie potwierdzilo zapisu stanu — zapis zapasowy`)
+      await zapiszStan(trescStanu(stan))
     }
+    log(`Faza ${numerFazy}: Execute OK (${exec.iu.length} IU)`)
   }
 
   // 2) REVIEW — tylko gdy pending. Faza ukonczona z otwartymi findingami idzie PROSTO do fix (Bug 1).
   if (faza.review === 'pending') {
-    // Etap "review" obejmuje e2e db-sync + review-wf (reviewerzy, dedup, adversarial verify) — to jeden
-    // blok warunkowy i jeden wywolywany workflow, wiec i jedna pozycja w atrybucji.
-    const tokEtapStart = tokSpent()
+    // Findingi z PRZERWANEGO podejscia do tej fazy (STOP na blokerze srodowiska albo padzie testera
+    // E2E zostawia review=pending z niepusta lista). Zapamietane PRZED review, bo `faza.otwarteFindingi`
+    // zaraz zostanie nadpisane wynikiem nowego przebiegu — patrz polaczFindingiPoPowtorce (audyt N2).
+    const findingiPrzedPowtorka = faza.otwarteFindingi.slice()
     // Sync bazy e2e per faza PO execute (migracje fazy powstaja w execute, db push jest
     // przyrostowy — brak nowych migracji = no-op). Niepowodzenie nie blokuje review:
     // tester E2E trafi na brak danych i sklasyfikuje OPERATOR, a detal (np. blad SQL
     // migracji = potencjalny defekt kodu!) zostaje w logu i raporcie fazy dla operatora.
-    if (e2eAktywne) {
-      e2eSync = await agent(e2eDbSyncPrompt(sciezka, numerFazy), { schema: E2E_DB_SYNC_RESULT, label: `e2e:db-sync:faza-${numerFazy}` })
-      log(`E2E db-sync fazy ${numerFazy}: ${e2eSync ? `${e2eSync.status} — ${e2eSync.detal}` : 'agent zwrocil null'}`)
-    }
-    // RE-CHECK SWIEZOSCI DEV-CLIENTA (bezstanowy) — zamyka luke bramki natywnej po RESUME: faza wykonana
-    // we wczesniejszym runie nie przechodzi przez galaz `execute`, wiec jej zmiany natywne nikt by nie
-    // sprawdzil, a tester E2E padlby na "Cannot find native module" dopiero w srodku scenariusza.
-    // Detektor jest tani i nie potrzebuje zadnego stanu; gdy zadziala, sedzia rozstrzyga czy to naprawde
-    // zmiana natywna (paczka czysto JS tez rusza lockfile, a nie wymaga rebuildu).
-    if (e2eAktywne) {
-      const sw = await agent(swiezoscPrompt(numerFazy), { schema: SWIEZOSC_RESULT, label: `swiezosc:faza-${numerFazy}`, model: 'haiku' })
-      if (sw && sw.stan === 'przestarzaly') {
-        log(`Faza ${numerFazy}: binarka starsza niz konfiguracja natywna (${sw.detal}) — sprawdzam, czy zmiana jest realnie natywna`)
-        const odciecie = sw.mtimeBinarki
-        const zakres = odciecie
-          ? `git log --since=@${odciecie} --format=%H --reverse -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json | head -1 | xargs -I{} git diff {}^..HEAD -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json`
-          : `git diff HEAD~5..HEAD -- package.json app.json app.config.js app.config.ts bun.lock bun.lockb pnpm-lock.yaml yarn.lock package-lock.json`
-        const nat = await agent(
-          natywneDepsPrompt(
-            numerFazy,
-            zakres,
-            odciecie
-              ? 'zakres liczony od PIERWSZEGO commita nowszego niz zainstalowana binarka — to dokladnie te zmiany, ktorych dev-client NIE zawiera'
-              : 'nie udalo sie odczytac mtime binarki; zakres przybliżony (ostatnie 5 commitow) — przy watpliwosci raportuj wymagaRebuildu:true'
-          ),
-          { schema: NATYWNE_DEPS_RESULT, label: `natywne-deps:swiezosc:faza-${numerFazy}` }
-        )
-        if (!nat || nat.wymagaRebuildu) {
-          return await stopRun({
-            powod: `Faza ${numerFazy}: dev-client na emulatorze jest starszy niz konfiguracja natywna projektu (${sw.detal})${nat ? ` i zmiana JEST natywna: ${nat.nowe.join(', ')}. ${nat.detal}` : ', a sedzia natywnosci nie zwrocil werdyktu — nie przepuszczam runu na niepewnej binarce'}. Scenariusze E2E padlyby na "Cannot find native module" w srodku fazy.`,
-            naprawa: 'Przebuduj dev-clienta i zainstaluj na emulatorze: `bunx expo prebuild` -> `(cd ios && pod install)` -> `xcodebuild -workspace ios/*.xcworkspace -scheme <scheme> -configuration Debug -sdk iphonesimulator CODE_SIGN_IDENTITY="-"` (podpis ad-hoc — CODE_SIGNING_ALLOWED=NO odbiera entitlements i psuje SecureStore) -> `xcrun simctl install booted <.app>`. Android: `bunx expo run:android`. Potem SWIEZY run (te same args, BEZ resumeFromRunId).',
-            faza: numerFazy, swiezosc: sw, natywne: nat, raporty,
-          })
-        }
-        log(`Faza ${numerFazy}: binarka starsza, ale zmiany sa czysto JS (${nat.detal}) — rebuild niepotrzebny, lece dalej`)
-      } else if (sw && sw.stan === 'nieznany') {
-        log(`Faza ${numerFazy}: nie da sie sprawdzic swiezosci dev-clienta (${sw.detal}) — przepuszczam z ostrzezeniem`)
-      } else if (!sw) {
-        log(`Faza ${numerFazy}: detektor swiezosci zwrocil null — przepuszczam z ostrzezeniem`)
+    if (e2eWRunie && !e2eTrwaleMartwe) {
+      let restart = await agent(e2eRestartPrompt(sciezka, numerFazy), { schema: E2E_RESTART, agentType: 'klasa-mechaniczny', label: `e2e:restart:faza-${numerFazy}` })
+      if (!restart) {
+        log(`E2E restart fazy ${numerFazy}: agent zwrocil null — retry raz`)
+        restart = await agent(e2eRestartPrompt(sciezka, numerFazy), { schema: E2E_RESTART, agentType: 'klasa-mechaniczny', label: `e2e:restart:faza-${numerFazy}` })
       }
+      const po = srodowiskoPoRestarcie(restart && restart.stdout)
+      const stopPrzebudowy = decyzjaPrzebudowy(po, numerFazy, sciezka)
+      if (stopPrzebudowy) return await stopRun({ ...stopPrzebudowy, faza: numerFazy, raporty })
+      sygnaturyBlokera = sygnaturyZRestartu(restart && restart.stdout)
+      if (po.srodowisko) srodowiskoE2E = po.srodowisko
+      if (po.srodowisko === 'gotowe') e2eBylaPrzegladarka = true
+      if (po.srodowisko === 'martwe' && po.przyczyna) przyczynaBezPrzegladarki = po.przyczyna
+      else if (po.srodowisko === 'martwe') restartBlad = po.detal
+      if (po.trwale) e2eTrwaleMartwe = true
+      if (po.nasz) serwerNasz = true
+      log(`E2E restart fazy ${numerFazy}: ${po.srodowisko || 'bez zmian'} — ${po.detal}${po.trwale ? ' (serwer nie odpowiada w limicie startu — do konca runu tester bez przegladarki)' : ''}`)
     }
-
+    // db-sync zalezy od bazy e2e, nie od serwera: migracje i advisors biegna takze w zadaniu bez scenariuszy i po awarii serwera.
+    // Advisors od bazy poprzedniej fazy: migracje dodane przez jej fix wchodza do bazy e2e dopiero teraz (db push --include-all).
+    if (bazaE2e) {
+      const poprzednia = stan.fazy.find((f) => f.numer === numerFazy - 1)
+      e2eSync = await agent(e2eDbSyncPrompt(sciezka, numerFazy, (poprzednia && poprzednia.baza) || faza.baza || null), { schema: E2E_DB_SYNC_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `e2e:db-sync:faza-${numerFazy}` })
+      log(`E2E db-sync fazy ${numerFazy}: ${e2eSync ? `${e2eSync.status} — ${e2eSync.detal}` : 'agent zwrocil null'}`)
+      // Po nieudanym db push baza nie ma migracji fazy — lint takiej bazy dalby „ok”, a security pominelby RLS (recenzja P17).
+      advisorsFazy = e2eSync && e2eSync.status !== 'niepowodzenie' ? advisorsZWyniku(e2eSync.advisors) : null
+      log(`Advisors bazy e2e fazy ${numerFazy}: ${advisorsFazy ? `${advisorsFazy.status} — ${advisorsFazy.detal}` : 'brak wyniku (db-sync nieudany albo advisors nie biegl) — security sprawdza migracje recznie'}`)
+    }
+    await zapiszZaleglyStan()
     const review = await workflow('dev-docs-review-wf', {
       sciezka,
       faza: numerFazy,
       poprzednieFindingi: faza.otwarteFindingi.length ? faza.otwarteFindingi : null,
+      dossier: dossierZExecute,
+      // Baza fazy ze stanu (P7): zapasowy agent dossier po STOP-ie miedzy execute a review liczy diff od niej, nie od main.
+      baza: faza.baza || null,
+      // Status srodowiska przegladarkowego (2026-07-30): routing v2 sam z diffu NIE wie, czy przegladarka
+      // stoi, wiec w runie rownolegle-joby (faza 1) przywolal testera przy e2eSrodowisko: "pominieto"
+      // — wynik 1 passed / 1 failed / 3 skipped. Z tym sygnalem review-wf da mu tryb bez przegladarki.
+      srodowiskoE2E,
+      // Lint bazy e2e po migracjach fazy (P17) — wejscie security; null = advisors nie biegl (security sprawdza recznie).
+      advisors: advisorsFazy,
+      // Serwer nie wstal po restarcie przed testerem (P17) — ogon logu dla correctness; null = restart udany albo nie biegl.
+      restartE2e: restartBlad,
+      // Obcy serwer na porcie E2E (P19) — tester wpisuje te przyczyne w powod SKIP-ow; null = brak obcego serwera.
+      przyczynaBezPrzegladarki,
+      // Sygnatury blokera srodowiska stacku (D12) — polityka stop-rebuild zatrzymuje run po review; [] = sygnatury rdzenia.
+      sygnaturyBlokera,
     })
     if (!review) {
       return await stopRun({ powod: `review fazy ${numerFazy} zwrocil null`, faza: numerFazy, raporty })
@@ -1270,39 +1889,27 @@ for (const numerFazy of kolejka) {
     // Scribe padl 2x: raport review-faza-N.md i sekcja "Do poprawy" NIE powstaly. Nie oznaczamy
     // review=done (utrwalone done nigdy juz nie odtworzy raportu) — STOP; kolejny run powtorzy review.
     if (review.scribeFail) {
-      await zapiszStan()
+      oznaczStan()
       return await stopRun({
         powod: `Faza ${numerFazy}: scribe padl 2x — findingi zweryfikowane (P1/P2 w wyniku), ale raport review-faza-${numerFazy}.md nie zostal zapisany. Review pozostaje pending; odpal SWIEZY run (reviewerzy odpala sie ponownie).`,
         faza: numerFazy, findings: review.findings, raporty,
       })
     }
-    // TESTER E2E PADL 2x przy checkboxach [E2E] (review-wf zwraca e2eTesterFail). Raport i sekcje sa na dysku
-    // (checkboxy [E2E] zostaly [ ] + kopie w Operator checklist), ale review NIE jest done: bez przebiegu
-    // Maestro faza z E2E nie ma dowodu, a cicha degradacja do OPERATOR to dokladnie regresja etap-11/12b.
-    // BLOKER SRODOWISKA wykryty po SYGNATURZE w outpucie Maestro (review-wf liczy to w JS, bez LLM).
-    // Bez tego run ciagnal kolejne fazy na trwale zepsutym dev-kliencie, a kazdy nastepny scenariusz padal
-    // z tego samego powodu — operator dowiadywal sie dopiero na completion-gate, po godzinach pracy.
-    // Review ZOSTAJE zapisane (raport i sekcja "Do poprawy" sa juz na dysku), ale nie oznaczamy go jako
-    // done: findingi E2E powstaly na zepsutym srodowisku, wiec po rebuildzie faza wymaga powtorki.
-    if (review.blokerSrodowiska && review.blokerSrodowiska.wykryty) {
-      const b = review.blokerSrodowiska
-      const rebuild = 'Przebuduj dev-clienta: `bunx expo prebuild` -> `(cd ios && pod install)` -> `xcodebuild -workspace ios/*.xcworkspace -scheme <scheme> -configuration Debug -sdk iphonesimulator CODE_SIGN_IDENTITY="-"` -> `xcrun simctl install booted <.app>`. Android: `bunx expo run:android`. Potem SWIEZY run (te same args, BEZ resumeFromRunId) — review tej fazy powtorzy sie na sprawnym srodowisku.'
-      return await stopRun({
-        powod: `Faza ${numerFazy}: scenariusz E2E padl na BLOKERZE SRODOWISKA (${b.klasa}), nie na defekcie kodu. Dowod z outputu: "${b.dowod}". Kazdy kolejny scenariusz padlby tak samo, wiec zatrzymuje run zamiast ciagnac go na zepsutej binarce.`,
-        naprawa: b.klasa === 'brak-entitlements'
-          ? `Binarka zostala zbudowana BEZ podpisu, wiec nie ma entitlements i expo-secure-store nie zapisuje sesji — logowanie "dziala", ale sesja nie przezywa restartu. ${rebuild} KLUCZOWE: podpis ad-hoc CODE_SIGN_IDENTITY="-", NIE CODE_SIGNING_ALLOWED=NO.`
-          : `Dev-client nie zawiera modulu natywnego uzywanego przez ten ekran. ${rebuild}`,
-        faza: numerFazy, blokerSrodowiska: b, raporty,
-      })
+    // Bloker srodowiska z polityka stop-rebuild (D12): restart serwera nie przebuduje binarki — STOP przed zamknieciem review.
+    const stopBlokera = decyzjaBlokeraSrodowiska(review, numerFazy, sciezka)
+    if (stopBlokera) {
+      oznaczStan()
+      return await stopRun({ ...stopBlokera, faza: numerFazy, findings: review.findings, raporty })
     }
-    // (po blokerze srodowiska: bloker to konkretniejsza diagnoza z instrukcja rebuildu; oba zostawiaja review pending)
+    // Awaria E2E w trakcie runu (P14, PANEL-WEJSCIE §2 pkt 6) nie zatrzymuje runu. Review-wf przeniosl juz scenariusze fazy
+    // na [Manual] z powodem (skrypt ksiegowania): bloker srodowiska -> przyczyna srodowisko, pad testera -> tester-padl.
+    // Po blokerze faza idzie bez przegladarki do fixa; nastepna faza zaczyna od restartu serwera (P17).
+    srodowiskoE2E = srodowiskoPoReview(srodowiskoE2E, review)
+    if (review.blokerSrodowiska && review.blokerSrodowiska.wykryty) {
+      log(`Faza ${numerFazy}: srodowisko E2E padlo w trakcie runu (${review.blokerSrodowiska.klasa}): "${review.blokerSrodowiska.dowod}". Scenariusze fazy na [Manual] z powodem; do nastepnej fazy (restart) tester bez przegladarki.`)
+    }
     if (review.e2eTesterFail) {
-      await zapiszStan()
-      return await stopRun({
-        powod: `Faza ${numerFazy}: tester E2E (Maestro) ${(review.przebieg && review.przebieg.e2eStatus) || 'padl 2x'} przy ${review.przebieg && review.przebieg.e2eLiczbaZnana ? `${review.przebieg.e2eCheckboxy} checkboxach [E2E]` : 'nieznanej liczbie checkboxow [E2E] (packager kontekst:diff tez padl — szukaj 529/watchdoga, nie Maestro)'}. Nie degraduje cicho do OPERATOR: review pozostaje pending.`,
-        naprawa: 'Sprawdz Metro/emulator/Maestro (canary: .maestro/_canary.yaml) albo 529 Overloaded i odpal SWIEZY run (te same args, BEZ resumeFromRunId) — review tej fazy powtorzy sie z testerem. Jesli canary przechodzi, a tester pada 2x na tym samym flow — flow prawdopodobnie wisi na natywnej powierzchni OS (picker/Alert/biometria): odpal `maestro test` recznie, zeby zobaczyc gdzie, i rozwaz [E2E] -> [Manual].',
-        faza: numerFazy, findings: review.findings, raporty,
-      })
+      log(`Faza ${numerFazy}: tester E2E ${(review.przebieg && review.przebieg.e2eStatus) || 'padl 2x'} — scenariusze fazy na [Manual] (tester-padl), run idzie dalej`)
     }
     // Filar 3: liczniki/gate w JS z findings[]; liczniki scribe'a tylko do porownania w logu.
     const liczniki = policzFindingi(review.findings)
@@ -1316,40 +1923,42 @@ for (const numerFazy of kolejka) {
     if (przebiegFazy) {
       const skrot = skrotPrzebiegu(przebiegFazy)
       const pom = skrot.pominieci.length ? skrot.pominieci.join(',') : 'brak'
-      log(`Routing fazy ${numerFazy}: pominieci=${pom}; findingi ${przebiegFazy.znalezione}->${przebiegFazy.poDedupSem} po dedupie, obalone ${przebiegFazy.obalone}/${przebiegFazy.weryfikowane}; E2E: ${przebiegFazy.e2eStatus || 'n/a'} (${przebiegFazy.e2eCheckboxy ?? '?'} checkboxow, PASS/FAIL/SKIP ${przebiegFazy.e2ePass ?? 0}/${przebiegFazy.e2eFail ?? 0}/${przebiegFazy.e2eSkip ?? 0})`)
+      log(`Routing fazy ${numerFazy}: pominieci=${pom}; tester E2E=${skrot.e2eTryb || 'n/a'}; findingi ${przebiegFazy.znalezione}->${przebiegFazy.poDedupSem} po dedupie, obalone ${przebiegFazy.obalone}/${przebiegFazy.weryfikowane}; E2E: ${przebiegFazy.e2eStatus || 'n/a'} (${przebiegFazy.e2eCheckboxy ?? '?'} checkboxow, PASS/FAIL/SKIP ${przebiegFazy.e2ePass ?? 0}/${przebiegFazy.e2eFail ?? 0}/${przebiegFazy.e2eSkip ?? 0})`)
     }
     faza.review = 'done'
     // Metryki utrwalone w stanie — zrodlo dla telemetrii po resume (review sie wtedy nie powtarza).
     // Skrot zgodny z METRYKI_FAZY: same liczby do strojenia progow. Pelny przebieg (flagi warstw,
     // lista aktywnych) zostaje w raporcie review-faza-N.md, zeby nie puchl plik stanu.
     faza.metryki = { liczniki, przebieg: skrotPrzebiegu(przebiegFazy) }
-    faza.otwarteFindingi = otwartePoReview(review.findings)
+    faza.otwarteFindingi = polaczFindingiPoPowtorce(otwartePoReview(review.findings), findingiPrzedPowtorka)
     faza.fix = faza.otwarteFindingi.length ? 'pending' : 'none'
-    await zapiszStan()
-    dopiszEtap('review', tokEtapStart)
+    oznaczStan()
   }
 
   // 3) FIX — bez re-review; gate z self-reportu + lista findingow przekazana wprost (md tylko jako widok).
   if (faza.fix === 'pending') {
-    // Etap "fix" obejmuje agenta fixa I targeted verify P1/KOD — verify jest czescia tego samego bloku
-    // warunkowego (bramka gate'u fixa), wiec jego koszt nalezy do fixa, nie do review.
-    const tokEtapStart = tokSpent()
-    const fix = await agent(fixPrompt(sciezka, numerFazy, faza.otwarteFindingi), { schema: FIX_RESULT, label: `fix:faza-${numerFazy}` })
+    // Stan po review (fix pending) zapisuje agent fixa (P7).
+    const fix = await agent(zeStanem(fixPrompt(sciezka, numerFazy, faza.otwarteFindingi, srodowiskoE2E)), { schema: FIX_RESULT, agentType: 'klasa-naprawiacz', effort: 'high', label: `fix:faza-${numerFazy}` })
+    await potwierdzStan(fix)
     if (!fix) {
       return await stopRun({ powod: `fix fazy ${numerFazy} zwrocil null`, faza: numerFazy, raporty })
     }
     cykle = 1
-    log(`Fix fazy ${numerFazy}: naprawiono ${fix.naprawione}, nierozwiazane P1=${fix.nierozwiazaneP1} P2=${fix.nierozwiazaneP2}, walidacja ${fix.walidacja}`)
     fixInfo = { naprawione: fix.naprawione, nierozwiazaneP2: fix.nierozwiazaneP2 }
+    log(`Fix fazy ${numerFazy}: naprawiono ${fix.naprawione}, nierozwiazane P1=${fix.nierozwiazaneP1} P2=${fix.nierozwiazaneP2}, walidacja ${fix.walidacja}`)
+    if (fix.serwerE2e === 'martwy') {
+      srodowiskoE2E = 'martwe'
+      log(`Faza ${numerFazy}: serwer E2E nie wstal po padzie (fix) — scenariusze na [Manual], do nastepnej fazy (restart) tester bez przegladarki`)
+    }
 
     // Guard plikow binarnych PRZED gate'em walidacji: uszkodzony plik zrodlowy jest PRZYCZYNA,
     // a typecheck/testy failuja wtornie — na "walidacja FAIL" operator szuka defektu logiki zamiast
-    // uszkodzonego pliku. Run team-os-onboarding-instalatory (2026-07-26, repo web): surowe bajty sterujace
+    // uszkodzonego pliku. Run team-os-onboarding-instalatory (2026-07-26): surowe bajty sterujace
     // wpisane do scripts/inbox/invite.mjs zabily 6 kolejnych agentow na Read (APIError) i caly run.
     // Semantyka jak w sasiednich STOP-ach: fix zostaje 'pending', wiec swiezy run wraca wprost do fixa.
     const plikiBinarne = fix.plikiBinarne || []
     if (plikiBinarne.length) {
-      await zapiszStan()
+      oznaczStan()
       return await stopRun({
         powod: `Faza ${numerFazy}: po fixie git widzi jako BINARNE pliki, ktore powinny byc tekstem: ${plikiBinarne.join(', ')}. Najprawdopodobniej wpisano do nich SUROWE bajty sterujace zamiast sekwencji ucieczki (np. literalny U+001F zamiast \\x1f w regexie). Kazdy kolejny agent, ktory zrobi Read takiego pliku, rozlaczy sie na APIError — pipeline bedzie umieral w kolko, dopoki plik nie zostanie naprawiony.`,
         naprawa: `Napraw ${plikiBinarne.join(', ')} POZA pipelinem i NIE otwieraj ich Readem (to samo rozlaczenie dotyczy kazdej sesji): albo cofnij zmiane (\`git checkout <commit-sprzed-fixa> -- <plik>\`), albo przepisz plik od nowa z sekwencjami ucieczki (\\x00-\\x1f\\x7f-\\x9f zamiast literalnych bajtow). Potwierdz \`file <plik>\` = "... text" i \`git diff --numstat\` = liczby zamiast "-", zacommituj, potem odpal SWIEZY run (te same args, BEZ resumeFromRunId).`,
@@ -1357,9 +1966,16 @@ for (const numerFazy of kolejka) {
       })
     }
 
+    if (fix.walidacja === 'NIE-URUCHOMIONO') {
+      // Kod jest zacommitowany, tylko niesprawdzony: pusta lista przy fix=pending to dla swiezego runu faza bez pracy (fix none), wiec naprawa sie nie powtarza.
+      faza.otwarteFindingi = []
+      oznaczStan()
+      return await stopRun({ ...stopBezWalidacji(numerFazy, 'fix', fix.walidacjaPrzyczyna), faza: numerFazy, fix, raporty })
+    }
+
     if (fix.walidacja === 'FAIL' || fix.nierozwiazaneP1 > 0) {
       // Stan NIE oznacza fix=done — resume wroci wprost do fixa z ta sama lista.
-      await zapiszStan()
+      oznaczStan()
       return await stopRun({
         powod: fix.nierozwiazaneP1 > 0
           ? `Faza ${numerFazy}: ${fix.nierozwiazaneP1}x P1 nierozwiazane po fixie — wymagana reczna interwencja`
@@ -1369,65 +1985,76 @@ for (const numerFazy of kolejka) {
       })
     }
 
-    // TARGETED VERIFY po fixie (tanszy substytut usunietego re-review): kazdy P1 typu KOD
-    // z listy przekazanej fixowi dostaje 1 niezaleznego weryfikatora. Gate P1 wraca do werdyktu
-    // obiektywnego zamiast wylacznie self-reportu fixa (anty-patterny #2/#7: pozorna naprawa).
-    // P1 typu TEST/E2E pomijamy: TEST lapie walidacja (testy musza przejsc), E2E zweryfikowal fix na emulatorze.
-    const p1Kod = faza.otwarteFindingi.filter((f) => f.severity === 'P1' && f.typ === 'KOD')
-    if (p1Kod.length) {
-      const werdykty = await parallel(
-        p1Kod.map((f) => () =>
-          agent(postFixVerifyPrompt(sciezka, numerFazy, f), { schema: POSTFIX_VERDICT, label: `verify-fix:${f.plik}` })
-        )
-      )
-      // null (weryfikator padl) nie blokuje — infra hiccup to nie dowod zlej naprawy; logujemy.
-      const nadalOtwarte = p1Kod.filter((f, i) => werdykty[i] && werdykty[i].nadalOtwarty)
-      werdykty.forEach((w, i) => { if (!w) log(`verify-fix: brak werdyktu dla P1 ${p1Kod[i].plik} (agent null) — przepuszczam z ostrzezeniem`) })
-      if (nadalOtwarte.length) {
-        // Zawez liste do realnie otwartych — kolejny run wraca wprost do fixa z ta zawezona lista.
-        faza.otwarteFindingi = nadalOtwarte.map((f) => ({ ...f, opis: `[NIEZAMKNIETY po fixie] ${f.opis}` }))
-        await zapiszStan()
-        return await stopRun({
-          powod: `Faza ${numerFazy}: niezalezna weryfikacja wykryla ${nadalOtwarte.length}x P1 NADAL otwarte po fixie (self-report fixa mowil "naprawione") — wymagana reczna interwencja. Po naprawie odpal SWIEZY run.`,
-          faza: numerFazy, fix, nadalOtwarte, raporty,
-        })
+    // KONTROLA DIFFU NAPRAWCZEGO (P8): jeden agent z listami K-1…K-7 katalogu A i bramkami P6 na plikach fixa,
+    // zakres z hashy FixResult.commity. Pozycje liczy JS (K-6 z wynikow testow P1 — zastepuje dawny verify-fix).
+    // Agent padl = faza idzie dalej bez kontroli (best-effort, jak dotad).
+    const zastrzezoneFixa = pozycjeOperatora(fix.nienaprawione)
+    doDecyzjiOperatora = zastrzezoneFixa
+    const kontrola = await agent(kontrolaFixaPrompt(sciezka, numerFazy, fix.commity, faza.otwarteFindingi, zastrzezoneFixa), { schema: KONTROLA_FIXA, agentType: 'klasa-sceptyk', effort: 'medium', label: `fix:kontrola:faza-${numerFazy}` })
+    if (!kontrola) log(`Faza ${numerFazy}: kontrola diffu fixa zwrocila null — faza idzie dalej bez kontroli (best-effort)`)
+    const doPoprawki = pozycjeKontroliFixa(kontrola)
+    // JEDEN cykl poprawkowy, twardo. To kontrola wlasnej roboty pipeline'u, nie kolejna runda review —
+    // druga tura zaczelaby scigac wlasny ogon i nie da sie jej ograniczyc niczym poza licznikiem.
+    if (doPoprawki.length) {
+      log(`Faza ${numerFazy}: kontrola diffu naprawczego zwraca ${doPoprawki.length} pozycji do fixa (jeden cykl):\n  ${doPoprawki.map((p) => `[${p.zrodlo}] ${p.plik} — ${p.opis}`).join('\n  ')}`)
+      const poprawka = await agent(fixPoprawkaPrompt(sciezka, numerFazy, doPoprawki, fix.commity), { schema: FIX_RESULT, agentType: 'klasa-naprawiacz', effort: 'high', label: `fix:poprawka:faza-${numerFazy}` })
+      if (!poprawka) {
+        log(`Faza ${numerFazy}: tura poprawkowa zwrocila null — pozycje zostaja otwarte, faza idzie dalej (P3-klasa, nie bramka)`)
+      } else {
+        kontrolaFixa = podsumujKontroleFixa(doPoprawki.length, poprawka)
+        doDecyzjiOperatora = [...doDecyzjiOperatora, ...pozycjeOperatora(poprawka.nienaprawione)]
+        log(`Faza ${numerFazy}: tura poprawkowa — naprawiono ${poprawka.naprawione}/${doPoprawki.length}, walidacja ${poprawka.walidacja}${kontrolaFixa.pominiete.length ? `, pominiete z uzasadnieniem: ${kontrolaFixa.pominiete.length}` : ''}`)
+        if (kontrolaFixa.bezSladu > 0) {
+          log(`Faza ${numerFazy}: UWAGA — ${kontrolaFixa.bezSladu} pozycji kontroli diffu ani nie naprawiono, ani nie uzasadniono w nienaprawione[]. Walidacja ${poprawka.walidacja} nie mowi nic o tych pozycjach; sprawdz commit "kontrola diffu naprawczego fazy ${numerFazy}".`)
+        }
+        // Walidacja FAIL po turze poprawkowej JEST bramka: zostawilibysmy faze z niedzialajacym typecheckiem
+        // albo czerwonymi testami, a nastepna faza budowalaby na tym.
+        if (poprawka.walidacja === 'NIE-URUCHOMIONO') {
+          faza.otwarteFindingi = []
+          oznaczStan()
+          return await stopRun({ ...stopBezWalidacji(numerFazy, 'tura poprawkowa', poprawka.walidacjaPrzyczyna), faza: numerFazy, fix, poprawka, raporty })
+        }
+        if (poprawka.walidacja === 'FAIL') {
+          oznaczStan()
+          return await stopRun({
+            powod: `Faza ${numerFazy}: tura poprawkowa po kontroli diffu naprawczego zakonczyla sie walidacja FAIL — kod fazy zostal w stanie, w ktorym typecheck/testy/build nie przechodza.`,
+            naprawa: 'Sprawdz ostatni commit `fix(...): kontrola diffu naprawczego` i doprowadz walidacje do zieleni recznie, potem odpal SWIEZY run (te same args, BEZ resumeFromRunId).',
+            faza: numerFazy, fix, poprawka, raporty,
+          })
+        }
       }
-      log(`Faza ${numerFazy}: targeted verify — wszystkie ${p1Kod.length}x P1/KOD potwierdzone jako zamkniete`)
+    } else if (kontrola) {
+      log(`Faza ${numerFazy}: kontrola diffu naprawczego czysta — zero pozycji z list K-1…K-7 i bramek na plikach fixa`)
     }
 
     gateFazy = fix.nierozwiazaneP2 > 0 ? 'ZASTRZEZENIA' : 'CZYSTE'
     if (fix.nierozwiazaneP2 > 0) {
-      cykle = '1 (graceful P2)'
       log(`Faza ${numerFazy}: GRACEFUL — ${fix.nierozwiazaneP2}x P2 do known-issues, kontynuuje`)
     }
     faza.fix = 'done'
     faza.otwarteFindingi = []
-    await zapiszStan()
-    dopiszEtap('fix', tokEtapStart)
+    oznaczStan()
   } else if (faza.fix === 'none') {
     gateFazy = 'CZYSTE'
   }
 
   historia[numerFazy] = cykle
-  const tokFazy = Math.round((tokSpent() - tokFazaStart) / 1000)
-  // Delta 0 po resume = agenci fazy wrocili z journala (cache), nie "darmowa faza" — oznacz w raporcie.
-  const tokFazyOpis = tokFazy === 0 ? '0k (z cache — resume)' : `${tokFazy}k`
-  // null przechodzi przez zaokraglenie jako null — inaczej etap nieobecny w runie zlalby sie z etapem
-  // darmowym (0k) i cala atrybucja przestalaby cokolwiek rozstrzygac.
-  const naK = (v) => (v === null ? null : Math.round(v / 1000))
-  const tokenyEtapy = { execute: naK(tokEtapy.execute), review: naK(tokEtapy.review), fix: naK(tokEtapy.fix) }
-  const opisEtapow = ['execute', 'review', 'fix'].map((e) => `${e} ${tokenyEtapy[e] === null ? 'n/a' : `${tokenyEtapy[e]}k`}`).join(', ')
-  log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}, ~${tokFazyOpis} tokenow (${opisEtapow})`)
+  log(`Faza ${numerFazy}: koniec — gate ${gateFazy}, cykle ${cykle}`)
   // przebieg = metryki routingu/dedupu/verify (z review-wf albo ze stanu po resume) — dane do
   // strojenia progow: kogo routing pomija, ile dedup sklei, ile verify obala.
-  raporty.push({ faza: numerFazy, gate: gateFazy, cykle, tokeny: tokFazyOpis, tokenyEtapy, liczniki: licznikiFazy, fix: fixInfo, e2eSync: e2eSync ? `${e2eSync.status}: ${e2eSync.detal}` : 'n/a', przebieg: skrotPrzebiegu(przebiegFazy) })
+  // cykle zawsze liczba (telemetria faza.cykle); P2 zostawione przez fix sa w fix.nierozwiazaneP2 (wczesniej tekst „1 (graceful P2)” = null w telemetrii).
+  raporty.push({
+    faza: numerFazy, gate: gateFazy, cykle, liczniki: licznikiFazy, fix: fixInfo, kontrolaFixa, doDecyzjiOperatora, e2eSync: e2eSync ? `${e2eSync.status}: ${e2eSync.detal}` : 'n/a', przebieg: skrotPrzebiegu(przebiegFazy),
+    advisors: advisorsFazy ? { status: advisorsFazy.status, bledy: advisorsFazy.bledy.length, ostrzezenia: advisorsFazy.ostrzezenia.length } : null,
+  })
 }
 
 // ── Zakonczenie ──────────────────────────────────────────────────────────
 phase('Zakonczenie')
 
 if (stan.zakonczenie.walidacja === 'pending') {
-  const walidacja = await agent(finalValidationPrompt(sciezka), { schema: VALIDATION_RESULT, label: 'walidacja-koncowa' })
+  const walidacja = await agent(zeStanem(finalValidationPrompt(sciezka)), { schema: VALIDATION_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: 'walidacja-koncowa' })
+  await potwierdzStan(walidacja)
   if (!walidacja) {
     return await stopRun({ powod: 'walidacja koncowa zwrocila null', historia, raporty })
   }
@@ -1456,10 +2083,10 @@ if (stan.zakonczenie.walidacja === 'pending') {
         f.fix = 'none'
         f.otwarteFindingi = []
       }
-      await zapiszStan()
+      oznaczStan()
     }
     const naprawaE2e = e2eOtwarte.length
-      ? ` E2E: ${fazyDoPowtorki.length ? `fazy ${fazyDoPowtorki.join(', ')} cofniete do review=pending — po naprawie (srodowisko/kod) odpal SWIEZY run (te same args, BEZ resumeFromRunId): review tych faz powtorzy sie z testerem, ktory ponowi flow i odznaczy zrodlowe checkboxy po PASS.` : 'nie udalo sie ustalic faz z niezaznaczonymi [E2E] — recznie ustaw im review:"pending" w .autopilot-state.json i odpal swiezy run.'} Alternatywy: (b) recznie \`maestro test .maestro/<flow>.yaml\` na .env.e2e, przy PASS zaznacz [x] i usun suffix (SKIP/FAIL) w zadaniach + commit; (c) swiadomy opt-out: [E2E] -> [Manual] w zadaniach i planie (NIE dla linii z "(FAIL:" — to ukryloby znany defekt). Jesli canary przechodzi, a ten sam flow pada/wisi przy kazdym runie — flow prawdopodobnie dotyka natywnej powierzchni OS (picker/Alert/biometria): odpal go recznie, zeby zobaczyc gdzie, i rozwaz opt-out.`
+      ? ` E2E: ${fazyDoPowtorki.length ? `fazy ${fazyDoPowtorki.join(', ')} cofniete do review=pending — po naprawie (srodowisko/kod) odpal SWIEZY run (te same args, BEZ resumeFromRunId): review tych faz powtorzy sie z testerem, ktory ponowi flow i odznaczy zrodlowe checkboxy po PASS.` : 'nie udalo sie ustalic faz z niezaznaczonymi [E2E] — recznie ustaw im review:"pending" w .autopilot-state.json i odpal swiezy run.'} Alternatywy: (b) recznie odegraj scenariusz w przegladarce na srodowisku z .env.e2e (dev server \`--mode e2e\` + seed flow przez psql), przy PASS zaznacz [x] i usun suffix (SKIP/FAIL) w zadaniach + commit; (c) swiadomy opt-out: [E2E] -> [Manual] w zadaniach i planie (NIE dla linii z "(FAIL:" — to ukryloby znany defekt). Jesli srodowisko stoi, a ten sam flow pada/wisi przy kazdym runie — flow prawdopodobnie dotyka powierzchni poza kontrola headless (popup OAuth, natywny dialog przegladarki): odegraj go recznie, zeby zobaczyc gdzie, i rozwaz opt-out.`
       : ''
     return await stopRun({
       powod: 'walidacja koncowa FAIL',
@@ -1469,19 +2096,17 @@ if (stan.zakonczenie.walidacja === 'pending') {
   }
   stan.zakonczenie.walidacja = 'done'
   stan.walidacjaWynik = walidacja
-  await zapiszStan()
+  oznaczStan()
 }
 
-// Teardown E2E dopiero PO walidacji i tylko na sciezce sukcesu — kazdy wczesniejszy STOP
-// celowo zostawia Metro/emulator zywe (operator debuguje na gotowym srodowisku; nasz .pid
-// pozwala nastepnemu runowi przejac lub ubic proces). Swap .env.local przetrwaly po STOP jest
-// bezpieczny: .env.local.bak zostaje, a nastepny env-up wykryje "swap zastany" i cofnie go na koncu.
-if (e2eAktywne) {
-  const down = await agent(e2eEnvDownPrompt(e2eSwap), { schema: E2E_DOWN_RESULT, label: 'e2e:env-down', model: 'haiku' })
-  log(`E2E env-down: ${down ? `${down.posprzatano ? 'OK' : 'pominieto'} (swap cofniety: ${down.swapCofniety || 'n/a'}) — ${down.detal}` : 'agent zwrocil null'}`)
-  if (down && down.swapCofniety === 'blad') {
-    log('OSTRZEZENIE: rollback swapu .env.local NIE powiodl sie — sprawdz recznie (przywroc .env.local z .env.local.bak). .env.local moze wciaz celowac w e2e.')
-  }
+// Teardown E2E dopiero PO walidacji i tylko na sciezce sukcesu — kazdy wczesniejszy STOP celowo zostawia serwer
+// zywy (operator debuguje na gotowym srodowisku; plik PID pozwala nastepnemu runowi przejac lub ubic proces).
+// Serwer uruchomiony przez start albo restart fazy sprzatamy takze po awarii w trakcie runu (srodowisko 'martwe').
+// Przegladarka biegnie tylko przy serwerze pipeline'u (P19), wiec tu sprzatamy tez zrzuty z korzenia repo (P22 A3).
+if (serwerNasz) {
+  const down = await agent(zeStanem(e2eEnvDownPrompt(sciezka)), { schema: E2E_DOWN_RESULT, agentType: 'klasa-mechaniczny', label: 'e2e:env-down' })
+  await potwierdzStan(down)
+  log(`E2E env-down: ${down ? `${down.posprzatano ? 'OK' : 'pominieto'} — ${down.detal}` : 'agent zwrocil null'}`)
 }
 
 // Compound PRZED complete: dokumentuje solutions gdy sciezki w docs/active/ jeszcze zyja.
@@ -1495,13 +2120,23 @@ const REFRESH_RESULT = {
     przejrzano: { type: 'number', description: 'liczba dokumentow w waskim scope' },
     akcje: { type: 'array', items: { type: 'string' }, description: 'wykonane akcje (Keep/Update/Replace/Archive/dedup CONCEPTS)' },
     slownik: { type: 'string', enum: ['posprzatany', 'bez zmian', 'brak pliku'] },
-    // Refresh EDYTUJE istniejace dokumenty bazy wiedzy (w audytowanym runie web zmodyfikowal siostrzany
+    // Refresh EDYTUJE istniejace dokumenty bazy wiedzy (w audytowanym runie zmodyfikowal siostrzany
     // solution), a nikt tych zmian nie commitowal — razem z artefaktami compound zostawaly w drzewie
     // i blokowaly bramke bootstrapu nastepnego runu. W required z tego samego powodu co plikiBinarne:
     // brak commita musi byc jawny, pole opcjonalne = agent cicho pomija commit.
     commit: { type: 'string', description: 'hash commita zmian bazy wiedzy ("" gdy nic nie zmieniono albo commit sie nie udal)' },
+    indeks: { type: 'string', enum: ['zapisany', 'bramka', 'bez zmian'], description: 'wynik `wiedza.mjs indeks --zapisz` po akcjach: zapisany / bramka (zapisany=false) / bez zmian (nie uruchomiony)' },
+    stanZapisany: POLE_STANU,
   },
-  required: ['przejrzano', 'slownik', 'commit'],
+  required: ['przejrzano', 'slownik', 'commit', 'indeks', 'stanZapisany'],
+}
+
+// Pelny indeks wiedzy (P10, 6a pkt 60 g3a): waski refresh nie porzadkuje indeksu pod limit (w smoke'u P10 skrocil regule —
+// utrata tresci), wiec bramka z compoundu idzie do operatora zdaniem w wyniku runu. Kopia zdania w dev-pr-wf.js (test rownosci).
+const INDEKS_PELNY = 'Indeks wiedzy pelny — uruchom /dev-compound-refresh (pelny przeglad)'
+function uwagaIndeksu(compound, refresh) {
+  if (!compound || compound.indeks !== 'bramka') return ''
+  return refresh && refresh.indeks === 'zapisany' ? '' : INDEKS_PELNY
 }
 
 const refreshPrompt = (plik, kategoria) =>
@@ -1511,43 +2146,243 @@ Wykonaj skill .claude/skills/dev-compound-refresh/SKILL.md w TRYBIE AUTONOMICZNY
 - NIE przegladaj calej bazy docs/solutions/ — tylko ten waski scope (routing "Skupiony", 1-2 dokumenty).
 - Cel: czy nowy solution (${plik}) podwaza/zastepuje siostrzany dokument w tej kategorii; dedup i weryfikacja hasel w docs/CONCEPTS.md; napraw nieaktualne referencje.
 - Wykonuj bezpieczne akcje (Keep/Update/Archive/Replace gdy dowody wystarczajace); niejednoznaczne oznacz stale. Best-effort — nie blokuj.
-- PO wykonaniu akcji ZACOMMITUJ zmienione dokumenty bazy wiedzy. Kto zapisuje, ten commituje: niezacommitowane
-  artefakty bazy wiedzy zostawiaja brudne drzewo, a to blokuje bramke bootstrapu nastepnego runu autopilota
-  (STOP "niezacommitowane zmiany").
-  Staguj WYLACZNIE po whiteliscie: \`git add docs/solutions/ docs/CONCEPTS.md .claude/rules/learned-patterns.md\`
+- Subagentow nie uruchamiasz: zakres to 1-2 dokumenty, wiec badanie i dokument zastepczy (Replace) piszesz sam.
+- Indeks wiedzy: \`node .claude/scripts/wiedza/wiedza.mjs indeks --zapisz\` po akcjach (Faza 1.7 skilla).
+  Bramka rozmiaru indeksu (\`indeks: ... zn, limit\`): tresci regul nie skracasz, nie scalasz i nie archiwizujesz solutions pod limit —
+  to zadanie pelnego przegladu, ktory uruchamia operator; zwroc indeks="bramka". Skrocona regula traci tresc, ktora dostaja buildery.
+- PO wykonaniu akcji ZACOMMITUJ zmienione dokumenty bazy wiedzy. Kto zapisuje, ten commituje: dwa runy
+  z rzedu zostawily artefakty bazy wiedzy niezacommitowane, a brudne drzewo blokuje bramke bootstrapu
+  nastepnego runu autopilota (STOP "niezacommitowane zmiany").
+  Staguj po whiteliscie: \`git add docs/solutions/ docs/CONCEPTS.md docs/learned-patterns.md\`
   (pomin sciezki, ktorych nie ma na dysku). ZAKAZ \`git add -A\` i \`git add .\`.
   Message: \`docs(solutions): odswiezenie bazy wiedzy — <co zmieniono>\`.
   Gdy nie zmieniles zadnego pliku albo commit sie nie udal — zwroc commit: "" i nie przerywaj.
 Zwroc obiekt zgodny ze schematem RefreshResult (commit = hash commita lub "").`
 
-// `compound` jest zadeklarowany na gorze pliku (czyta go telemetria, takze na sciezkach STOP).
+// `compound` jest zadeklarowany na gorze pliku razem z reszta stanu runu (czyta go wynik runu na koncu).
 let refresh = null
 if (stan.zakonczenie.compound === 'pending') {
+  await zapiszZaleglyStan()
   compound = await workflow('dev-compound-wf', { sciezka })
+  // compound=done przed refreshem (P7): stan zapisuje refresh; bez refresha — zapis zalegly przed complete-wf.
+  stan.zakonczenie.compound = 'done'
+  oznaczStan()
   // Scoped refresh ZARAZ po compound — dedup/prune bazy dla dotknietej kategorii + CONCEPTS.md.
   // Odpala sie tylko gdy compound cos zapisal (compound.plik != null). Best-effort: nie blokuje complete.
   if (compound && compound.plik) {
-    refresh = await agent(refreshPrompt(compound.plik, compound.kategoria), { schema: REFRESH_RESULT, label: 'compound-refresh' })
-    log(`Compound-refresh (scoped): ${refresh ? `${refresh.przejrzano} dok., slownik=${refresh.slownik}` : 'agent zwrocil null'}`)
+    refresh = await agent(zeStanem(refreshPrompt(compound.plik, compound.kategoria)), { schema: REFRESH_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: 'compound-refresh' })
+    await potwierdzStan(refresh)
+    log(`Compound-refresh (scoped): ${refresh ? `${refresh.przejrzano} dok., slownik=${refresh.slownik}, commit=${refresh.commit || 'brak'}` : 'agent zwrocil null'}`)
   }
-  stan.zakonczenie.compound = 'done'
-  await zapiszStan()
 }
 
+// ── Ogrodnik (P15) ───────────────────────────────────────────────────────
+// Obejscie z zadania N wchodzi do dossier N+1 jako „istniejacy wzorzec” — pomiar skryptem na zamknieciu zadania,
+// agent oceny tylko przy przyroscie albo co N pomiarow (decyzja skryptu, .claude/scripts/ogrod/prog.mjs). Obaj agenci
+// bez narzedzi edycji: propozycje ida do operatora sekcja „Ogrod” podsumowania, kod zostaje bez zmian.
+// Kopia KATEGORIE i OPISY z .claude/scripts/ogrod/kategorie.mjs (workflowy sa self-contained) — test rownosci w ogrod.test.mjs.
+const OGROD_KATEGORIE = ['wyciszenia', 'any', 'rzutowania', 'komentarze', 'pusty_catch']
+const OGROD_OPISY = {
+  wyciszenia: 'wyciszenia lint/TS',
+  any: 'any',
+  rzutowania: 'wymuszone rzutowania',
+  komentarze: 'komentarze-obejscia',
+  pusty_catch: 'puste catch',
+}
+const OGROD_SZCZEBLE = ['regula-lint', 'zadanie-sprzatajace', 'zostawic']
+const OGROD_LIMIT_NOWYCH_W_SEKCJI = 10
+const OGROD_LIMIT_PROPOZYCJI = 5
+
+// Agent pomiaru przepisuje stdout skryptu jako tekst, JSON parsuje orkiestrator — haiku nie przepisuje pol po jednym.
+const OGROD_POMIAR = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    kod: { type: 'integer', description: 'kod wyjscia skryptu' },
+    stdout: { type: 'string', description: 'stdout skryptu doslownie (jedna linia JSON)' },
+    stderr: { type: 'string', description: 'stderr skryptu ("" gdy pusty)' },
+  },
+  required: ['kod', 'stdout', 'stderr'],
+}
+
+const OGROD_OCENA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    propozycje: {
+      type: 'array',
+      maxItems: OGROD_LIMIT_PROPOZYCJI,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          wzorzec: { type: 'string', description: 'co agenci skopiuja, jednym zdaniem' },
+          kategoria: { type: 'string', enum: OGROD_KATEGORIE },
+          miejsca: { type: 'array', items: { type: 'string' }, maxItems: 5, description: 'plik:linia' },
+          szczebel: { type: 'string', enum: OGROD_SZCZEBLE },
+          regula: { type: 'string', description: 'regula ESLint/TS dla szczebla regula-lint ("" dla pozostalych)' },
+          doPosprzatania: { type: 'integer', description: 'liczba istniejacych miejsc, ktore regula zglosi' },
+          uzasadnienie: { type: 'string' },
+        },
+        required: ['wzorzec', 'kategoria', 'miejsca', 'szczebel', 'regula', 'doPosprzatania', 'uzasadnienie'],
+      },
+    },
+  },
+  required: ['propozycje'],
+}
+
+// --zadanie: poprzedni pomiar to rekord innego zadania (swiezy run po nieudanej archiwizacji nie porownuje sie z soba).
+function ogrodPomiarPolecenie(nazwaZadania) {
+  return `node .claude/scripts/ogrod/ogrod.mjs pomiar --zadanie '${nazwaZadania}'`
+}
+
+function ogrodPomiarPrompt(nazwaZadania) {
+  return `Uruchom w korzeniu repo (Bash), dokladnie jedno polecenie:
+${ogrodPomiarPolecenie(nazwaZadania)}
+Zwroc kod wyjscia, stdout doslownie (jedna linia JSON, bez skracania i formatowania) i stderr.
+Innych polecen nie uruchamiasz.`
+}
+
+// Kazde pole, ktore czytaja sekcja i rekord: agent przepisujacy stdout moze go skrocic, a wyjatek tutaj zatrzymalby archiwizacje.
+function pomiarKompletny(dane) {
+  const d = dane.decyzja
+  const liczby = (x) => Boolean(x) && OGROD_KATEGORIE.every((k) => Number.isInteger(x[k]))
+  return liczby(dane.liczby) && Boolean(d) && liczby(d.przyrost) && typeof d.ocena === 'boolean' && typeof d.powod === 'string'
+    && ['telemetria', 'diff'].includes(d.zrodlo) && Number.isInteger(d.bez_oceny) && Number.isInteger(dane.plikow)
+    && Number.isInteger(dane.noweRazem) && Array.isArray(dane.nowe) && Array.isArray(dane.hotspoty) && typeof dane.commit === 'string'
+}
+
+/**
+ * Wynik agenta pomiaru -> pomiar skryptu albo blad (stdout z polem `blad`, kod != 0, zly JSON, agent null).
+ * @returns {{ pomiar: object | null, blad: string }}
+ */
+function pomiarZWyniku(wynik) {
+  if (!wynik) return { pomiar: null, blad: 'agent pomiaru zwrocil null' }
+  let dane
+  try {
+    dane = JSON.parse(wynik.stdout)
+  } catch (e) {
+    return { pomiar: null, blad: `stdout skryptu nie jest JSON (kod ${wynik.kod}): ${e.message}` }
+  }
+  if (wynik.kod !== 0 || !dane || dane.blad) return { pomiar: null, blad: (dane && dane.blad) || wynik.stderr || `kod ${wynik.kod}` }
+  return pomiarKompletny(dane) ? { pomiar: dane, blad: '' } : { pomiar: null, blad: 'wynik skryptu bez kompletu pol' }
+}
+
+function ogrodOcenaPrompt(pomiar) {
+  const wejscie = { liczby: pomiar.liczby, przyrost: pomiar.decyzja.przyrost, powod: pomiar.decyzja.powod, nowe: pomiar.nowe, hotspoty: pomiar.hotspoty }
+  return `Jestes ogrodnikiem projektu: oceniasz wzorce w kodzie, ktore kolejne zadania agentow skopiuja jako „istniejacy wzorzec”.
+Pomiar skryptu (caly projekt; „nowe” = wystapienia w liniach dodanych przez to zadanie, „hotspoty” = pliki z najwieksza liczba wystapien):
+${JSON.stringify(wejscie)}
+
+Powod oceny: ${pomiar.decyzja.powod}.
+1. Pogrupuj wystapienia w wzorce (ten sam rodzaj obejscia). Dla kazdego wzorca przeczytaj kod w miejscach (Read, okolo 10 linii wokol).
+2. Wzorzec uzasadniony (dyrektywa z opisem przyczyny w bibliotece zewnetrznej, @ts-expect-error w tescie typu, catch opisany i celowy)
+   dostaje szczebel "zostawic". Pozostale:
+   - "regula-lint": regula ESLint/TS zatrzyma nowe wystapienia; wchodzi razem z posprzataniem istniejacych miejsc, ktore zglosi
+     (liczbe podaj w doPosprzatania: Grep po wzorcu w projekcie, bez node_modules, dist i .claude/);
+   - "zadanie-sprzatajace": wzorzec do usuniecia, ale miejsc za duzo albo zmiana za ryzykowna na regule teraz.
+3. Najwyzej ${OGROD_LIMIT_PROPOZYCJI} propozycji, najwazniejsze najpierw (nowe w zadaniu przed zastanymi). Bez wzorcow do zgloszenia — pusta lista.
+Kodu nie zmieniasz i nie uruchamiasz polecen, ktore zmieniaja pliki: decyzje podejmuje operator po przeczytaniu propozycji.
+Zwroc obiekt zgodny ze schematem.`
+}
+
+const OGROD_OPIS_SZCZEBLA = {
+  'regula-lint': 'reguła lint teraz',
+  'zadanie-sprzatajace': 'zadanie sprzątające',
+  zostawic: 'zostawić',
+}
+
+/** @returns {string} sekcja markdown do podsumowania zadania (dosłownie). */
+function sekcjaOgrodu(pomiar, blad, ocena) {
+  if (!pomiar) {
+    return `## Ogród\n\nPomiar nie powstał: ${blad}. Ręcznie: \`node .claude/scripts/ogrod/ogrod.mjs pomiar\`.\n`
+  }
+  const d = pomiar.decyzja
+  const odniesienie = d.zrodlo === 'telemetria' ? 'względem poprzedniego zadania' : 'w liniach dodanych przez to zadanie (pierwszy pomiar w projekcie)'
+  const znak = (n) => (n > 0 ? `+${n}` : String(n))
+  const linie = [
+    '## Ogród', '',
+    `Pomiar całego projektu (${pomiar.plikow} plików JS/TS, commit ${pomiar.commit || 'brak'}); w nawiasie przyrost ${odniesienie}:`,
+    ...OGROD_KATEGORIE.map((k) => `- ${OGROD_OPISY[k]}: ${pomiar.liczby[k]} (${znak(d.przyrost[k])})`),
+    '',
+  ]
+  if (pomiar.noweRazem) {
+    const lista = pomiar.nowe.slice(0, OGROD_LIMIT_NOWYCH_W_SEKCJI).map((w) => `\`${w.plik}:${w.linia}\` (${OGROD_OPISY[w.kategoria] || w.kategoria})`)
+    const reszta = pomiar.noweRazem - lista.length
+    linie.push(`Nowe w tym zadaniu (${pomiar.noweRazem}): ${lista.join(', ')}${reszta > 0 ? ` i ${reszta} więcej` : ''}.`, '')
+  }
+  if (!d.ocena) {
+    linie.push(`Bez oceny — ${d.powod}.`)
+  } else if (!ocena) {
+    linie.push(`Ocena: ${d.powod}. Agent oceny nie zwrócił wyniku — propozycji brak; pomiar jest wyżej.`)
+  } else if (!ocena.propozycje.length) {
+    linie.push(`Ocena: ${d.powod}. Wynik: brak wzorców do zgłoszenia.`)
+  } else {
+    linie.push(`Ocena: ${d.powod}.`, '', '### Propozycje do decyzji operatora', '')
+    for (const p of ocena.propozycje) {
+      const regula = p.szczebel === 'regula-lint' ? ` (\`${p.regula}\`, z posprzątaniem ${p.doPosprzatania} miejsc)` : ''
+      linie.push(`- [ ] **${p.wzorzec}** — ${OGROD_OPIS_SZCZEBLA[p.szczebel]}${regula}. ${p.uzasadnienie} Miejsca: ${p.miejsca.map((m) => `\`${m}\``).join(', ')}.`)
+    }
+  }
+  linie.push('', 'Ogrodnik niczego nie zmienił w kodzie — każda propozycja czeka na decyzję operatora.')
+  return `${linie.join('\n')}\n`
+}
+
+/** Rekord `ogrod` wyniku runu (telemetria run.ogrod; skrypt czyta z niego liczby i licznik nastepnego pomiaru). */
+function rekordOgrodu(pomiar, blad, ocena) {
+  if (!pomiar) return { status: 'blad', powod: blad }
+  const szczeble = Object.fromEntries(OGROD_SZCZEBLE.map((s) => [s.replace(/-/g, '_'), 0]))
+  for (const p of (ocena && ocena.propozycje) || []) szczeble[p.szczebel.replace(/-/g, '_')]++
+  return {
+    status: 'ok',
+    commit: pomiar.commit,
+    plikow: pomiar.plikow,
+    liczby: pomiar.liczby,
+    przyrost: pomiar.decyzja.przyrost,
+    zrodlo: pomiar.decyzja.zrodlo,
+    powod: pomiar.decyzja.powod,
+    nowe: pomiar.noweRazem,
+    // Agent oceny null = ocena sie nie odbyla: licznik bez zerowania, przeglad okresowy wroci w nastepnym pomiarze.
+    ocena: Boolean(pomiar.decyzja.ocena && ocena),
+    bez_oceny: pomiar.decyzja.ocena && ocena ? 0 : pomiar.decyzja.bez_oceny,
+    propozycje: ocena ? ocena.propozycje.length : 0,
+    szczeble,
+  }
+}
+
+async function ogrodnik(nazwaZadania) {
+  const wynik = await agent(ogrodPomiarPrompt(nazwaZadania), { schema: OGROD_POMIAR, agentType: 'klasa-mechaniczny-pomiar', label: 'ogrod:pomiar' })
+  const { pomiar, blad } = pomiarZWyniku(wynik)
+  const ocena = pomiar && pomiar.decyzja.ocena
+    ? await agent(ogrodOcenaPrompt(pomiar), { schema: OGROD_OCENA, agentType: 'klasa-sceptyk', effort: 'medium', label: 'ogrod:ocena' })
+    : null
+  const rekord = rekordOgrodu(pomiar, blad, ocena)
+  log(pomiar
+    ? `Ogrod: ${OGROD_KATEGORIE.map((k) => `${k}=${pomiar.liczby[k]}`).join(', ')}; ${pomiar.decyzja.powod}${rekord.ocena ? `; propozycje: ${rekord.propozycje}` : ''}`
+    : `UWAGA: ogrod — pomiar nie powstal (${blad}); archiwizacja idzie dalej`)
+  return { sekcja: sekcjaOgrodu(pomiar, blad, ocena), rekord }
+}
+// ── Koniec ogrodnika ─────────────────────────────────────────────────────
+
 let complete = null
+let ogrod = null
 if (stan.zakonczenie.complete === 'pending') {
-  // Wyjscia compound/refresh (solution, regula, slownik) nikt inny nie commituje — complete-wf dostaje je jako
-  // dodatkowy pathspec, inaczej run konczy sie OK z brudnym drzewem i nastepny bootstrap STOP-uje.
-  // Katalogowo, nie punktowo: compound-refresh edytuje TAKZE siostrzane solutions (Update/Replace/Archive ->
-  // docs/solutions/_archived/), CONCEPTS.md i learned-patterns.md niezaleznie od pol CompoundResult, a nie
+  // Wyjscia compound/refresh (solution, regula, slownik) — complete-wf dostaje je jako dodatkowy pathspec.
+  // Refresh sam commituje po whiteliscie (patrz refreshPrompt), ale to best-effort: gdy jego commit sie nie
+  // uda (albo compound nie domknie swojego), run konczylby sie OK z brudnym drzewem i nastepny bootstrap
+  // STOP-owalby. Katalogowo, nie punktowo: refresh edytuje TAKZE siostrzane solutions (Update/Replace/Archive ->
+  // docs/solutions/_archived/), CONCEPTS.md i indeks docs/learned-patterns.md niezaleznie od pol CompoundResult, a nie
   // raportuje sciezek. Bootstrap gwarantuje czyste drzewo na starcie, wiec wszystko brudne pod tymi sciezkami
   // pochodzi z tego runu. complete-wf pomija sciezki nieistniejace (krok 8), wiec brak katalogu nie szkodzi.
   const dodatkowePathspec = compound
-    ? ['docs/solutions', 'docs/CONCEPTS.md', '.claude/rules/learned-patterns.md']
+    ? ['docs/solutions', 'docs/CONCEPTS.md', 'docs/learned-patterns.md']
     : []
-  complete = await workflow('dev-docs-complete-wf', { nazwaZadania: stan.nazwaZadania, dodatkowePathspec })
+  // Ogrodnik po compound-refresh, przed archiwizacja: sekcja „Ogrod” idzie do podsumowania zadania (complete-wf, krok 4).
+  ogrod = await ogrodnik(stan.nazwaZadania)
+  await zapiszZaleglyStan()
+  complete = await workflow('dev-docs-complete-wf', { nazwaZadania: stan.nazwaZadania, dodatkowePathspec, sekcjaOgrodu: ogrod.sekcja })
   if (complete && (!complete.archiwum || !complete.commit)) {
-    log(`UWAGA: archiwizacja NIE domknieta (archiwum=${complete.archiwum || 'brak'}, commit=${complete.commit || 'brak'}): ${[...(complete.aktualizacje || []), ...(complete.rezultaty || [])].join('; ') || 'bez szczegolow'} — zadanie moglo zostac w docs/active/, sprawdz git status`)
+    log(`UWAGA: archiwizacja NIE domknieta (archiwum=${complete.archiwum || 'brak'}, commit=${complete.commit || 'brak'}): ${(complete.rezultaty || []).join('; ') || 'bez szczegolow'} — zadanie moglo zostac w docs/active/, sprawdz git status`)
   }
   // Smoke operatora (dokument #2 dla czlowieka) powstaje w complete-wf z sekcji "Operator checklist faza N",
   // [Manual] i findingow OPERATOR — to jest lista "co sprawdzic recznie po zielonym automacie".
@@ -1566,28 +2401,33 @@ if (stan.zakonczenie.complete === 'pending') {
   }
 }
 
-const tokRazem = Math.round((tokSpent() - tokRunStart) / 1000)
-log(`Autopilot koniec: ${kolejka.length} faz, ~${tokRazem}k tokenow lacznie`)
-
-// TELEMETRIA sciezki sukcesu — sama funkcja (z komentarzem o zakresie danych) siedzi na gorze pliku,
-// bo od 2026-08-08 wolaja ja takze wszystkie sciezki STOP przez stopRun().
-await zapiszTelemetrie('OK', null)
+if (uwagaIndeksu(compound, refresh)) log(uwagaIndeksu(compound, refresh))
+log(`Autopilot koniec: ${kolejka.length} faz w tym runie, ${fazyUkonczone(stan.fazy)}/${stan.fazy.length} domknietych w zadaniu (koszt runu: raport telemetrii — .claude/scripts/telemetria/raport.mjs)`)
 
 return {
   status: 'OK',
   nazwaZadania: stan.nazwaZadania,
-  fazyUkonczone: kolejka.length,
-  tokeny: `${tokRazem}k`,
+  fazyUkonczone: fazyUkonczone(stan.fazy),
+  fazyWRunie: kolejka.length,
   historia,
   raporty,
   walidacja: stan.walidacjaWynik || 'done w poprzednim runie',
-  e2eSrodowisko: e2eEnv ? e2eEnv.status : 'brak',
+  e2eSrodowisko: e2eTrwaleMartwe ? 'martwe' : e2eBylaPrzegladarka ? 'gotowe' : srodowiskoE2E,
   archiwum: complete && complete.archiwum,
   archiwumCommit: (complete && complete.commit) || '',
+  // Plik decyzji i rozmiar PR (P4) — UWAGA, nie STOP: operator decyduje o podziale PR-a.
+  uwagiArchiwum: (complete && complete.uwagi) || [],
+  nastepneKroki: nastepneKroki({ smoke: (complete && complete.smokeOperatora) || '', raporty, propozycjeBramek: (compound && compound.propozycjeBramek) || [], czesci: !!(complete && complete.czesciPr), zadanie: stan.nazwaZadania }),
   smokeOperatora: (complete && complete.smokeOperatora) || '',
   smokeStatus: complete ? (complete.smokeStatus || 'brak-pola') : (stan.zakonczenie.complete === 'done' ? 'done-w-poprzednim-runie' : 'complete-null'),
   archiwizacjaStatus: complete ? (complete.archiwum && complete.commit ? 'ok' : 'niedomknieta') : (stan.zakonczenie.complete === 'done' ? 'done-w-poprzednim-runie' : 'complete-null'),
   solution: compound && compound.plik,
-  regula: compound && compound.regula,
+  wiedza: compound && compound.wiedza,
+  indeks: compound && compound.indeks,
+  // Szczebel kod/lint z compoundu (P10): propozycje bramek do decyzji operatora — do wdrozenia bramki ida do indeksu jak regula.
+  propozycjeBramek: (compound && compound.propozycjeBramek) || [],
+  uwagaIndeksu: uwagaIndeksu(compound, refresh),
   refresh: refresh ? refresh.slownik : 'pominieto',
+  // Pomiar ogrodnika (P15) — telemetria run.ogrod; null, gdy archiwizacja byla w poprzednim runie.
+  ogrod: ogrod ? ogrod.rekord : null,
 }

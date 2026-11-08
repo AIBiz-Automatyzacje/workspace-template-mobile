@@ -1,866 +1,365 @@
 ---
 name: dev-plan
-description: "Planowanie techniczne implementacji z Implementation Units."
+description: "Planowanie techniczne z Implementation Units i przygotowanie zadania dla autopilota: plan w docs/plans/, branch feature/<zadanie>, docs/active/<zadanie>/ ze skryptu, bramka gotowości i gotowe polecenie dev-autopilot-wf."
 argument-hint: "[opcjonalnie: ścieżka do requirements doc lub opis feature'a]"
 ---
 
-# Stwórz plan techniczny
+# dev-plan — od wymagań do zadania dla autopilota
 
-**Uwaga: Aktualny rok to 2026.** Używaj tego przy datowaniu planów i wyszukiwaniu dokumentacji.
+Datę do planów bierz z `date +%F`; jej rok podawaj w zapytaniach o aktualną dokumentację.
 
-`/dev-brainstorm` (opcjonalny — tylko gdy wymagania nie istnieją) definiuje **CO** budować. `/dev-plan` definiuje **JAK** to zbudować. `/dev-docs` tnie plan na fazy i zadania w `docs/active/`, a `dev-autopilot-wf` je wykonuje.
+`/dev-brainstorm` (opcjonalny) ustala **CO** budować, `/dev-prep` — co człowiek dostarcza poza kodem. `/dev-plan` ustala **JAK**: pisze plan techniczny z fazami i Implementation Units (IU), a potem sam zamienia go w zadanie dla autopilota — branch `feature/<zadanie>`, pliki `docs/active/<zadanie>/` generowane skryptem `.claude/scripts/plan/plan.mjs`, bramka gotowości i gotowe wywołanie `dev-autopilot-wf`.
 
-Ten workflow produkuje trwały plan implementacji. **Nie** implementuje kodu, nie uruchamia testów, nie uczy się z wyników runtime'u. Jeśli odpowiedź zależy od zmiany kodu i zobaczenia co się stanie, to należy do fazy wykonania (autopilot / `/dev-docs-execute`), nie tutaj.
+Skill nie pisze kodu i nie uruchamia testów aplikacji. Pytania, na które odpowiada dopiero zmiana kodu i obserwacja skutku, zapisujesz w planie jako odroczone do implementacji.
 
-Plan jest **jedynym** źródłem treści dla `/dev-docs` — to, czego nie ma w planie (fazy, pliki, scenariusze, wymagania wstępne operatora), nie pojawi się w zadaniach autopilota.
+Plan techniczny jest jedynym źródłem treści zadania: builder dostaje jednostkę z planu, a generator przepisuje do `docs/active/` tylko strukturę (fazy, pliki, scenariusze, weryfikacje). Czego nie ma w planie, tego autopilot nie zrobi.
 
 ## Metoda interakcji
 
-Używaj narzędzia pytań platformy gdy dostępne. Przy zadawaniu pytań użytkownikowi preferuj blokujące narzędzie pytań platformy (`AskUserQuestion` w Claude Code). W przeciwnym razie prezentuj numerowane opcje w chacie i czekaj na odpowiedź.
-
-Zadawaj jedno pytanie na raz. Preferuj zwięzły single-select gdy istnieją naturalne opcje.
+Pytania zadawaj narzędziem `AskUserQuestion`, jedno naraz, z opcjami single-select, gdy istnieją naturalne odpowiedzi. Bez tego narzędzia — numerowane opcje w czacie i czekanie na odpowiedź.
 
 ## Opis feature'a
 
 <feature_description> #$ARGUMENTS </feature_description>
 
-**Jeśli opis powyżej jest pusty:** przeszukaj `docs/brainstorms/` w poszukiwaniu plików `*-requirements.md`. Jeśli znajdziesz relevantny dokument, użyj go jako inputu. Jeśli nie znajdziesz, zapytaj: "Co chciałbyś zaplanować? Opisz feature, bug fix lub usprawnienie."
+Pusty opis → szukaj `docs/brainstorms/*-requirements.md` (0.2). Nic trafnego → zapytaj: „Co chciałbyś zaplanować? Opisz feature, bug fix lub usprawnienie.” Bez jasnego wejścia nie planujesz.
 
-Nie kontynuuj dopóki nie masz jasnego inputu do planowania.
+Jeśli istnieje `docs/CONCEPTS.md`, przeczytaj go na starcie: to słownik pojęć projektu. Używaj jego terminów w planie i nie planuj zmian sprzecznych z definicjami (np. „naprawy” statusu, który celowo działa nietypowo).
 
-**Słownik domenowy:** jeśli istnieje `docs/CONCEPTS.md`, przeczytaj go najpierw — to glosariusz pojęć o projektowo-specyficznym znaczeniu. Używaj tej terminologii w planie i NIE planuj zmian sprzecznych z definicjami (np. „naprawy" statusu, który celowo działa nietypowo).
+## Zasady planu
 
-## Główne zasady
+1. **Wymagania są źródłem prawdy** — plan realizuje dokument źródłowy, nie wymyśla zachowań produktu od nowa.
+2. **Decyzje, nie kod** — zapisujesz podejście, granice, pliki, zależności, ryzyka i scenariusze testowe; bez kodu implementacji i receptur komend. Wyjątek: pole Weryfikacja ma komendę w backtickach (3.4), bo scribe review ją uruchamia.
+3. **Research przed strukturą** — kontekst repo, wiedza projektu i (gdy uzasadnione) dokumentacja zewnętrzna, zanim ułożysz IU.
+4. **Rozmiar planu do pracy** — mała praca dostaje kompaktowy plan, duża więcej struktury; granica planowanie/wykonanie ta sama.
+5. **Rozmiar pliku rozstrzygasz w planie** — tabela plików IU podaje długość pliku dziś i po zmianie; plik, który przekroczy próg, dostaje wydzielenie modułu w planie, a nie uwagę bota w PR.
+6. **Postawa wykonawcza lekkim sygnałem** — test-first albo characterization-first wynikające z wymagań lub kruchego obszaru zaznaczasz `Notatką wykonawczą` w IU, bez choreografii RED/GREEN/REFACTOR.
 
-1. **Używaj wymagań jako źródła prawdy** — jeśli `/dev-brainstorm` wyprodukował requirements doc, planowanie powinno na nim bazować zamiast wymyślać zachowania od nowa.
-2. **Decyzje, nie kod** — zapisuj podejście, granice, pliki, zależności, ryzyka i scenariusze testowe. Nie pisz kodu implementacji ani sekwencji komend shellowych.
-3. **Research przed strukturowaniem** — eksploruj codebase, wiedzę instytucjonalną i guidance zewnętrzny gdy jest to uzasadnione, zanim sfinalizujesz plan.
-4. **Dopasuj rozmiar artefaktu** — mała praca dostaje kompaktowy plan. Duża praca dostaje więcej struktury. Filozofia pozostaje ta sama na każdym poziomie.
-5. **Oddziel planowanie od odkryć wykonawczych** — rozwiązuj pytania planistyczne tutaj. Explicite odraczaj niewiadome wykonawcze do implementacji.
-6. **Plan musi być przenośny** — plan powinien działać jako żywy dokument, artefakt do review lub ciało issue bez osadzania instrukcji specyficznych dla narzędzi.
-7. **Lekko sygnalizuj postawę wykonawczą gdy to ma znaczenie** — jeśli request, dokument źródłowy lub kontekst repo jasno implikują test-first, characterization-first lub inną niestandardową postawę wykonawczą, odzwierciedl to w planie jako lekki sygnał. Nie zamieniaj planu w krok-po-kroku choreografię wykonania.
-
-## Pasek jakości planu
-
-Każdy plan powinien zawierać:
-- Jasne ujęcie problemu i granicę scope'u
-- Konkretną traceability wymagań z powrotem do requestu lub dokumentu źródłowego
-- Dokładne ścieżki plików dla proponowanej pracy
-- Explicite ścieżki plików testowych dla feature-bearing implementation units
-- Decyzje z uzasadnieniem, nie tylko zadania
-- Istniejące wzorce lub referencje do kodu do naśladowania
-- Konkretne scenariusze testowe i oczekiwane wyniki weryfikacji
-- Jasne zależności i sekwencjonowanie
-
-Plan jest gotowy gdy implementator może zacząć pewnie bez potrzeby żeby plan pisał za niego kod.
+Plan jest gotowy, gdy implementator zaczyna pewnie bez dopisywania planu za ciebie: ujęcie problemu i granice, traceability wymagań, dokładne ścieżki plików (z testami), decyzje z uzasadnieniem, wzorce do naśladowania, konkretne scenariusze testowe, zależności i kolejność.
 
 ## Przebieg
 
-### Faza 0: Wznowienie, źródło i scope
+### Faza 0: Wejście, źródło i głębokość
 
-#### 0.1 Wznów istniejącą pracę nad planem gdy to sensowne
+#### 0.0 Świeża sesja
 
-Jeśli użytkownik odnosi się do istniejącego pliku planu lub istnieje oczywisty niedawny pasujący plan w `docs/plans/`:
-- Przeczytaj go
-- Potwierdź czy aktualizować go w miejscu czy stworzyć nowy plan
-- Przy aktualizacji: zachowaj zaznaczone checkboxy i zrewiduj tylko wciąż relevantne sekcje
+`/dev-plan` zaczynasz w świeżej sesji. Gdy przed wywołaniem w tej sesji była inna praca (`/dev-prep`, makiety, research, analiza, poprzednie zadanie), zanim cokolwiek przeczytasz, zadaj `AskUserQuestion`: „Ta sesja ma już kontekst z wcześniejszej pracy — planowanie (ok. 50 tur) ciągnęłoby go w każdej turze. Co robimy?”
 
-#### 0.2 Znajdź upstream requirements doc
+- `Zrobię /clear i wrócę` (rekomendowane) — zakończ jedną linią: `/clear, potem /dev-plan <to samo wejście>`. Checklista `/dev-prep` i dokument źródłowy są na dysku, więc nic nie ginie.
+- `Planuj w tej sesji` — idziesz dalej (0.1).
 
-Przed zadawaniem pytań planistycznych przeszukaj `docs/brainstorms/` w poszukiwaniu dokumentu źródłowego. Pełnoprawnym źródłem wymagań jest **każda** z tych form — nie tylko plik wyprodukowany przez `/dev-brainstorm`:
+Koszt: w etapie 3 vibersi `/dev-plan` ruszył po `/dev-prep` z 215k kontekstu, co dało ok. 1,0 M z 6,9 M planu; raport telemetrii flaguje takie epizody (`ctx_start` > 120k). Pierwsza wiadomość sesji to `/dev-plan` → pytania nie zadajesz.
 
-1. **Requirements doc per feature** — `docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md` (output `/dev-brainstorm`).
-2. **Zbiorczy dokument wymagań projektu** — np. `docs/brainstorms/mvp-requirements.md`, roadmapa etapów, PRD całego produktu. Dokumentem źródłowym jest wtedy **sekcja / etap** pasujący do feature'a (plus sekcje „decyzje obowiązujące" / „ustalenia", jeśli dokument je ma). W `origin:` frontmattera wpisz ścieżkę z kotwicą sekcji (`docs/brainstorms/mvp-requirements.md#etap-17`), a w planie cytuj identyfikatory wymagań z tej sekcji.
-3. **Wymagania podane wprost w requeście** — lista poprawek z feedbacku (R1…Rn), odpowiedzi interesariusza na pytania, wynik audytu. Traktuj treść requestu jak dokument źródłowy: nadaj wymaganiom stabilne ID (R1…), jeśli ich nie mają, i przenieś je do „Śledzenie wymagań".
+#### 0.1 Wznowienie
 
-**Kryteria trafności:** dokument jest trafny jeśli:
-- Temat semantycznie pasuje do opisu feature'a
-- Wydaje się pokrywać ten sam problem użytkownika lub scope
-- Dla dokumentów per feature: został stworzony w ciągu ostatnich 30 dni (użyj rozsądku, gdy dokument jest wyraźnie wciąż trafny lub wyraźnie nieaktualny). **Dokumentów żywych (zbiorczych, aktualizowanych na bieżąco) limit 30 dni nie dotyczy** — liczy się data ostatniej aktualizacji sekcji, nie data utworzenia pliku.
+- Użytkownik wskazuje istniejący plan albo w `docs/plans/` jest świeży plan na ten temat → przeczytaj go i zapytaj, czy aktualizować w miejscu, czy pisać nowy. Przy aktualizacji zachowaj odhaczone checkboxy.
+- Istnieje `docs/active/<zadanie>/` → to wznowienie zadania. Pokaż stan (`.autopilot-state.json`, `review-faza-N.md`, odhaczone pozycje) i zapytaj, czy tylko poprawić plan techniczny, czy przerwać. Pliki zadania z postępem zostają — `plan.mjs generuj --zapisz --nadpisz` odmawia, gdy zadanie ma przebieg.
 
-Jeśli wiele dokumentów źródłowych pasuje, zapytaj którego użyć używając narzędzia pytań platformy gdy dostępne. W przeciwnym razie prezentuj numerowane opcje w chacie i czekaj na odpowiedź.
+#### 0.2 Dokument źródłowy
 
-**Katalog nie jest kontraktem — fallback zamiast cichego bootstrapu.** `docs/brainstorms/` to konwencja szablonu, nie gwarancja: projekt mógł zapisać brainstorm gdzie indziej (np. `docs/dev-brainstorms/`). Gdy glob `docs/brainstorms/*.md` nic nie zwraca (albo katalog nie istnieje), zrób fallback: glob `docs/**/*-requirements.md` + katalogi w `docs/` o nazwie zawierającej `brainstorm` (z pominięciem `docs/plans/`, `docs/active/`, `docs/completed/`, `docs/solutions/`, `docs/operator/`). Trafienie → traktuj jak dokument źródłowy i ogłoś nietypową lokalizację jednym zdaniem. **Nigdy nie przechodź w planning bootstrap w milczeniu**: gdy i fallback nic nie znajdzie, zapytaj przez `AskUserQuestion` („Nie znalazłem requirements doc — podaj ścieżkę albo potwierdź, że planujemy bez dokumentu źródłowego"), zanim uznasz, że dokumentu nie ma. Cichy bootstrap gubi istniejący brainstorm — użytkownik dowiaduje się o tym dopiero, gdy plan nie pokrywa jego wymagań.
+Przed pytaniami planistycznymi szukaj dokumentu źródłowego w `docs/brainstorms/`. Źródłem jest każda z form:
 
-**Operator checklist etapu (`/dev-prep`).** Po ustaleniu dokumentu źródłowego zrób glob `docs/operator/*.md` (z pominięciem `*-smoke.md`) i sprawdź **frontmattery**, czy któryś ma `origin:` wskazujący ten sam etap/dokument. **Szukaj po frontmatterze, nie po nazwie pliku** — `/dev-prep` dziedziczy konwencję nazewniczą zastanej serii checklist, więc plik może się nazywać `e3-operator-checklist.md` równie dobrze jak `<slug>-przygotowanie.md`. Jeśli znajdziesz:
+1. requirements doc feature'a `docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md` (wynik `/dev-brainstorm`);
+2. zbiorczy dokument wymagań (`mvp-requirements.md`, roadmapa etapów, PRD) — źródłem jest sekcja pasująca do feature'a plus sekcje decyzji obowiązujących; `origin:` dostaje ścieżkę z kotwicą (`docs/brainstorms/mvp-requirements.md#etap-17`), plan cytuje ID wymagań z tej sekcji;
+3. wymagania podane w requeście (lista poprawek, odpowiedzi interesariusza, wynik audytu) — nadaj im stabilne ID (R1…) i przenieś do „Śledzenie wymagań”.
 
-- Przeczytaj go w całości i przyjmij jego `feature_slug:` jako `<feature-slug>` na cały przebieg (1.6, 3.1, 5.2b) — **nie wymyślaj własnego slugu**.
-- To jest **ten sam plik**, który uzupełnisz w 5.2b. Nie twórz drugiego dokumentu przygotowawczego — sekcja 3.7 dopisuje do tego.
-- Sekcja „Makiety" (z wklejonymi URL-ami Figmy) jest inputem dla 1.6 kroku C; „Decyzje" dla 0.5; „Konta, konsole, sekrety" i „Assety" dla 3.7.
-- Ogłoś jednym zdaniem: „Znalazłem operator checklist etapu: `<ścieżka>` (N pozycji, M nieodhaczonych) — używam go jako źródła kontekstu designerskiego i wymagań operatora; uzupełnię go po zbudowaniu IU."
-- **Nieodhaczone pozycje `[blokuje planowanie]`** wymień i zapytaj przez `AskUserQuestion`, czy planować mimo to (wybór świadomy — plan powstanie z lukami), czy przerwać do czasu ich domknięcia.
+Dokument jest trafny, gdy temat i problem użytkownika pokrywają się z opisem feature'a; dokument feature'a starszy niż 30 dni oceń krytycznie (dokumentów żywych ten wiek nie dotyczy — liczy się aktualizacja sekcji). Kilka trafnych → zapytaj, którego użyć.
 
-Brak takiego dokumentu jest w pełni poprawny — kontynuuj standardowym przebiegiem (1.6 zapyta o Figmę interaktywnie, 5.2b utworzy krótką listę od zera). Nie wymagaj `/dev-prep` i nie przerywaj planowania z powodu jego braku.
+`docs/brainstorms/` to konwencja, nie gwarancja. Pusty glob → glob `docs/**/*-requirements.md` i katalogów `docs/*brainstorm*` (z pominięciem `docs/plans/`, `docs/active/`, `docs/completed/`, `docs/solutions/`, `docs/operator/`); trafienie ogłoś jednym zdaniem. Gdy i to nic nie da, zapytaj: „Nie znalazłem requirements doc — podaj ścieżkę albo potwierdź, że planujemy bez dokumentu źródłowego.” Cichy start bez dokumentu gubi istniejący brainstorm.
 
-#### 0.3 Użyj dokumentu źródłowego jako głównego inputu
+#### 0.3 Checklista operatora z `/dev-prep`
 
-Jeśli relevantny requirements doc istnieje:
-1. Przeczytaj go dokładnie
-2. Ogłoś że posłuży jako dokument źródłowy do planowania
-3. Przenieś dalej wszystko z następujących:
-   - Ujęcie problemu
-   - Wymagania i kryteria sukcesu
-   - Granice scope'u
-   - Kluczowe decyzje i uzasadnienie
-   - Zależności lub założenia
-   - Otwarte pytania, zachowując czy są blokujące czy odroczone
-4. Użyj dokumentu źródłowego jako głównego inputu do planowania i researchu
-5. Odwołuj się do ważnych przeniesionych decyzji w planie z `(zob. źródło: <ścieżka-źródła>)`
-6. Nie pomijaj cicho treści źródłowej — jeśli dokument źródłowy to omawiał, plan musi to zaadresować choćby krótko. Przed finalizacją przeskanuj każdą sekcję dokumentu źródłowego żeby zweryfikować że nic nie zostało pominięte.
+Zrób glob `docs/operator/*.md` (bez `*-smoke.md`) i sprawdź **frontmattery**: checklista etapu ma `origin:` wskazujący ten sam dokument lub etap. Nazwa pliku bywa dowolna (`/dev-prep` dziedziczy konwencję serii, np. `e3-operator-checklist.md`), więc szukasz po frontmatterze. Znaleziona:
 
-Jeśli nie istnieje relevantny requirements doc, planowanie może kontynuować bezpośrednio z requestu użytkownika.
+- przeczytaj ją w całości; jej `feature_slug:` jest `<feature-slug>` całego przebiegu (1.6, 3.1, 5.2b);
+- to ten sam plik, który uzupełnisz w 5.2b — drugiego dokumentu przygotowawczego nie tworzysz;
+- sekcja „Makiety” zasila 1.6, „Decyzje” — 0.5, „Konta, konsole, sekrety” i „Assety” — 3.7;
+- ogłoś: „Znalazłem checklistę operatora etapu: `<ścieżka>` (N pozycji, M nieodhaczonych) — uzupełnię ją po zbudowaniu IU.”;
+- nieodhaczone pozycje `[blokuje: planowanie]` wymień i zapytaj, czy planować mimo nich (plan powstanie z lukami), czy przerwać.
 
-#### 0.4 Fallback bez requirements doc
+Brak checklisty jest poprawny — 5.2b utworzy krótką listę, jeśli będzie co wpisać.
 
-Jeśli nie istnieje relevantny dokument źródłowy w żadnej z form z 0.2:
-- Oceń czy request jest już wystarczająco jasny do bezpośredniego planowania technicznego
-- Jeśli niejednoznaczność dotyczy głównie ujęcia produktu, zachowań użytkownika lub definicji scope'u, zarekomenduj najpierw `/dev-brainstorm`. **Nie rekomenduj brainstormu** dla bugów, tech-debtu, poprawek z listy ani zadań „jak w istniejącym wzorcu" — tam brakuje co najwyżej decyzji technicznych, które rozstrzyga planning bootstrap
-- Jeśli użytkownik chce kontynuować tutaj, uruchom krótki planning bootstrap zamiast odmawiać
+#### 0.4 Dokument źródłowy jako wejście albo krótki bootstrap
 
-Planning bootstrap powinien ustalić:
-- Ujęcie problemu
-- Zamierzone zachowanie
-- Granice scope'u i oczywiste non-goals
-- Kryteria sukcesu
-- Blokujące pytania lub założenia
+Z dokumentem źródłowym: przeczytaj go dokładnie, ogłoś jako źródło i przenieś ujęcie problemu, wymagania i kryteria sukcesu, granice, decyzje z uzasadnieniem, zależności i otwarte pytania (z podziałem na blokujące i odroczone). Przeniesione decyzje oznaczaj w planie `(zob. źródło: <ścieżka>)`. Każda sekcja źródła ma odpowiedź w planie, choćby jednym zdaniem — sprawdzisz to w 5.1.
 
-Bootstrap powinien być krótki. Istnieje żeby zachować wygodę bezpośredniego wejścia, nie żeby zastępować pełny brainstorm.
+Bez dokumentu: oceń, czy request wystarcza do planowania technicznego. Niejasność produktowa (zachowanie użytkownika, definicja zakresu) → zarekomenduj `/dev-brainstorm`; dla bugów, tech-debtu, poprawek z listy i zadań „jak w istniejącym wzorcu” brainstormu nie rekomendujesz. Gdy użytkownik chce planować od razu, zrób krótki bootstrap: ujęcie problemu, zamierzone zachowanie, granice i non-goals, kryteria sukcesu, blokujące pytania lub założenia. Duże otwarte pytania produktowe → ponowna rekomendacja brainstormu albo jawne założenia przed dalszą pracą.
 
-Jeśli bootstrap odkryje duże nierozwiązane pytania produktowe:
-- Zarekomenduj `/dev-brainstorm` ponownie
-- Jeśli użytkownik wciąż chce kontynuować, wymagaj explicite założeń przed kontynuacją
+#### 0.5 Pytania blokujące
 
-#### 0.5 Sklasyfikuj otwarte pytania przed planowaniem
+Pytania „do rozwiązania przed planowaniem” ze źródła przejrzyj po kolei. Przenieś do pracy planistycznej te, które są techniczne, architektoniczne lub badawcze; pytanie zmieniające zachowanie produktu, zakres lub kryteria sukcesu zostaje blokerem. Prawdziwe blokery pokaż i zapytaj: wrócić do `/dev-brainstorm` czy zamienić je w jawne założenia. Z nierozwiązanym blokerem planu nie piszesz.
 
-Jeśli dokument źródłowy zawiera `Do rozwiązania przed planowaniem` lub podobne blokujące pytania:
-- Przejrzyj każde przed kontynuacją
-- Przeklasyfikuj do pracy planistycznej **tylko jeśli** jest to faktycznie pytanie techniczne, architektoniczne lub badawcze
-- Zachowaj jako bloker jeśli zmieniłoby zachowanie produktu, scope lub kryteria sukcesu
+#### 0.6 Głębokość planu
 
-Jeśli prawdziwe blokery produktowe pozostają:
-- Surfuj je jasno
-- Zapytaj użytkownika czy:
-  1. Wznowić `/dev-brainstorm` żeby je rozwiązać
-  2. Przekonwertować w explicite założenia lub decyzje i kontynuować
-- Nie kontynuuj planowania gdy prawdziwe blokery pozostają nierozwiązane
+- **Lekka** — mała, dobrze ograniczona praca, niska niejednoznaczność; zwykle 2–4 IU w jednej fazie.
+- **Standardowa** — zwykły feature albo ograniczony refactor z kilkoma decyzjami; 3–6 IU w 2–3 fazach.
+- **Głęboka** — praca przekrojowa, strategiczna, wysokiego ryzyka albo bardzo niejednoznaczna; 4–8 IU w 3–6 fazach.
 
-#### 0.6 Oceń głębokość planu
+Niejasna głębokość → jedno celowane pytanie.
 
-Sklasyfikuj pracę w jedną z tych głębokości:
+### Faza 1: Kontekst
 
-- **Lekka** — mała, dobrze ograniczona, niska niejednoznaczność
-- **Standardowa** — normalny feature lub bounded refactor z kilkoma decyzjami technicznymi do udokumentowania
-- **Głęboka** — cross-cutting, strategiczna, high-risk lub bardzo niejednoznaczna praca implementacyjna
+#### 1.1 Wiedza projektu i research lokalny
 
-Jeśli głębokość jest niejasna, zadaj jedno celowane pytanie i kontynuuj.
+Przeczytaj w całości indeks wiedzy projektu `docs/learned-patterns.md` (jeśli istnieje): reguły z klasą, wzorcami plików i linkiem do `docs/solutions/`. Reguły pasujące do obszaru planu zasilają „Wiedza instytucjonalna” w planie i podejście IU.
 
-#### 0.7 Wykrycie stacku
+Przygotuj podsumowanie kontekstu planowania (akapit lub dwa: problem, wymagania, kluczowe decyzje ze źródła albo opis feature'a). Agentów badawczych wołasz narzędziem `Agent` z typem agenta z `.claude/agents/` — nie typem `Explore` z doklejoną definicją agenta w prompcie (definicja doklejona do promptu gubi `model:`, `tools:` i `skills:` z frontmattera).
 
-Sprawdź czy projekt to **Expo (mobile)** czy inny stack. Heurystyka — projekt jest Expo gdy spełniony jest co najmniej jeden warunek:
-- Istnieje `app.json`, `app.config.ts`, lub `app.config.js`
-- `package.json` zawiera `"expo": "..."` w `dependencies`
-- Istnieje folder `app/` z plikami routes (Expo Router) lub `App.tsx` jako entry point
+- **Standardowa i Głęboka** — zawsze, równolegle:
+  - `repo-research-analyst` — prompt: linia `Scope: technology, architecture, patterns, conventions`, pod nią samo podsumowanie kontekstu (bez linii `Scope:` agent przegląda też konwencje issues i szablony PR, które planu nie zasilają);
+  - `learnings-researcher` — prompt: samo podsumowanie kontekstu.
+- **Lekka** — ci sami dwaj agenci tylko przy jednym z warunków:
+  - (a) plan wprowadza nową zależność, usługę zewnętrzną, API albo wersję główną biblioteki (porównaj z `package.json` i istniejącymi integracjami);
+  - (b) obszar, który dotkną IU, nie ma wpisu w wiedzy projektu: `node .claude/scripts/wiedza/wiedza.mjs wycinek --pliki <plik>,<plik> --bez-zawsze` zwraca pustą `tresc`, a `grep -rl '<katalog>' docs/solutions/` nic nie znajduje. W `--pliki` podajesz ścieżki plików, które IU stworzą lub zmienią (glob reguły `src/x/**/*.ts` nie dopasowuje samego katalogu); `--bez-zawsze` pomija reguły dla wszystkich plików, które pasują do każdego obszaru.
+  Bez warunku czytasz wzorce sam (Glob, Grep, Read plików z obszaru) i ogłaszasz decyzję jednym zdaniem z powodem, np. „Lekka, obszar `src/services/` ma 3 reguły w indeksie, bez nowych zależności — planuję bez agentów badawczych.”
 
-Jeśli projekt to Expo:
-- W decyzjach `Delegate to:` używaj **mobile builderów** (`feature-builder-mobile-ui` | `feature-builder-mobile-data` | `feature-builder-mobile-fullstack`)
-- W `Skills in play:` używaj prefiksu `expo-*` + `expo-overview` jako pierwszego skilla
-- Scenariusze E2E delegowane do `mobile-e2e-maestro` (Maestro CLI na emulatorze; web E2E tooling jest poza scope)
-- Server-side code → Supabase Edge Functions (NIE Expo API Routes — Decyzja architektoniczna repo)
-- Persystencja sesji → `expo-secure-store` (NIE `localStorage`)
+Zbierz: wzorce i konwencje do naśladowania, pliki, moduły i testy obszaru, wytyczne z CLAUDE.md wpływające na plan, wiedzę z `docs/solutions/`.
 
-Tabela decyzyjna w sekcji 3.5 ma pełną regułę.
+#### 1.2 Postawa wykonawcza
 
-### Faza 1: Zbierz kontekst
-
-#### 1.1 Research lokalny (uruchamiany zawsze)
-
-Przygotuj zwięzłe podsumowanie kontekstu planowania (akapit lub dwa) jako input do agentów badawczych:
-- Jeśli dokument źródłowy istnieje, podsumuj ujęcie problemu, wymagania i kluczowe decyzje z tego dokumentu
-- W przeciwnym razie użyj bezpośrednio opisu feature'a
-
-Uruchom tych agentów równolegle:
-
-- Agent tool (type: Explore) z promptem z `.claude/agents/repo-research-analyst.md` — przekaż podsumowanie kontekstu planowania
-- Agent tool (type: Explore) z promptem z `.claude/agents/learnings-researcher.md` — przekaż podsumowanie kontekstu planowania
-
-Zbierz:
-- Istniejące wzorce i konwencje do naśladowania
-- Relevantne pliki, moduły i testy
-- Guidance z CLAUDE.md które materialnie wpływa na plan
-- Wiedzę instytucjonalną z `docs/solutions/`
-
-#### 1.1b Wykryj sygnały postawy wykonawczej
-
-Zdecyduj czy plan powinien nieść lekki sygnał postawy wykonawczej.
-
-Szukaj sygnałów takich jak:
-- Użytkownik explicite prosi o TDD, test-first lub characterization-first
-- Dokument źródłowy wymaga test-first implementacji lub eksploracyjnego hardening'u legacy kodu
-- Research lokalny pokazuje że docelowy obszar jest legacy, słabo przetestowany lub historycznie kruchy, sugerując characterization coverage przed zmianą zachowania
-
-Gdy sygnał jest jasny, przenieś go cicho w relevantnych implementation units.
-
-Pytaj użytkownika tylko jeśli postawa materialnie zmieniłaby sekwencjonowanie lub ryzyko i nie może być odpowiedzialnie wywnioskowana.
-
-#### 1.2 Zdecyduj o researchu zewnętrznym
-
-Na podstawie dokumentu źródłowego, sygnałów użytkownika i wyników lokalnych zdecyduj czy research zewnętrzny dodaje wartość.
-
-**Czytaj między wierszami.** Zwróć uwagę na sygnały z dotychczasowej rozmowy:
-- **Znajomość użytkownika** — czy wskazuje na konkretne pliki lub wzorce? Prawdopodobnie dobrze zna codebase.
-- **Intencja użytkownika** — czy chce szybkości czy dokładności? Eksploracji czy wykonania?
-- **Ryzyko tematu** — bezpieczeństwo, płatności, zewnętrzne API wymagają więcej ostrożności niezależnie od sygnałów użytkownika.
-- **Poziom niepewności** — czy podejście jest jasne czy wciąż otwarte?
-
-**Zawsze skłaniaj się ku researchowi zewnętrznemu gdy:**
-- Temat jest high-risk: bezpieczeństwo, płatności, prywatność, zewnętrzne API, migracje, compliance
-- Codebase nie ma relevantnych lokalnych wzorców
-- Użytkownik eksploruje nieznany teren
-
-**Pomiń research zewnętrzny gdy:**
-- Codebase już pokazuje silny lokalny wzorzec
-- Użytkownik już zna zamierzony kształt
-- Dodatkowy kontekst zewnętrzny dodałby mało praktycznej wartości
-
-Ogłoś decyzję krótko przed kontynuacją. Przykłady:
-- "Twój codebase ma solidne wzorce do tego. Kontynuuję bez researchu zewnętrznego."
-- "To dotyczy przetwarzania płatności, więc najpierw zbadamy aktualne best practices."
+Sygnały: użytkownik prosi o TDD / test-first / characterization-first, źródło tego wymaga, research pokazuje kruchy lub słabo przetestowany obszar. Jasny sygnał przenosisz do odpowiednich IU jako `Notatka wykonawcza`; pytasz tylko, gdy postawa zmienia kolejność albo ryzyko i nie da się jej wywnioskować.
 
 #### 1.3 Research zewnętrzny (warunkowy)
 
-Jeśli krok 1.2 wskazuje że research zewnętrzny jest przydatny, uruchom tych agentów równolegle:
+Research zewnętrzny wołasz, gdy temat jest wysokiego ryzyka (bezpieczeństwo, płatności, prywatność, zewnętrzne API, migracje, compliance), repo nie ma lokalnego wzorca albo użytkownik wchodzi na nieznany teren — przy Lekkiej to warunek (a) z 1.1. Pomijasz, gdy repo ma silny wzorzec, a użytkownik zna docelowy kształt. Decyzję ogłoś jednym zdaniem. Research: równolegle `best-practices-researcher` i `framework-docs-researcher`, prompt = samo podsumowanie kontekstu.
 
-- Agent tool (type: Explore) z promptem z `.claude/agents/best-practices-researcher.md` — przekaż podsumowanie kontekstu planowania
-- Agent tool (type: Explore) z promptem z `.claude/agents/framework-docs-researcher.md` — przekaż podsumowanie kontekstu planowania
+#### 1.4 Konsolidacja
 
-#### 1.4 Konsoliduj research
+Zbierz w notatkach: wzorce i ścieżki plików, wiedzę projektu, referencje zewnętrzne, powiązane PR / issues, ograniczenia kształtujące plan.
 
-Podsumuj:
-- Relevantne wzorce codebase'u i ścieżki plików
-- Relevantną wiedzę instytucjonalną
-- Referencje zewnętrzne i best practices, jeśli zebrane
-- Powiązane issues, PR-y lub prior art
-- Ograniczenia które powinny materialnie kształtować plan
+#### 1.5 Analiza flow (Standardowa, Głęboka albo niejasne flow)
 
-#### 1.5 Analiza flow i edge-cases (warunkowa)
+Wywołaj `spec-flow-analyzer` z podsumowaniem kontekstu i wynikami researchu. Bierzesz z wyniku brakujące edge case'y, przejścia stanów i luki, które realnie poprawiają plan.
 
-Dla planów **Standardowych** lub **Głębokich**, lub gdy kompletność user flow jest wciąż niejasna, uruchom:
+#### 1.6 Kontekst designerski (feature dotykający UI)
 
-- Agent tool (type: Explore) z promptem z `.claude/agents/spec-flow-analyzer.md` — przekaż podsumowanie kontekstu planowania i wyniki researchu
+Ustal teraz `<feature-slug>` (kebab-case, 3–5 słów) — użyjesz go bez zmian w 3.1, w `docs/plans/<feature-slug>-figma/` i w 5.2b. Checklista z 0.3 daje slug gotowy (`feature_slug:`).
 
-Użyj outputu do:
-- Identyfikacji brakujących edge cases, przejść stanów lub luk w handoff'ach
-- Zaostrzenia requirements trace lub strategii weryfikacji
-- Dodania tylko tych szczegółów flow które materialnie poprawiają plan
+**Krok A — klasyfikacja (bez pytania).** Feature dotyka UI, gdy wymagania opisują ekrany, komponenty, layouty, nawigację, animacje albo stany widoczne dla użytkownika, lub research wskazuje pliki warstwy UI wg `.claude/stack/buildery.md`, sekcja „Ścieżki warstw”. Praca w warstwie danych z tej sekcji, testach i konfiguracji to pure-data. Ogłoś wynik jednym zdaniem; pytaj tylko, gdy po researchu nadal nie wiesz.
 
-#### 1.6 Kontekst designerski (warunkowy — UI features)
+- Pure-data → frontmatter planu: `design_md: null`, `figma_spec: null`, `figma_screens: {}`; reszta 1.6 odpada.
+- Dotyka UI → przeczytaj `references/kontekst-designerski.md` i wykonaj kroki B–F (DESIGN.md, makiety Figmy, SPEC.md, idempotentność).
 
-Cel: zanim ułożysz Implementation Units, ustal **źródło prawdy o designie** dla tego feature'a. Bez tego buildery UI dostaną tylko opis tekstowy i będą halucynować pomiary.
+Klasyfikacja jest wstępna: IU delegowany do `feature-builder-ui` lub `feature-builder-fullstack` w planie pure-data oznacza powrót do kroków B–F przed dalszym planowaniem.
 
-Ustal już teraz roboczo `<feature-slug>` = `<descriptive-name>` (kebab-case, 3-5 słów), którego użyjesz **bez zmian** w 3.1 (nazwa pliku planu), w `docs/plans/<feature-slug>-figma/` i w 5.2b (nazwa pliku checklisty, o ile nie dziedziczy konwencji serii). Jeśli 0.2 znalazło dokument `/dev-prep`, slug jest już ustalony — weź `feature_slug:` z jego frontmattera i nie twórz nowego.
+### Faza 2: Pytania planistyczne
 
-**Krok A — Klasyfikacja feature'a (bez pytania użytkownika).** Ustal sam, czy feature dotyka warstwy UI, na podstawie dokumentu źródłowego i researchu z 1.1 — tą samą regułą ścieżek co tabela w 3.5:
+Zbierz pytania z odroczonych pytań źródła, luk z researchu i decyzji technicznych potrzebnych do planu. Każde jest **rozwiązane w planowaniu** (odpowiedź poznawalna z repo, dokumentacji albo wyboru użytkownika) albo **odroczone do implementacji** (zależy od kodu, zachowania runtime'u, odkryć w wykonaniu). Użytkownika pytasz tylko o to, co zmienia architekturę, zakres, kolejność albo ryzyko i nie da się wywnioskować. Nie uruchamiasz testów, nie budujesz aplikacji i nie badasz runtime'u.
 
-- **Dotyka UI**, jeśli wymagania opisują ekrany, komponenty, layouty, nawigację, animacje, stany widoczne dla użytkownika, **lub** research wskazuje pliki do modyfikacji w `app/`, `components/`, `screens/`, `app.json`/`app.config.*`.
-- **Pure-data**, jeśli praca zamyka się w `lib/`, `hooks/`, `supabase/migrations/`, `supabase/functions/`, testach, konfiguracji narzędzi.
+### Faza 3: Struktura planu
 
-Klasyfikacja jest **wstępna** — ostateczną weryfikacją są ścieżki w `Pliki:` IU (3.4/3.5); rozjazd = powrót do kroku B. Ogłoś wynik jednym zdaniem (np. „Feature dotyka UI — ekran profilu i komponent steppera; sprawdzam kontekst designerski."). Zapytaj przez `AskUserQuestion` **tylko** gdy po researchu nadal nie wiesz (np. wymaganie „popraw wydajność listy" może oznaczać zarówno zapytanie, jak i wirtualizację komponentu).
+#### 3.1 Tytuł i plik
 
-Jeśli **pure-data** → pomiń resztę sekcji 1.6, w frontmatter planu (4.2) wstaw `design_md: null`, `figma_spec: null`, `figma_screens: {}`.
+Tytuł w formacie konwencjonalnym (`feat: Dodaj autentykację użytkowników`, `fix: Zapobiegaj podwójnemu submitowi`), typ `feat` | `fix` | `refactor`. Plik: `docs/plans/YYYY-MM-DD-NNN-<type>-<feature-slug>-plan.md` — data z `date +%F`, NNN = kolejny numer planu z tą datą w `docs/plans/` (od 001). Z nazwy pliku powstaje nazwa zadania (`<feature-slug>`), branch `feature/<feature-slug>` i katalog `docs/active/<feature-slug>/`.
 
-Jeśli **dotyka UI** → kontynuuj krok B.
+#### 3.2 Interesariusze
 
-**Krok B — Projektowy DESIGN.md.** Sprawdź czy istnieje `docs/DESIGN.md` (Read tool).
+Dla Standardowej i Głębokiej rozważ, kogo dotyczy zmiana (użytkownicy, developerzy, operacje, inne zespoły); przy pracy przekrojowej opisz to w „Wpływ systemowy”.
 
-- Jeśli istnieje → zapisz ścieżkę do późniejszego frontmatera planu jako `design_md: ./docs/DESIGN.md` i ogłoś: "Używam `docs/DESIGN.md` jako źródła prawdy o tokenach designu projektu."
-- Jeśli **nie istnieje** → zadaj `AskUserQuestion`:
+#### 3.3 Implementation Units i fazy
 
-  > "Brak `docs/DESIGN.md` (projekt-wide design system w formacie Google Labs design.md — YAML tokeny + markdown prose). Co robimy?"
+IU = jedna znacząca zmiana, którą implementator wyląduje jako atomowy commit: jeden komponent, zachowanie albo szew integracyjny, mały klaster plików, uporządkowany po zależnościach, konkretny bez pre-pisania kodu. Unikasz mikro-kroków na minuty, jednostek z kilkoma niepowiązanymi problemami i jednostek, w których implementator wciąż musi wymyślić plan.
 
-  Opcje:
-  1. `Stwórz teraz — zatrzymaj planowanie` (rekomendowane) — wyjdź z dev-plan, poinstruuj usera żeby stworzył `docs/DESIGN.md` (spec: https://github.com/google-labs-code/design.md). Plan można wznowić później.
-  2. `Pomiń dla tej iteracji` — kontynuuj bez `DESIGN.md`, zapisz `design_md: null` w frontmatter, dodaj do "Otwarte pytania → Odroczone do implementacji" wpis: "Brak `docs/DESIGN.md` — buildery UI bazują tylko na ux-ui-guidelines-mobile i SPEC per-feature. Utwórz przed kolejnym UI feature'em."
+Fazy są obowiązkowe na każdej głębokości, bo autopilot wykonuje plan fazami (faza = `execute → review → fix`), a generator przenosi je do zadania 1:1:
 
-**Krok C — Mockupy Figmy dla tej iteracji.** Kolejność sprawdzeń (pierwsze trafienie wygrywa):
-1. **Istniejący SPEC** — zrób glob `docs/plans/*-figma/SPEC.md`; jeśli którykolwiek folder odpowiada temu feature'owi (ten sam `fileKey` Figmy w nagłówku SPEC, pokrywająca się nazwa lub ten sam dokument źródłowy) → przyjmij jego slug jako `<feature-slug>` i przejdź do **kroku F** — niezależnie od tego, czy linki są w źródle (rerun nie może nadpisać SPEC bez zgody).
-2. **Operator checklist z `/dev-prep`** — jeśli 0.2 znalazło checklistę tego etapu, jej sekcja „Makiety" jest listą ekranów tej iteracji. Rozstrzygnij po wypełnieniu pól `URL Figma:`:
-   - **Wszystkie ekrany mają URL** → przejdź wprost do kroku D **bez pytania**; listę `{name, url}` bierzesz z dokumentu, nie od użytkownika (`name` = nazwa ekranu z sekcji, bez zmian — to ona wiąże makietę z pozycją checklisty).
-   - **Część ekranów ma URL** → wymień nazwy ekranów bez URL-a i zapytaj przez `AskUserQuestion`: `Fetchuj gotowe, resztę zaprojektujemy z głowy` / `Podam brakujące URL-e teraz` / `Przerywam — dokończę makiety`. Przy pierwszej opcji zapisz brakujące ekrany do „Otwarte pytania → Odroczone do implementacji".
-   - **Żaden ekran nie ma URL-a, a sekcja jest niepusta** → makiety zamówione, ale niegotowe. Zapytaj: `Projektujemy z głowy w oparciu o DESIGN.md` / `Przerywam planowanie do czasu makiet` (rekomendowane, gdy pozycje mają **[blokuje planowanie]**).
-   - **Sekcja pusta lub `dotyka_ui: false`** → `figma_spec: null`, `figma_screens: {}`, kontynuuj do Fazy 2.
-3. **Linki w źródle** — użytkownik podał URL-e `figma.com/design/...` w requeście lub dokumencie źródłowym → przejdź wprost do kroku D bez pytania.
-4. W pozostałych przypadkach zadaj `AskUserQuestion` (to jedyne pytanie designerskie, które skill zadaje w standardowym przebiegu):
+- każda IU w dokładnie jednej fazie; nagłówek `### Faza N — <nazwa>`, numeracja od 1 bez luk, pod nim `**Zależy od:** Brak | Faza K` i opcjonalnie `**Równolegle z:** Faza M` (informacja dla operatora — autopilot wykonuje fazy po kolei);
+- faza kończy się w stanie, który da się zreviewować i przetestować niezależnie (typecheck i testy przechodzą, aplikacja działa); typowy układ: fundament danych → warstwa danych i akcje → strony i komponenty → polish i E2E; trywialna IU dołącza do sąsiedniej fazy;
+- IU ze scenariuszem `[E2E]` stoi w fazie, w której istnieje wszystko, czego flow potrzebuje (strona, dane, seed);
+- faza ma najwyżej 5 IU, a migracje przepisujące istniejące funkcje bazy (`create or replace` funkcji z poprzednich etapów, `drop function` + `create` RPC) stoją w fazie bez fundamentu serwera i klienta — review takiej fazy czyta same zmiany schematu (vibersi etap 5: faza z 3 migracjami, serwerem, E2E i Sentry po podziale dała dwa mniejsze review); `sprawdz` daje uwagę przy fazie powyżej 5 IU;
+- IU z co najmniej 8 scenariuszami testowymi albo 12 plikami dostaje uwagę `sprawdz`: builder takiej jednostki ma 2–3 razy więcej tur i kontekstu (vibersi etapy 3–5: 10+ plików — tury p50 72 i kontekst 227k wobec 27 i 89k przy 1–3 plikach). Dzielisz ją na granicy zachowania albo warstwy, gdy obie części dają się zreviewować osobno; jednostkę spójną zostawiasz.
 
-> "Czy masz w Figmie mockupy ekranów dla tej iteracji?"
+Numeracja IU jest ciągła przez cały plan (IU-1, IU-2, …).
 
-Opcje: `Tak — podam linki` / `Nie — projektujemy z głowy w oparciu o DESIGN.md`.
+#### 3.4 Pola IU
 
-Jeśli **Nie** → wstaw `figma_spec: null`, `figma_screens: {}` w frontmatter, kontynuuj do Fazy 2.
+Format jednostki i całego planu jest w `references/szablon-planu.md` — przeczytaj go przed pisaniem (Faza 4). Pola: Cel, Wymagania, Zależności, Pliki (tabela, 3.6), Delegate to (3.5), Makiety (IU ui/fullstack w planie z `figma_screens`), Skills in play, Podejście, Notatka wykonawcza (opcjonalna), Teksty (verbatim) (obowiązkowe, gdy IU renderuje zatwierdzone treści), Wzorce do naśladowania, Scenariusze testowe, Weryfikacja, Operator checklist (opcjonalna).
 
-Jeśli **Tak** → kontynuuj krok D.
+- **Makiety** — w planie z `figma_screens` każda IU ui/fullstack wymienia ekrany, które buduje (`**Makiety:** \`logowanie-komputer\`, \`logowanie-telefon\``), albo `—`. Planner wkleja builderowi SPEC i PNG tylko tych ekranów (`plan.mjs designerski`); IU bez pola dostaje wszystkie ekrany i cały SPEC, a `sprawdz` daje uwagę, bo pełny SPEC czytany przez każdego buildera w każdej turze to ok. 0,6 M na etap z 8 builderami UI.
+- **Odwołanie do decyzji niesie jej treść.** IU trafia do buildera jako osobny prompt — builder nie widzi reszty planu. Przy każdym odwołaniu dopisz zdanie treści w nawiasie: `strażnik regresji R2 (przy zmianie CTA istniejący tracking zostaje — nowy event, nie modyfikacja)`.
+- **Teksty widoczne dla użytkownika** (etykiety, nagłówki, komunikaty błędów) wklejasz dosłownie w `**Teksty (verbatim):**`, nie przez odwołanie do punktu checklisty — inaczej builder wpisze własną wersję, a review zgłosi rozjazd z zamówieniem.
+- **Scenariusze testowe** — każda pozycja zaczyna się typem: `[Unit]` (test kodu), `[E2E]` (flow w przeglądarce, 3.4b), `[Manual]` (krok człowieka, np. fizyczne urządzenie). Feature-bearing IU ma plik testu w tabeli plików.
+- **Weryfikacja** — tylko kryteria, które scribe review domknie sam: każda pozycja ma komendę w backtickach (`pnpm typecheck`, test jednego pliku wg `.claude/stack/walidacja.md`, sekcja „Runner testów i build”, `grep …`), opisaną oczekiwanym wynikiem. Runner z `e2e/` idzie wyłącznie jako `[E2E]` (3.4b) — bez znacznika scribe uruchomiłby go bez środowiska e2e. Krok człowieka idzie do `Operator checklist` albo `[Manual]`.
+- **Operator checklist** — kroki człowieka po implementacji (akceptacja designera, test na urządzeniu, `supabase db push --linked` na dev/prod po merge'u — w CLI 3 bez flagi celu idzie na lokalny stack). Trafiają do sekcji operatora fazy i do smoke'u operatora przy archiwizacji.
+- **Atrybuty, od których zależy widoczność, wypisujesz osobno dla każdego elementu.** Cookie (`Path`, `Domain`, `HttpOnly`, `Secure`, `SameSite`, ważność), nagłówki CORS i CSP, granty: w Podejściu każdy element ma swoją listę atrybutów, bez „jak wyżej” i „ta sama ważność”. Element czytany w innej warstwie, niż powstaje (cookie-znacznik czytany przez `document.cookie`, nagłówek czytany przez klienta), dostaje scenariusz `[Unit]` na odczyt w tej warstwie, a czyszczenie — te same `Path` i `Domain` co nadanie (inaczej przeglądarka go nie usunie). vibersi etap 5: `vibersi_gosc` z `Path=/api`, a znacznik dla klienta „ta sama ważność” — skopiowany `Path=/api` ukryłby go przed stroną.
+- **Migracja, która usuwa albo zmienia istniejące dane** (przed CHECK, `not null`, unikalnością, backfillem): w Podejściu liczba wierszy trafia do logu migracji (`get diagnostics` + `raise notice`) albo ograniczenie powstaje `not valid` i dopiero potem `validate constraint`; scenariusz `[Unit]` sprawdza seedy e2e po migracji. Baza dev bywa wspólna dla stagingu i środowiska lokalnego — ciche usunięcie znika bez śladu.
+- **Znaczniki tylko na początku pozycji.** `[E2E]`, `[Manual]`, `[Unit]`, `Operator:`, `[P1]`–`[P3]` w środku treści dokładają linię do grepów prechecku, testera i completion-gate — w treści pisz to słowami („test w przeglądarce”).
 
-**Krok D — Zbierz linki Figma (jeden per ekran).** Zadaj wolnotekstowo:
+#### 3.4b Scenariusze E2E i seedy
 
-> "Podaj URL-e Figma per ekran/komponent (jeden na linię, format `<nazwa>: <url>`). Przykład:
-> ```
-> home-dashboard: https://figma.com/design/abc123/...?node-id=378-43
-> bottom-nav: https://figma.com/design/abc123/...?node-id=27-119
-> ```"
+Autonomiczne E2E działa na dedykowanym projekcie testowym z `.env.e2e`, nigdy na dev/prod. Środowisko stawia i sprząta autopilot (start aplikacji wg `.claude/stack/e2e-srodowisko.md`, `supabase db push` migracji i seedów, konto `E2E_TEST_EMAIL`); tester `feature-tester-e2e` prowadzi aplikację narzędziem jazdy stacku.
 
-Sparsuj odpowiedź na listę `{name, fileKey, nodeId}` (z URL Figmy: `figma.com/design/<fileKey>/...?node-id=<nodeId>` — zamień `-` na `:` w nodeId).
+- Scenariusz: format linii wg `.claude/stack/plan-e2e.md`, sekcja „Linia scenariusza”; `<flow>` to stabilny kebab-case identyfikator. To jedyna linia scenariusza: db-sync bierze z niej seed, tester i scribe dopasowują przebieg po nazwie flow. Jeden flow = jedna linia w całym planie.
+- `Weryfikacja: [E2E]` tylko dla runnera `.sh`, który nie jest scenariuszem (ścieżka runnera w tej samej sekcji slotu) — druga linia dla tego samego flow to drugi przebieg w licznikach.
+- Seed jest deliverablem buildera: wiersz w tabeli plików IU albo ścieżka istniejącego seeda w linii scenariusza wg `.claude/stack/plan-e2e.md`, sekcja „Seedy”. Autor seeda w bloku testera albo w Weryfikacji = seed, którego nikt nie napisze.
+- Seed jest idempotentny (DELETE albo upsert) i wskazuje konto przez `(select id from auth.users where email='<E2E_TEST_EMAIL>')`, bez stałych ID; flow loguje się e-mailem i hasłem konta testowego, nigdy przez OAuth.
+- Smoke RLS (odmowa nie-uczestnikowi) wykonujesz SQL-em na bazie e2e (`psql "$SUPABASE_E2E_DB_URL"`), bez Supabase MCP.
+- Realtime: jeden klient (render, wysłanie, optimistic + echo) jest `[E2E]`; dwóch klientów na żywo → `[Manual]`.
+- Wysyłka maili albo SMS w scenariuszach fazy (rejestracja, reset hasła, ponowna wysyłka, link logowania): policz wysyłki wszystkich scenariuszy `[E2E]` fazy razy dwa, bo re-review po fixie i ponowienie scenariusza wysyłają w tej samej godzinie jeszcze raz. Porównaj tę liczbę z limitem godzinowym usługi na projekcie e2e, odczytanym z jego konfiguracji, nie z dokumentacji ani z researchu. Supabase Auth bez własnego SMTP ma domyślnie 2 maile na godzinę, a Send Email hook tego limitu nie omija; odczyt robisz poleceniem `curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" https://api.supabase.com/v1/projects/<ref e2e>/config/auth | jq '{rate_limit_email_sent, rate_limit_sms_sent}'`. Całej odpowiedzi nie wypisujesz, bo zawiera sekrety (hasło SMTP, sekrety dostawców logowania). Limit mniejszy od policzonej liczby → pozycja w checkliście przygotowania (3.7) z podniesieniem limitu na projekcie e2e i markerem `[blokuje: faza N]`, bo kolejna wysyłka w godzinie kończy scenariusz błędem limitu zamiast wynikiem.
+- Projekt bez `.env.e2e`: scenariusz zostaje `[E2E]` tylko z pozycją setupu środowiska w checkliście (3.7). Opt-out do `[Manual]` to decyzja operatora: pytasz o nią, podając liczbę pozycji ręcznych, i proponujesz `/weryfikacja-setup` (aa-exam: opt-out zamienił 29 pozycji w klikanie na produkcji, choć stos lokalny działał).
+- `[Manual]` dzielisz: wymagające człowieka albo produkcji zostają `[Manual]`; wykonalne przez agenta lokalnie (przeglądarka, curl, baza testowa) zapisujesz jako `[Manual agent]`, które sesja smoke'u wykonuje przed pytaniem operatora.
+- Scenariusz, który zapisuje albo czyta przez serwer aplikacji, albo sprawdza status HTTP lub meta trasy renderowanej przez serwer: start serwera, sonda i adres w linii scenariusza wg `.claude/stack/plan-e2e.md`, sekcja „Serwer aplikacji w scenariuszu”.
 
-**Krok E — Fetch i wygeneruj SPEC.md.** Dla każdego ekranu wywołaj **sekwencyjnie** (Figma MCP rate limit):
+#### 3.5 Builder IU
 
-1. `mcp__plugin_figma_figma__get_design_context` z `fileKey` + `nodeId` — pobierz pełną hierarchię, pomiary, paddingi, typografię, autoLayout.
-2. `mcp__plugin_figma_figma__get_variable_defs` z `fileKey` + `nodeId` — pobierz tokeny (kolory, spacing, font tokens) używane w tym frame.
-3. `mcp__plugin_figma_figma__get_screenshot` z `fileKey` + `nodeId` — pobierz PNG. Zapisz jako `docs/plans/<feature-slug>-figma/<name>.png`.
-4. Odczytaj `width` i `height` z metadata frame'a (z odpowiedzi `get_design_context`) — to viewport designu dla tego ekranu. **Mobile uwaga:** najczęstsze wymiary Figma mobile frame to 393×852 (iPhone 14/15), 390×844 (iPhone 12-13), 360×800 (Android medium). Tester `mobile-e2e-maestro` użyje tego wymiaru do wyboru symulatora.
+`Delegate to:` = builder z `.claude/agents/`, dobrany po ścieżkach tabeli plików wg `.claude/stack/buildery.md`, sekcja „Tabela builderów” (role `feature-builder-ui`, `feature-builder-data`, `feature-builder-fullstack` i ich `Skills in play`).
 
-Przed jakimkolwiek zapisem sprawdź istnienie `docs/plans/<feature-slug>-figma/` — jeśli folder istnieje, a użytkownik nie wybrał w kroku F `Re-fetch i nadpisz`, zatrzymaj się i przejdź do kroku F. Po zebraniu danych ze wszystkich ekranów stwórz **jeden** plik `docs/plans/<feature-slug>-figma/SPEC.md` z układem:
+IU, którą da się rozsądnie podzielić na UI i dane, dzielisz; `feature-builder-fullstack` zostaje dla podziału sztucznego (formularz logowania: UI bez wywołania auth i auth bez formularza są bezużyteczne). `Skills in play:` odzwierciedla `skills:` z frontmattera buildera — dokumentacyjnie, dla czytelnika planu.
 
-```markdown
-# <Feature> — Specyfikacja Figma
+Plan pisze bazowe nazwy builderów. Warianty `feature-builder-ui-figma` i `feature-builder-fullstack-figma` (z narzędziami Figma MCP i skillami Figmy) wybiera planner fazy, gdy kontekst designerski zadania ma `figma_spec` albo `figma_screens`.
 
-> Pomiary zfetchowane z Figmy YYYY-MM-DD (`get_design_context` + `get_variable_defs`).
-> Źródło: Figma `<fileKey>`.
+#### 3.6 Tabela plików i budżet pliku
 
-## Screeny referencyjne
+Pole `**Pliki:**` to tabela `| Akcja | Plik | Linie dziś → po | Wymiary | Werdykt |`, jeden plik na wiersz. Akcje: `Stwórz`, `Modyfikuj`, `Test (unit)`, `Stwórz (e2e seed)`; akcje pliku flow, jeśli stack go ma: `.claude/stack/plan-e2e.md`, sekcja „Linia scenariusza”.
 
-| Nazwa | Plik | Wymiary | Frame | Target device |
-|---|---|---|---|---|
-| <name> | `./<name>.png` | <W>×<H>px | `<nodeId>` | iPhone 14 / Pixel 7 itd. |
-| ... | ... | ... | ... | ... |
+- **Kompletność.** Tabela wymienia każdy plik, który IU stworzy lub zmieni: źródła, testy, migracje, seedy, konfigurację. Planner dobiera do promptu buildera reguły wiedzy projektu po tych ścieżkach — plik spoza tabeli to builder bez reguł dla niego.
+- **Linie dziś.** Policz skryptem: `node .claude/scripts/plan/plan.mjs linie <plik> <plik>` — linie kodu jak ESLint `max-lines` (bez pustych i komentarzy). Nowy plik: `0`. Plik z wcześniejszej IU tego planu: „dziś” = jej „po”.
+- **Linie po** — szacunek po zmianie IU. Obie kolumny zapisujesz liczbami całkowitymi (`120 → 180`), bez `~` i słów; plik spoza kodu (SQL, markdown) może mieć `— → —`.
+- **Próg 300 linii na plik.** Plik kodu, który po zmianie przekracza 300, dostaje ocenę wymiarów w kolumnie Wymiary: powody zmiany (ile niezależnych powodów, by plik się zmieniał), eksporty między warstwami, importy z wielu domen, test-lustro (czy test da się podzielić tak jak plik), reguła 5 s (czy w 5 sekund wiesz, co plik robi). Wymiar pęknięty → werdykt `wydziel <co>` i wiersz `Stwórz` nowego modułu w tej samej IU, a „po” liczysz po wydzieleniu.
+- **Próg 360 linii na plik** (300 + 20% tolerancji) to próg ESLint i bota PR: plik powyżej 360 po zmianie zawsze dostaje wydzielenie.
+- Werdykt bez przekroczeń: `nowy` albo `zostaje`.
 
-## Tokeny (Figma variables → mapowanie na `docs/DESIGN.md` lub `global.css @theme {}`)
+`plan.mjs sprawdz` (6.2) liczy „dziś” w repo i odrzuca tabelę z rozjazdem ponad tolerancję, plik powyżej 360, przekroczenie 300 bez wymiarów i `wydziel` bez wiersza `Stwórz`.
 
-[Z `get_variable_defs` — tabela `figma_variable | hex | token w projekcie`. Sprawdź czy istnieje w `docs/DESIGN.md`; oznacz brakujące jako "do dodania w DESIGN.md".]
+#### 3.6b Rejestr stałych
 
-## <NAZWA EKRANU 1> (`<nodeId>`) — pełny ekran
+Sekcja planu `## Rejestr stałych` — tabela `| Stała | Wartość | Plik | IU-źródło | Konsumenci |` dla wartości, których używa więcej niż jedna IU albo warstwa: statusy, limity, nazwy tras, klucze zapytań, kody błędów, nazwy zdarzeń, etykiety i teksty (nazwy powodów, statusów, kategorii), które pokazuje klient i wysyła serwer. Wartość czytana przez serwer i klienta ma plik w module bez Reacta, nie w warstwie UI ani w hookach (ścieżki: `.claude/stack/buildery.md`, sekcja „Ścieżki warstw”) — serwer nie importuje warstwy UI; `sprawdz` daje uwagę, gdy źródło jest w warstwie UI, a konsument ma pliki w `server/` albo `supabase/functions/`. Każda stała ma jedno źródło — plik w tabeli plików pierwszej IU, która jej używa; tę IU wpisujesz w kolumnie IU-źródło (`IU-5`), także gdy plik tworzy wcześniejsza IU, a stała dochodzi później. Jeden wiersz = jedna IU-źródło (`A` / `B` w jednym wierszu tylko przy tej samej IU), komórka nigdy pusta; stała, która już jest w repo: `—`, a w kolumnie Plik plik, w którym już jest. Używa = importuje w kodzie: wartość przepisana do migracji SQL nie czyni IU źródłem, bo eksport bez konsumenta w kodzie zgłasza knip w domknięciu fazy, a `plan.mjs sprawdz` daje uwagę, gdy źródło jest w fazie wcześniejszej niż wszyscy konsumenci. IU-źródło zapisuje w Podejściu definicję dosłownie (`MAKS_DLUGOSC_NOTATKI = 500` w `src/services/notatki-limity.ts`), a IU-konsumenci importują stałą stamtąd i powtarzają w Podejściu nazwę z wartością — planner fazy nie dokleja builderowi rejestru. Bez rejestru dwie IU w osobnych promptach definiują tę samą wartość dwa razy. Plan bez takich wartości: „Brak stałych współdzielonych.”
 
-[Z `get_design_context` — sekcja per komponent z paddingami, fontami, kolorami, autoLayoutem. Lustruj strukturę frame'a 1:1. **Mobile specyfika**: pomiary uwzględniają safe-area top/bottom, status bar, home indicator — jeśli frame ma je wymalowane, oznacz osobno.]
+#### 3.6c Części PR
 
-## <NAZWA EKRANU 2> (`<nodeId>`) — ...
+Bot recenzji PR obejmuje do 150 plików. `plan.mjs sprawdz` (6.2) liczy szacunek plików do recenzji: ścieżki z tabel plików IU po filtrach `.coderabbit.yaml` plus test obok każdego pliku kodu bez testu w planie — pole `rozmiarPr` (per faza, per część i `propozycja`). Szacunek powyżej 150 wymaga sekcji `## Części PR` z tabelą `| Część | Fazy |` (np. `| 1 | 1–3 |`, `| 2 | 4–6 |`): cięcie tylko na granicy faz, części pokrywają fazy po kolei, każda poniżej 150 — punkt wyjścia to `propozycja` ze `sprawdz`. Faza, która sama ma ponad 150, to błąd — dzielisz fazę, bo cięcie przechodzi tylko między fazami. Archiwizacja zmierzy części na commitach końca faz, a `/dev-pr --czesc N` wyśle je kolejno.
 
-[...]
+#### 3.7 Wymagania wstępne operatora
 
-## Rozjazdy vs DESIGN.md — Figma jest źródłem prawdy
+Wypisz to, czego autopilot nie zrobi sam, a bez czego plan utknie: konta i konsole zewnętrzne, sekrety i zmienne środowiskowe, środowisko E2E (plan z `[E2E]` bez `.env.e2e`), assety i treści, dane na projekcie głównym potrzebne do implementacji, dostępy. Tabela kategorii ze źródłami, reguły delty wobec checklisty z `/dev-prep` i markery `[blokuje: …]` są w `references/przygotowanie-operatora.md` — przeczytaj go, gdy lista ma choć jedną pozycję albo istnieje checklista z 0.3. Pusta lista → `operator_prep: null` i brak pliku.
 
-[Tabela: element | DESIGN.md mówi | Figma mówi | decyzja. Jeśli brak rozjazdów — zostaw sekcję pustą z komentarzem "Brak rozjazdów na moment fetchu".]
-```
+#### 3.8 Niewiadome
 
-Po zapisie plików wpisz do frontmatter planu (4.2):
-
-```yaml
-figma_spec: ./docs/plans/<feature-slug>-figma/SPEC.md
-figma_screens:
-  <name-1>: ./docs/plans/<feature-slug>-figma/<name-1>.png
-  <name-2>: ./docs/plans/<feature-slug>-figma/<name-2>.png
-```
-
-**Krok F — Idempotentność.** Jeśli `docs/plans/<feature-slug>-figma/SPEC.md` **już istnieje** (rerun dev-plan na tym samym slug), zadaj `AskUserQuestion`:
-
-> "SPEC.md już istnieje. Co robimy?"
-
-Opcje:
-1. `Re-fetch i nadpisz` — pociągnij świeże dane z Figmy, nadpisz SPEC i PNG. Identyfikatory weź z tabeli „Screeny referencyjne" istniejącego SPEC (`fileKey` z nagłówka, `nodeId` z kolumny Frame); gdy w źródle są nowe linki albo tabela jest niepełna → wykonaj krok D, potem E.
-2. `Użyj istniejący` (rekomendowane jeśli nic nie zmieniło się w Figmie) — pomiń kroki E, użyj ścieżek z istniejącego folderu.
-
-NIGDY nie nadpisuj bez explicit zgody usera (memory: confirm-before-delete).
-
-### Faza 2: Rozwiąż pytania planistyczne
-
-Zbuduj listę pytań planistycznych z:
-- Odroczonych pytań z dokumentu źródłowego
-- Luk odkrytych w researchu repo lub zewnętrznym
-- Decyzji technicznych wymaganych do wyprodukowania użytecznego planu
-
-Dla każdego pytania zdecyduj czy powinno być:
-- **Rozwiązane podczas planowania** — odpowiedź jest poznawalna z kontekstu repo, dokumentacji lub wyboru użytkownika
-- **Odroczone do implementacji** — odpowiedź zależy od zmian w kodzie, zachowania runtime'owego lub odkryć w czasie wykonania
-
-Pytaj użytkownika tylko gdy odpowiedź materialnie wpływa na architekturę, scope, sekwencjonowanie lub ryzyko i nie może być odpowiedzialnie wywnioskowana.
-
-**Nie** uruchamiaj testów, nie buduj aplikacji, nie badaj zachowania runtime'owego w tej fazie. Celem jest solidny plan, nie częściowe wykonanie.
-
-### Faza 3: Ustrukturyzuj plan
-
-#### 3.1 Tytuł i nazewnictwo pliku
-
-- Stwórz jasny, wyszukiwalny tytuł w konwencjonalnym formacie jak `feat: Dodaj autentykację użytkowników` lub `fix: Zapobiegaj podwójnemu submitowi checkout`
-- Określ typ planu: `feat`, `fix` lub `refactor`
-- Zbuduj nazwę pliku według konwencji repozytorium: `docs/plans/YYYY-MM-DD-NNN-<type>-<descriptive-name>-plan.md`
-  - Stwórz `docs/plans/` jeśli nie istnieje
-  - Sprawdź istniejące pliki na dzisiejszą datę żeby określić następny numer sekwencyjny (zero-padded do 3 cyfr, zaczynając od 001)
-  - Nazwa opisowa powinna być zwięzła (3-5 słów) i w kebab-case
-  - Przykłady: `2026-01-15-001-feat-user-authentication-flow-plan.md`, `2026-02-03-002-fix-checkout-race-condition-plan.md`
-  - Unikaj: brakujących numerów sekwencyjnych, niejasnych nazw jak "new-feature", nieprawidłowych znaków (dwukropki, spacje)
-
-#### 3.2 Świadomość interesariuszy i wpływu
-
-Dla planów **Standardowych** lub **Głębokich** krótko rozważ kogo dotyczy ta zmiana — użytkownicy końcowi, developerzy, operacje, inne zespoły — i jak to powinno kształtować plan. Dla pracy cross-cutting zanotuj dotknięte strony w sekcji Wpływ systemowy.
-
-#### 3.3 Rozbij pracę na Implementation Units
-
-Rozbij pracę na logiczne implementation units. Każdy unit powinien reprezentować jedną znaczącą zmianę którą implementator mógłby typowo wylądować jako atomowy commit.
-
-Dobre unity:
-- Skupione na jednym komponencie, zachowaniu lub seam integracyjnym
-- Zazwyczaj dotykające małego klastra powiązanych plików
-- Uporządkowane według zależności
-- Wystarczająco konkretne do wykonania bez pre-pisania kodu
-- Oznaczone składnią checkbox do śledzenia postępu
-
-Unikaj:
-- 2-5 minutowych micro-kroków
-- Unitów obejmujących wiele niepowiązanych problemów
-- Unitów tak niejasnych że implementator wciąż musi wymyślić plan
-
-#### 3.3b Pogrupuj IU w fazy (obowiązkowe na każdej głębokości)
-
-Autopilot wykonuje plan **fazami**: faza = jednostka `execute → review → fix`, a `/dev-docs` przenosi fazy z planu 1:1 do `docs/active/<zadanie>/` (nie wymyśla własnego podziału). Dlatego podział na fazy jest decyzją **plannera**, nie `/dev-docs`:
-
-- Każdy IU należy do dokładnie jednej fazy. Plan Lekki ma zwykle **jedną** fazę; Standardowy 2–3; Głęboki 3–6.
-- **Numeracja numeryczna od 1** (`Faza 1`, `Faza 2`, …) — autopilot, review (`review-faza-N.md`) i sekcje `## Operator checklist faza N` operują na numerach. Nie używaj liter ani nazw bez numeru.
-- Nagłówek fazy w sekcji Implementation Units: `### Faza N — <nazwa>`, a pod nim jedna linia `**Zależy od:** Brak | Faza K` oraz (opcjonalnie) `**Równolegle z:** Faza M`, gdy fazy są niezależne. Informacja o równoległości jest dokumentacyjna — autopilot i tak wykonuje fazy sekwencyjnie, ale operator może tak uruchomić dwa zadania.
-- Kryterium cięcia: faza kończy się w stanie, który da się **zreviewować i przetestować niezależnie** (typecheck/testy przechodzą, aplikacja działa). Typowy układ: fundament danych (migracje, typy, walidacje) → warstwa danych/akcje → ekrany → polish/E2E. Nie rób fazy z jednego trywialnego IU, jeśli naturalnie należy do sąsiedniej.
-- IU z flow `[E2E]` umieszczaj w fazie, w której istnieje już wszystko, czego flow potrzebuje (ekran + dane + seed) — inaczej tester nie ma czego uruchomić i scenariusz spadnie do Operatora.
-
-#### 3.4 Zdefiniuj każdy Implementation Unit
-
-Dla każdego unitu dołącz:
-- **Cel** — co ten unit osiąga
-- **Wymagania** — które wymagania lub kryteria sukcesu realizuje
-- **Zależności** — co musi istnieć wcześniej
-- **Pliki** — dokładne ścieżki plików do stworzenia, modyfikacji lub testowania
-- **Delegate to** — subagent wykonujący ten unit (`feature-builder-mobile-ui` | `feature-builder-mobile-data` | `feature-builder-mobile-fullstack`). Reguła decyzyjna w sekcji 3.5.
-- **Skills in play** — lista skilli aktywnych podczas implementacji (mirror frontmatter `skills:` wybranego subagenta). Dokumentacyjne, dla czytelności planu.
-- **Podejście** — kluczowe decyzje, przepływ danych, granice komponentów lub notatki integracyjne
-- **Notatka wykonawcza** — opcjonalna, tylko gdy unit korzysta z niestandardowej postawy wykonawczej jak test-first lub characterization-first
-- **Wzorce do naśladowania** — istniejący kod lub konwencje do odwzorowania
-- **Scenariusze testowe** — konkretne zachowania, edge cases i ścieżki awarii do pokrycia. Rozróżniaj typy: `[Unit]` dla testów kodu, `[E2E]` dla scenariuszy do weryfikacji na emulatorze przez `mobile-e2e-maestro` (Maestro CLI), `[Manual]` dla pojedynczych testów wymagających człowieka (np. weryfikacja na fizycznym urządzeniu, akceptacja designera). Dla `[E2E]` stosuj konwencję zarządzanego harnessu — patrz sekcja 3.4b.
-- **Weryfikacja** — wyłącznie **automatyzowalne** kryteria PASS/FAIL: komenda CLI (typecheck/test/lint/grep) **lub** runner E2E niebędący scenariuszem (np. `.maestro/<etap>-run-all.sh`); scenariusze Maestro idą do „Scenariusze testowe" jako `[E2E]`, nie tutaj. Każdy checkbox `Weryfikacja:` musi być możliwy do domknięcia bez udziału człowieka, wyrażony jako oczekiwany wynik a nie literalny skrypt komend shellowych. Powód: `/dev-docs-review` automatycznie odznacza `Weryfikacja:` po PASS — checkbox nieautomatyzowalny pozostanie wiecznie `[ ]` i zafałszuje raport postępu. Jeśli kryterium wymaga człowieka — przenieś do `Operator checklist` lub do `Scenariusze testowe` jako `[Manual]`. Scenariusze Maestro żyją w „Scenariusze testowe" jako `[E2E] \`.maestro/<flow>.yaml\` — …` (jedna linia per scenariusz); w `Weryfikacja:` marker `[E2E]` tylko dla runnera niebędącego scenariuszem — nigdy druga linia dla tego samego flow (parsery autopilota liczą linie `[E2E]` jako osobne przebiegi i dopasowują po nazwie flow)
-- **Operator checklist** *(opcjonalne)* — kroki wymagające człowieka (manual test na fizycznym urządzeniu, weryfikacja przez QA, akceptacja designera, sprawdzenie haptyki/dźwięku). Są celowo poza automatyzacją autopilota — operator zaznacza je ręcznie po wykonaniu. Pomiń sekcję jeśli IU nie ma takich kroków
-
-Każdy feature-bearing unit powinien zawierać ścieżkę pliku testowego w `**Pliki:**`. Dla unitów modyfikujących ekrany/komponenty UI lub ścieżki użytkownika — dołącz scenariusze `[E2E]` opisujące flow do przetestowania przez Maestro (launch app, tap/scroll/swipe, asercje, deep linking, screenshot).
-
-#### 3.4b Zarządzany harness E2E — seedy i baza testowa
-
-Autonomiczne E2E (autopilot) działa na **dedykowanym projekcie testowym** opisanym w `.env.e2e` (NIGDY dev/prod). Środowisko stawia i sprząta sam autopilot (Metro na `.env.e2e`, `supabase db push` migracji + seedy, konto `E2E_TEST_EMAIL`); tester `feature-tester-mobile-e2e` **tylko odpala** istniejące flow — **nie pisze ich**. Planując scenariusze `[E2E]`, przestrzegaj:
-
-- **Granica możliwości Maestro (najczęściej pomijane!):** Maestro steruje wyłącznie UI Twojej apki (a11y tree), NIE natywnymi powierzchniami OS. Prześledź każdy `[E2E]` krok po kroku — jeśli dotyka **pickera zdjęć / kamery / share sheet / natywnego Alert/ActionSheet / biometrii**, Maestro tego nie wykona i `[E2E]` cicho spadnie do Operatora. Wtedy: (a) dane, które wpadłyby przez picker/kamerę → **wstrzyknij przez service_role** (`runScript: .maestro/inject-*.js`, wzór `etap-12-inject-message.js`) i asertuj RENDER; (b) natywny confirm/destructive → `[Manual]` w `Operator checklist`. **Nigdy nie pisz flow tapującego natywny picker.** Pełna tabela granic: skill `mobile-e2e-maestro` §„Granica możliwości Maestro". (Udokumentowana regresja etap-12b: plan galerii miał flow tapujący picker iOS → ręczna korekta na inject.)
-- **Plik flow `.maestro/<flow>.yaml` i jego seed `.maestro/<flow>-seed.sql` to deliverables BUILDERA** (kod), nie testera ani Operatora. Wpisz flow do `**Pliki:**` danego IU jako `Stwórz (e2e flow):` (nowy) lub `Modyfikuj (e2e flow):` (istniejący). Seed — dwie gałęzie: (1) scenariusz potrzebuje danych, których nie ma w stanie bazowym konta `E2E_TEST_EMAIL` ani w żadnym istniejącym seedzie → `Stwórz (e2e seed):` w `Pliki:`; (2) dane są w istniejącym `.maestro/<x>-seed.sql` → nie twórz nowego, ale wpisz jego nazwę w linii scenariusza. **Każdy scenariusz `[E2E]` w „Scenariusze testowe" ma postać `[E2E] \`.maestro/<flow>.yaml\`[ (seed: .maestro/<x>-seed.sql)] — <scenariusz> → <oczekiwany stan>`** — to JEDYNA nośna linia scenariusza (db-sync, tester i scribe czytają z niej ścieżkę flow i seed); w `Weryfikacja:` nie dubluj jej drugą linią `[E2E]` dla tego samego flow (każda linia `[E2E]` = osobny przebieg w licznikach), a `Weryfikacja: [E2E]` zostaw wyłącznie dla runnerów niebędących scenariuszem (np. `run-all.sh`). Przypisz IU do buildera (`feature-builder-mobile-*`). Checkbox `[E2E]`/`Weryfikacja:` to WYŁĄCZNIE uruchomienie przez testera — autorstwo flow NIGDY nie może wisieć pod tym checkboxem ani w bloku testera, bo wtedy nikt go nie napisze i E2E cicho spadnie do Operatora (**udokumentowana regresja etap-12: powstał seed, flow `.yaml` nie → E2E nie przebiegło**).
-- **Seed musi być idempotentny** (DELETE/upsert, bezpieczny do re-runu) i referować konto testowe przez `(select id from auth.users where email='<E2E_TEST_EMAIL>')` — **nigdy przez stałe ID**. Wzór: istniejący `.maestro/<inny>-seed.sql` w repo. Flow loguje się kontem `E2E_TEST_EMAIL` (wzór: istniejący flow logowania w `.maestro/`).
-- **E2E celuje w projekt z `.env.e2e`** — nigdy nie wstrzykuj danych testowych do dev/prod ani przez Supabase MCP. Smoke RLS (np. odmowa nie-uczestnikowi) wykonuj SQL-em na bazie e2e (`psql "$SUPABASE_E2E_DB_URL"`).
-- **Realtime / multi-client realistycznie:** single-client (render, wysłanie, optimistic+echo dedup) jest autonomicznie testowalny i należy do `[E2E]`. Prawdziwy two-client „na żywo" (równoczesne urządzenia) → `Operator checklist` `[Manual]`, bo harness single-client tego nie dowiedzie.
-- **Projekt bez `.env.e2e`** (środowisko E2E nieskonfigurowane): masz dwie drogi i musisz wybrać ŚWIADOMIE, bo autopilot zatrzyma run na bramce setupu, gdy plan zawiera choć jeden `[E2E]`, a pliku nie ma. Albo (a) postaw środowisko przed startem — skill `/e2e-setup` (one-time, ~30 min), albo (b) przenieś scenariusz do `Operator checklist` jako `[Manual]` — seed nie jest wtedy wymagany. Nie zostawiaj `[E2E]` „na później": to właśnie ta ścieżka kończy się etapem zamkniętym z niewykonanymi testami.
-
-Używaj `Notatka wykonawcza` oszczędnie. Dobre użycia:
-- `Notatka wykonawcza: Zacznij od failing integration testu dla kontraktu request/response.`
-- `Notatka wykonawcza: Dodaj characterization coverage przed modyfikacją tego legacy parsera.`
-- `Notatka wykonawcza: Implementuj nowe zachowanie domenowe test-first.`
-
-Nie rozwijaj unitów w literalne substepy `RED/GREEN/REFACTOR`.
-
-#### 3.5 Wybór subagenta dla IU
-
-Każdy Implementation Unit MUSI mieć zadeklarowany `Delegate to:` — nazwa subagenta z `.claude/agents/`, który go wykona. Reguła decyzyjna oparta na ścieżkach z pola `Pliki:`:
-
-| Ścieżki w `Pliki:` | Subagent | Skille (mirror dla `Skills in play:`) |
-|---|---|---|
-| Tylko `*.tsx` w `app/`, `components/`, `screens/`, lub native config (`app.json`, `app.config.ts`) | `feature-builder-mobile-ui` | expo-overview, expo-native-ui, expo-ui, expo-animation, expo-design-system, expo-router, expo-tailwind-setup, figma:figma-use, figma-design-to-code |
-| Tylko `*.ts` w `lib/`, `hooks/use<X>Data.ts`, `supabase/migrations/`, `supabase/functions/` | `feature-builder-mobile-data` | expo-overview, expo-data-fetching, supabase-dev-guidelines, security, sentry-integration |
-| Mix UI i danych w jednym atomowym IU | `feature-builder-mobile-fullstack` | expo-overview, expo-native-ui, expo-ui, expo-animation, expo-design-system, expo-router, expo-tailwind-setup, expo-data-fetching, supabase-dev-guidelines, security, sentry-integration, figma:figma-use, figma-design-to-code |
-
-**Reguła praktyczna:** jeśli da się rozsądnie podzielić na dwa osobne IU (jeden UI, drugi data) — podziel. `feature-builder-mobile-fullstack` używaj **tylko** gdy podział byłby sztuczny (np. ekran logowania z OAuth, gdzie UI bez auth call lub auth call bez ekranu są bezużyteczne).
-
-Pole `Skills in play:` jest dokumentacyjnym mirror frontmatter `skills:` wybranego subagenta — pozwala czytelnikowi planu zrozumieć kontekst implementacji bez wchodzenia do pliku subagenta.
-
-**Figma w mirrorze:** `feature-builder-mobile-ui` i `feature-builder-mobile-fullstack` zawsze mają figma skille w `Skills in play:` (mirror frontmatera tych agentów). Te skille są aktywne tylko gdy plan ma niepuste `figma_spec`/`figma_screens` w frontmaterze — wtedy `dev-docs-execute` wstrzykuje subagentowi "Mandatory designerski kontekst". Bez tej sekcji w prompcie buildery ignorują skille figma. `feature-builder-mobile-data` nie ma figma skilli — warstwa danych nie dotyka designu.
-
-**Bramka spójności z 1.6:** jeśli krok A sklasyfikował feature jako pure-data, a którykolwiek IU dostaje `Delegate to: feature-builder-mobile-ui` lub `feature-builder-mobile-fullstack` → klasyfikacja była błędna. Wróć do 1.6 krok B i wykonaj B–C (oraz D–F, gdy użytkownik ma mockupy) PRZED dalszym planowaniem; zaktualizuj frontmatter `design_md`/`figma_spec`/`figma_screens`. Builder UI bez DESIGN.md/Figmy halucynuje pomiary — to dokładnie regresja, której 1.6 ma zapobiegać.
-
-#### 3.6 Trzymaj niewiadome planistyczne i implementacyjne oddzielnie
-
-Jeśli coś jest ważne ale jeszcze niepoznawalne, zapisz to explicite pod odroczonymi notatkami implementacyjnymi zamiast udawać że rozwiązujesz to w planie.
-
-Przykłady:
-- Dokładne nazwy metod lub helperów
-- Finalne szczegóły SQL lub zapytań po dotknięciu prawdziwego kodu
-- Zachowanie runtime'owe zależne od zobaczenia faktycznych test failures
-- Refaktory które mogą stać się niepotrzebne po rozpoczęciu implementacji
-
-#### 3.7 Wymagania wstępne operatora (co musi zrobić człowiek, zanim ruszy autopilot)
-
-Przejdź po wszystkich IU i wypisz **wyłącznie** rzeczy, których Claude/autopilot nie zrobi sam, a bez których plan utknie (run zatrzyma się na bramce albo builder zaimplementuje „na ślepo"). To jest osobna kategoria od `Operator checklist` w IU (tamto = weryfikacja **po** implementacji; to = przygotowanie **przed**). Źródła do przeskanowania:
-
-| Kategoria | Typowe pozycje | Skąd wiesz |
-|---|---|---|
-| Konta i konsole zewnętrzne | OAuth (Google Cloud / Apple Developer), Sentry DSN, RevenueCat, Firebase, klucze map, sklepy (App Store Connect, Play Console) | IU z `supabase/functions/`, auth, integracje; `Skills in play` z `sentry-integration`, `eas-*` |
-| Sekrety i zmienne środowiskowe | nowe klucze w `.env.local` / `.env.e2e` / `supabase secrets`, `EXPO_PUBLIC_*` | `Pliki:` tykające `.env.example`, Edge Functions czytające `Deno.env` |
-| Środowisko E2E | plan ma ≥1 `[E2E]` → musi istnieć `.env.e2e` (sprawdź `ls .env.e2e`); brak = pozycja „odpal `/e2e-setup` (~30 min)" **albo** świadomy opt-out (scenariusze `[E2E]` → `[Manual]`). Gdy `.env.e2e` istnieje — NIE wpisuj nic: canary, Metro, emulator, migracje i seedy na projekt e2e robi sam autopilot (env-up, db-sync) | 3.4b; stan repo |
-| Assety graficzne / treści | ikony, splash, ilustracje empty state, wideo, teksty prawne, tłumaczenia od klienta | IU w `assets/`, `app.json` (ikony/splash), legal |
-| Dane na projekcie głównym | dane wejściowe/backfill, których builder potrzebuje **do implementacji** (np. istniejące rekordy do migracji danych) — nie do rolloutu ani do testów ręcznych | IU z migracjami / czytające istniejące dane |
-| Dostępy potrzebne do implementacji | konto Apple Developer / Play Console dla IU z `eas-*`, klucze/certyfikaty push, konto w zewnętrznym API | `Skills in play` z `eas-*`; IU integracyjne |
-
-**Gdy operator checklist już istnieje** (plik znaleziony w 0.2 po frontmatterze — typowo z `/dev-prep`), Twoim zadaniem jest go **uzupełnić, nie odtworzyć**. Przejdź po nim i przygotuj wyłącznie **deltę**:
-
-- **Pozycje odhaczone `[x]`** — nie ruszasz. Są zrobione; powtórzenie każe operatorowi robić to samo dwa razy.
-- **Pozycje nieodhaczone, które już tam są** — dopisujesz do nich to, czego `/dev-prep` nie mógł wiedzieć: **numer blokowanego IU/fazy** (`— blokuje Fazę 2 (IU-3)`). Treści nie przepisujesz.
-- **Pozycje, których tam nie ma**, a wynikają z konkretnych IU (nowy klucz w `.env.example` tykanym przez IU, sekret Edge Function, środowisko E2E) — dopisujesz jako nowe.
-
-Dostępu do Figmy **nie wpisuj** — rozstrzyga się w 1.6 (fetch się udał albo zapadła decyzja „projektujemy z głowy"); pozycja dopisana po fakcie niczego już nie odblokuje.
-
-Gdy dokumentu nie ma (wejście wprost do `/dev-plan`, np. bugfix), zbuduj listę od zera wg tabeli powyżej — 5.2b utworzy plik.
-
-Fizyczne urządzenie do scenariuszy `[Manual]` (haptyka, biometria, push) → `Operator checklist` / smoke po implementacji, **nie tutaj** — brak urządzenia niczego nie blokuje przed startem.
-
-Dla każdej pozycji zapisz: **co** (konkretna czynność), **po co / co blokuje** (numer IU lub fazy, albo „bramka setupu E2E autopilota"), **jak** (kroki na tyle dokładne, żeby operator nie musiał pytać: gdzie kliknąć, jaką zmienną ustawić, jaką komendą sprawdzić), **dowód wykonania** (np. „`grep GOOGLE_CLIENT_ID .env.local` zwraca wartość"). Nie wpisuj rzeczy, które autopilot robi sam (typecheck, testy, Metro, emulator, migracje i seedy na projekt e2e, `git`).
-
-**Każda pozycja musi być wykonalna PRZED fazą, którą blokuje.** Czynności po zakończeniu zadania (`supabase db push` na dev/prod po merge, rollout, monitoring, sprzątanie danych testowych) NIE trafiają tutaj — wpisz je do `Operator checklist` IU, który je wywołuje (stamtąd `/dev-docs` przenosi je do `## Operator checklist faza N`, a `dev-docs-complete` do smoke'u operatora). Decyzje produktowe, które wciąż wymagają wyboru użytkownika, też tu nie należą — wg 0.5 to nierozwiązany bloker planowania: albo zapada jawnie jako założenie w „Kluczowe decyzje techniczne", albo planowanie się zatrzymuje.
-
-Jeśli lista jest pusta — zanotuj to (`operator_prep: null` w frontmatter, patrz 4.2) i nie twórz pliku. Jeśli ma ≥1 pozycję — plik powstaje w 5.2b.
+Coś ważnego, ale niepoznawalnego przed kodem (nazwy helperów, finalny SQL, zachowanie zależne od failujących testów, refaktor, który może okazać się zbędny), zapisujesz w „Otwarte pytania → Odroczone do implementacji”, nie udajesz rozstrzygnięcia.
 
 ### Faza 4: Napisz plan
 
-Używaj jednej filozofii planowania na wszystkich głębokościach. Zmieniaj ilość szczegółów, nie granicę między planowaniem a wykonaniem.
+Przeczytaj `references/szablon-planu.md` i pisz plan według niego. Głębokość zmienia ilość szczegółów, nie granicę planowanie/wykonanie: Lekka pomija opcjonalne sekcje; Standardowa ma pełny szablon z ryzykami, odroczonymi pytaniami i wpływem systemowym; Głęboka dokłada sekcje analizy z szablonu, gdy realnie pomagają. Diagram mermaid dołączasz, gdy proza nie oddaje relacji (ERD, sekwencja usług, stany, złożone rozgałęzienia).
 
-#### 4.1 Guidance głębokości planu
+Plan nie zawiera kodu implementacji (chyba że kształt kodu jest artefaktem designu), komend git ani commit message'y, kroków RED/GREEN/REFACTOR i numerów linii jako referencji (ścieżki i symbole zamiast nich).
 
-**Lekka**
-- Plan powinien być kompaktowy
-- Zazwyczaj 2-4 implementation units w **jednej** fazie
-- Pomiń opcjonalne sekcje które dodają mało wartości
+### Faza 5: Przegląd, zapis i checklista operatora
 
-**Standardowa**
-- Użyj pełnego core template
-- Zazwyczaj 3-6 implementation units w 2-3 fazach
-- Dołącz ryzyka, odroczone pytania i wpływ systemowy gdy relevantne
+#### 5.1 Przegląd przed zapisem
 
-**Głęboka**
-- Użyj pełnego core template plus opcjonalne sekcje analizy
-- Zazwyczaj 4-8 implementation units w 3-6 fazach
-- Dołącz rozważane alternatywy, wpływ na dokumentację i głębsze traktowanie ryzyk gdy uzasadnione
+- Plan nie wymyśla zachowań produktu należących do `/dev-brainstorm`; każda główna decyzja ma oparcie w źródle albo researchu; odroczone sprawy są jawne.
+- Z dokumentem źródłowym: przeczytaj go ponownie — podejście pasuje do intencji, granice i kryteria są zachowane, blokery rozwiązane albo jawnie założone, każda sekcja źródła ma odpowiedź w planie.
+- Każde ID ze „Śledzenia wymagań” ma IU, która je wymienia w polu Wymagania (`sprawdz` zgłasza brak jako uwagę).
+- Każda IU: konkretna, w kolejności zależności, z `Delegate to:` wg 3.5 i `Skills in play:` zgodnym z builderem, z tabelą plików wg 3.6, z odwołaniami do decyzji niosącymi treść.
+- Frontmatter ma `design_md`, `figma_spec`, `figma_screens`, `operator_prep` — ścieżki albo jawne `null` / `{}`; `figma_spec` i ekrany `figma_screens` istnieją na dysku. Plan z IU ui/fullstack przeszedł kroki B–C z 1.6 (`figma_spec: null` tylko jako świadoma odpowiedź „projektujemy z głowy”).
+- Scenariusze są konkretne, ale nie są kodem testu; Weryfikacja wg 3.4; `[E2E]` wg 3.4b.
+- Twierdzenia o stanie repo w Ryzykach i Kluczowych decyzjach sprawdzone w kodzie, nie z pamięci: ryzyko budżetu paczki opierasz na routerze (które trasy ładują się przez `lazy(`) i wypisujesz, co faktycznie trafia do pliku startowego (vibersi etap 5: plan liczył widoki strony projektu do pliku startowego, a strona była już leniwa).
+- „Wymagania wstępne operatora” zgadzają się z `operator_prep`; plan z `[E2E]` bez `.env.e2e` ma pozycję setupu albo opt-out do `[Manual]`.
 
-Na każdej głębokości fazy są obowiązkowe (3.3b) — różni się tylko ich liczba.
+#### 5.2 Zapis planu
 
-#### 4.1b Opcjonalne rozszerzenia Deep planu
+`mkdir -p docs/plans/` i zapisz plan narzędziem Write do `docs/plans/YYYY-MM-DD-NNN-<type>-<feature-slug>-plan.md`. Potwierdź: `Plan zapisany do docs/plans/<plik>`.
 
-Dla wystarczająco dużej, ryzykownej lub cross-cutting pracy, dodaj sekcje które genuinely pomagają:
-- **Rozważane alternatywy**
-- **Metryki sukcesu**
-- **Zależności techniczne** (biblioteki, wersje, kolejność merge'ów — wymagania wobec *człowieka* idą do „Wymagania wstępne operatora", nie tutaj)
-- **Analiza ryzyk i mitygacja**
-- **Plan dokumentacji**
-- **Notatki operacyjne / rolloutowe**
-- **Przyszłe rozważania** tylko gdy materialnie wpływają na obecny design
+#### 5.2b Checklista operatora
 
-Nie dodawaj tych sekcji jako boilerplate. Dołączaj je tylko gdy poprawiają jakość wykonania lub alignment interesariuszy.
+Gdy delta z 3.7 jest niepusta: uzupełnij checklistę z 0.3 narzędziem Edit albo utwórz `docs/operator/<feature-slug>-przygotowanie.md` wg `references/przygotowanie-operatora.md`. Faktyczną ścieżkę wpisz do `operator_prep:` planu. Potwierdź: `Checklista operatora: <ścieżka> (N pozycji, M z [blokuje: faza 1])`.
 
-#### 4.2 Core Plan Template
+### Faza 6: Zadanie dla autopilota
 
-Pomiń wyraźnie niepasujące opcjonalne sekcje, szczególnie dla planów Lekkich.
+Wynik fazy: plan bez błędów skryptu, branch `feature/<zadanie>` z commitem inicjalnym, `docs/active/<zadanie>/` i bramka gotowości. `<zadanie>` = `<feature-slug>` z nazwy pliku planu, chyba że użytkownik podał inną nazwę.
 
-```markdown
----
-title: [Tytuł planu]
-type: [feat|fix|refactor]
-status: active
-date: YYYY-MM-DD
-origin: docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md  # dołącz gdy planujesz z dokumentu źródłowego (0.2); dla zbiorczego: ścieżka#sekcja
-design_md: ./docs/DESIGN.md          # null jeśli pure-data feature lub brak DESIGN.md (patrz 1.6)
-figma_spec: ./docs/plans/<feature-slug>-figma/SPEC.md   # null jeśli brak mockupów Figmy
-figma_screens:                       # {} jeśli brak mockupów; mapa name → ścieżka PNG
-  home: ./docs/plans/<feature-slug>-figma/home.png
-  settings: ./docs/plans/<feature-slug>-figma/settings.png
-operator_prep: ./docs/operator/<nazwa checklisty>.md   # faktyczna ścieżka z 5.2b; null gdy lista z 3.7 jest pusta
----
+#### 6.1 Bramka E2E per scenariusz
 
-# [Tytuł planu]
+Dla każdego scenariusza `[E2E]` w planie prześledź flow po krokach:
 
-## Przegląd
+- **Natywne okno albo zewnętrzny system** — czego narzędzie jazdy nie wykona, jak to obejść i kiedy krok idzie na `[Manual]`: `.claude/stack/plan-e2e.md`, sekcja „Granice narzędzia jazdy”.
+- **Dane spoza stanu bazowego** konta `E2E_TEST_EMAIL` (nowe rekordy, relacje, uprawnienia) → w IU jest wiersz `Stwórz (e2e seed)` albo ścieżka istniejącego seeda w linii scenariusza wg `.claude/stack/plan-e2e.md`, sekcja „Seedy”.
+- **Trasa serwera aplikacji** (zapis albo odczyt przez `/api/…`) → środowisko E2E uruchamia ten serwer wg 3.4b; jeśli skrypt startu dopiero powstaje, pozycja checklisty z `[blokuje: faza N]` jest w planie.
 
-[Co się zmienia i dlaczego]
+Zatrzymujesz się i pytasz tylko przy: (a) scenariuszu bez identyfikatora flow albo bez wykonalnych kroków — domyślna propozycja to dopisanie flow i kroków do planu, `[Manual]` jako świadomy opt-out; (b) flow z natywnym oknem lub zewnętrznym systemem bez obejścia seedem; (c) danych spoza stanu bazowego bez seeda. Poprawki wprowadzasz w planie technicznym.
 
-## Ujęcie problemu
+#### 6.2 Walidacja planu skryptem
 
-[Podsumuj problem użytkownika/biznesowy i kontekst. Odwołaj się do dokumentu źródłowego gdy jest.]
-
-## Śledzenie wymagań
-
-- R1. [Wymaganie lub kryterium sukcesu które plan musi spełnić]
-- R2. [Wymaganie lub kryterium sukcesu które plan musi spełnić]
-
-## Granice scope'u
-
-- [Explicite non-goal lub wykluczenie]
-
-## Kontekst i research
-
-### Relevantny kod i wzorce
-
-- [Istniejący plik, klasa, komponent lub wzorzec do naśladowania]
-
-### Wiedza instytucjonalna
-
-- [Relevantny insight z `docs/solutions/`]
-
-### Referencje zewnętrzne
-
-- [Relevantne zewnętrzne docs lub źródło best-practice, jeśli użyte]
-
-## Kluczowe decyzje techniczne
-
-- [Decyzja]: [Uzasadnienie]
-
-## Otwarte pytania
-
-### Rozwiązane podczas planowania
-
-- [Pytanie]: [Rozwiązanie]
-
-### Odroczone do implementacji
-
-- [Pytanie lub niewiadoma]: [Dlaczego jest świadomie odroczone]
-
-## Wymagania wstępne operatora
-
-[Z 3.7. Jeśli lista pusta: „Brak — autopilot może startować od razu." Jeśli niepusta: jedno zdanie + link do checklisty (ścieżka z `operator_prep`, ustalona w 5.2b) i skrót pozycji jako lista `- [ ]` z numerem blokowanej fazy/IU, np. „- [ ] Google OAuth client ID w `.env.local` — blokuje Fazę 2 (IU-3)".]
-
-## Implementation Units
-
-[Każdy IU pod nagłówkiem swojej fazy (3.3b). Numeracja IU ciągła przez cały plan (IU-1, IU-2, …), numeracja faz od 1.]
-
-### Faza 1 — [Nazwa fazy]
-
-**Zależy od:** Brak
-**Równolegle z:** — *(opcjonalne)*
-
-- [ ] **IU-1: [Nazwa]**
-
-**Cel:** [Co ten unit osiąga]
-
-**Wymagania:** [R1, R2]
-
-**Zależności:** [Brak / IU-1 / zewnętrzny prerequisite]
-
-**Pliki:**
-- Stwórz: `ścieżka/do/nowego_pliku`
-- Modyfikuj: `ścieżka/do/istniejącego_pliku`
-- Test (unit): `ścieżka/do/pliku_testowego`
-- Stwórz (e2e flow): `.maestro/<flow>.yaml` *(builder PISZE flow; tester tylko odpala — patrz 3.4b)*
-- Modyfikuj (e2e flow): `.maestro/<istniejący-flow>.yaml` *(gdy scenariusz rozszerza istniejący flow; istniejący seed wskaż w linii scenariusza `[E2E]` jako `(seed: .maestro/<x>-seed.sql)`)*
-- Stwórz (e2e seed): `.maestro/<flow>-seed.sql` *(idempotentny, konto przez `E2E_TEST_EMAIL`; pomiń gdy flow nie potrzebuje danych spoza stanu bazowego)*
-
-**Delegate to:** feature-builder-mobile-ui | feature-builder-mobile-data | feature-builder-mobile-fullstack
-
-**Skills in play:** [lista skilli — mirror frontmatter `skills:` wybranego subagenta]
-
-**Podejście:**
-- [Kluczowa decyzja designu lub sekwencjonowania]
-
-**Notatka wykonawcza:** [Opcjonalny sygnał postawy test-first, characterization-first lub innej]
-
-**Wzorce do naśladowania:**
-- [Istniejący plik, klasa lub wzorzec]
-
-**Scenariusze testowe:**
-- [Unit] [Konkretny scenariusz z oczekiwanym zachowaniem]
-- [Unit] [Edge case lub ścieżka awarii]
-- [E2E] `.maestro/<flow>.yaml`[ (seed: .maestro/<x>-seed.sql)] — [scenariusz: launchApp, tapOn X, assertVisible Y, takeScreenshot] → [oczekiwany stan] *(jedna linia per scenariusz; ścieżka flow z `Pliki:` tego IU)*
-- [Manual] [Krok wymagający człowieka, np. weryfikacja na fizycznym urządzeniu iOS] *(opcjonalne — używaj gdy automatyzacja jest niemożliwa)*
-
-**Weryfikacja:** *(wyłącznie automatyzowalne — CLI lub E2E przez Maestro na emulatorze; rzeczy ręczne idą do Operator checklist niżej)*
-- [Komenda CLI z oczekiwanym wynikiem, np. "bun run typecheck przechodzi bez błędów"]
-- [E2E] `.maestro/<etap>-run-all.sh` — [oczekiwany stan] *(TYLKO dla runnera/flow niebędącego scenariuszem z listy wyżej — scenariusze `[E2E]` nie mają drugiej linii w Weryfikacji)*
-
-**Operator checklist:** *(opcjonalne — kroki wymagające człowieka, NIE odznaczane przez autopilot)*
-- [ ] [Krok wymagający operatora, np. "QA weryfikuje haptykę i dźwięki na realnym iPhone"]
-
-### Faza 2 — [Nazwa fazy]
-
-**Zależy od:** Faza 1
-
-- [ ] **IU-2: [Nazwa]**
-
-[… ta sama struktura pól co IU-1 …]
-
-## Wpływ systemowy
-
-- **Graf interakcji:** [Jakie callbacki, middleware, observery lub entry pointy mogą być dotknięte]
-- **Propagacja błędów:** [Jak awarie powinny podróżować między warstwami]
-- **Ryzyka cyklu życia stanu:** [Częściowy zapis, cache, duplikaty lub problemy cleanup]
-- **Parytet surface API:** [Inne interfejsy które mogą wymagać tej samej zmiany]
-- **Pokrycie integracyjne:** [Scenariusze cross-layer których unit testy same nie udowodnią]
-
-## Ryzyka i zależności
-
-- [Materialny risk, zależność lub problem sekwencjonowania]
-
-## Dokumentacja / Notatki operacyjne
-
-- [Docs, rollout, monitoring lub wpływ na support gdy relevantne]
-
-## Źródła i referencje
-
-- **Dokument źródłowy:** [docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md](ścieżka)
-- Powiązany kod: [ścieżka lub symbol]
-- Powiązane PR/issues: #[numer]
-- Zewnętrzne docs: [url]
+```bash
+node .claude/scripts/plan/plan.mjs sprawdz <docs/plans/plik-planu.md>
 ```
 
-Dla większych planów `Głębokich` rozszerzaj core template tylko gdy to przydatne sekcjami takimi jak:
+Wynik JSON: `bledy` i `uwagi` z numerami linii i identyfikatorami IU. Każdy błąd poprawiasz w planie technicznym (Edit) i uruchamiasz `sprawdz` ponownie, aż `ok: true`. Skrypt opisuje kontrakt konsumentów zadania — poprawiasz plan, nie skrypt. Uwagi (origin bez pliku, migracja w opisie bez pliku w `supabase/migrations/`, luka w numeracji IU) pokazujesz użytkownikowi w handoffie.
 
-```markdown
-## Rozważane alternatywy
+#### 6.3 Git i branch
 
-- [Podejście]: [Dlaczego odrzucone lub niewybrane]
+1. `git status --short --untracked-files=all` i podział pozycji:
+   - **(a) artefakty planowania** pod `docs/plans/`, `docs/operator/`, `docs/brainstorms/` — stan oczekiwany; zapamiętaj listę ścieżek do commitu inicjalnego (`git checkout -b` przenosi je na nowy branch, więc plan ląduje na `feature/<zadanie>`, nie na `main`);
+   - **(b) każda inna pozycja** (kod, `e2e/`, `.env*`, `package.json`, inne docs) → stop i pytanie: zacommitować te pliki na bieżącym branchu, schować je (`git stash push -u -- <ścieżki z (b)>` — gołe `git stash` nie chowa nieśledzonych, a `-u` bez ścieżek schowałby też plan) albo przerwać. Ścieżek z (a) nie stashujesz i nie commitujesz na `main`.
+2. Branch: `git branch --show-current` = `feature/<zadanie>` → zostajesz; `git branch --list feature/<zadanie>` niepuste → najpierw sprawdź, czy to nie gałąź zakończonego zadania o tym samym slugu (`git merge-base --is-ancestor feature/<zadanie> main` albo istniejące `docs/completed/<zadanie>/`) — wtedy zapytaj o inną nazwę zadania; inaczej `git checkout feature/<zadanie>`; brak gałęzi → `git checkout -b feature/<zadanie>` z `main` albo `develop` (z innego brancha — zapytaj).
 
-## Metryki sukcesu
+#### 6.4 Pliki zadania
 
-- [Jak poznamy że to rozwiązało zamierzony problem]
-
-## Zależności techniczne
-
-- [Biblioteka, wersja, kolejność merge'ów — NIE czynności człowieka (te są w „Wymagania wstępne operatora")]
-
-## Analiza ryzyk i mitygacja
-
-- [Ryzyko]: [Mitygacja]
-
-## Plan dokumentacji
-
-- [Docs lub runbooki do aktualizacji]
-
-## Notatki operacyjne / rolloutowe
-
-- [Monitoring, migracja, feature flag lub rozważania rolloutowe]
+```bash
+node .claude/scripts/plan/plan.mjs generuj <docs/plans/plik-planu.md> --zapisz [--nazwa <zadanie>]
 ```
 
-#### 4.3 Zasady planowania
+Skrypt zapisuje `docs/active/<zadanie>/<zadanie>-plan.md`, `-kontekst.md` i `-zadania.md` i zwraca liczniki (fazy, IU, checkboxy implementacyjne, `Test:`, `Weryfikacja:`, `[E2E]`, pozycje operatora). Plików zadania nie piszesz ani nie poprawiasz ręcznie — zmiana idzie przez plan i ponowne `generuj`. Odmowa „katalog zadania już istnieje” przy wznowieniu bez przebiegu autopilota → `--nadpisz`; odmowa z powodu przebiegu (stan autopilota, raport review, odhaczone pozycje, wpisy dziennika) → pokaż ją i zapytaj, jak dalej.
 
-- Preferuj ścieżki plus referencje do klas/komponentów/wzorców nad kruche numery linii
-- Implementation units powinny być checkable składnią `- [ ]` do śledzenia postępu
-- Nie dołączaj fenced bloków kodu implementacji chyba że plan sam dotyczy kształtu kodu jako artefaktu designu
-- Nie dołączaj komend git, commit messages ani dokładnych receptur komend testowych
-- Nie rozwijaj implementation units w micro-step instrukcje `RED/GREEN/REFACTOR`
-- Nie udawaj że pytanie wykonawcze jest rozstrzygnięte tylko żeby plan wyglądał na kompletny
-- Dołączaj diagramy mermaid gdy wyjaśniają relacje lub flow które sama proza uczyniłaby trudnymi do prześledzenia — ERD dla zmian modelu danych, diagramy sekwencji dla interakcji multi-service, diagramy stanu dla przejść cyklu życia, flowcharty dla złożonej logiki rozgałęzień
+#### 6.5 Commit inicjalny
 
-### Faza 5: Finalny review, zapis pliku i handoff
+`git add docs/active/<zadanie>/` plus dokładnie ścieżki z 6.3 (a): plan techniczny, `docs/plans/<feature-slug>-figma/`, checklista z `operator_prep:` (dokładna ścieżka z frontmattera), zmieniony dokument źródłowy. Bez `git add -A` i bez całego `docs/plans/`. Commit: `docs: inicjalizacja planu dla <zadanie>`.
 
-#### 5.1 Review przed zapisem
+#### 6.6 Bramka gotowości
 
-Przed finalizacją sprawdź:
-- Plan nie wymyśla zachowań produktu które powinny być zdefiniowane w `/dev-brainstorm`
-- Jeśli nie było dokumentu źródłowego, bounded planning bootstrap ustalił wystarczająco dużo jasności produktowej żeby planować odpowiedzialnie
-- Każda główna decyzja jest ugruntowana w dokumencie źródłowym lub researchu
-- Każdy implementation unit jest konkretny, uporządkowany według zależności i gotowy do implementacji
-- Każdy implementation unit ma wypełnione `Delegate to:` zgodnie z regułą decyzyjną z sekcji 3.5
-- Pole `Skills in play:` w każdym IU jest spójne z frontmatter `skills:` wybranego subagenta
-- Frontmatter planu ma wypełnione pola `design_md`, `figma_spec`, `figma_screens` (zgodnie z 1.6) — jako konkretne ścieżki LUB explicite `null`/`{}`. Nigdy nie pomijaj tych pól.
-- Jeśli `figma_spec` ≠ null — plik istnieje na dysku (`Read` go zwraca treść), a każdy ekran z `figma_screens` ma fizycznie zapisany PNG
-- Każdy IU delegowany do `feature-builder-mobile-ui` lub `feature-builder-mobile-fullstack` ma w `Skills in play:` figma skille (mirror per sekcja 3.5), niezależnie od tego czy ten konkretny IU korzysta z mockupu — bo skille są w frontmaterze agenta
-- Jeśli plan ma ≥1 IU z `Delegate to:` mobile-ui|fullstack, kroki B–C z 1.6 zostały wykonane (użytkownik był zapytany o Figmę, linki były w źródle albo przyszły z dokumentu `/dev-prep`) — `figma_spec: null` dopuszczalne tylko jako świadoma odpowiedź „Nie — projektujemy z głowy", nigdy jako skutek pominięcia 1.6 przy klasyfikacji pure-data
-- Jeśli postawa test-first lub characterization-first była explicite lub silnie implikowana, relevantne unity niosą ją dalej z lekką `Notatką wykonawczą`
-- Scenariusze testowe są konkretne bez stawania się kodem testowym
-- Każdy checkbox `Weryfikacja:` jest automatyzowalny (CLI lub runner E2E). Kroki wymagające człowieka (fizyczne urządzenie, QA, designer) są w `Operator checklist` lub jako `[Manual]` w `Scenariusze testowe` — nigdy w `Weryfikacja:`
-- Każdy `[E2E]` w „Scenariusze testowe" ma postać `[E2E] \`.maestro/<flow>.yaml\`[ (seed: …)] — <scenariusz> → <stan>`, ścieżka występuje w `Pliki:` tego IU jako `Stwórz/Modyfikuj (e2e flow):`, a w `Weryfikacja:` nie ma drugiej linii `[E2E]` wskazującej ten sam flow (dozwolony wyłącznie runner `.sh`)
-- Każdy IU jest pod nagłówkiem `### Faza N — <nazwa>` z numeracją od 1 bez luk, każda faza ma `**Zależy od:**`, a żadna faza nie jest pusta (3.3b)
-- Sekcja „Wymagania wstępne operatora" istnieje i jest spójna z frontmatterem `operator_prep` (ścieżka gdy ≥1 pozycja, `null` gdy pusta). Jeśli plan ma ≥1 `[E2E]`, a `.env.e2e` nie istnieje — lista NIE może być pusta (pozycja `/e2e-setup` albo opt-out do `[Manual]`)
-- Odroczone elementy są explicite i nie ukryte jako fałszywa pewność
-
-Jeśli plan pochodzi z requirements doc, przeczytaj ponownie ten dokument i zweryfikuj:
-- Wybrane podejście wciąż pasuje do intencji produktu
-- Granice scope'u i kryteria sukcesu są zachowane
-- Blokujące pytania zostały rozwiązane, explicite założone lub odesłane do `/dev-brainstorm`
-- Każda sekcja dokumentu źródłowego jest zaadresowana w planie — przeskanuj każdą sekcję żeby potwierdzić że nic nie zostało cicho pominięte
-
-#### 5.2 Zapisz plik planu
-
-**WYMAGANE: Zapisz plik planu na dysk przed prezentowaniem jakichkolwiek opcji.**
-
-Użyj `mkdir -p docs/plans/` przed zapisem. Następnie użyj narzędzia Write żeby zapisać kompletny plan do:
-
-```text
-docs/plans/YYYY-MM-DD-NNN-<type>-<descriptive-name>-plan.md
+```bash
+node .claude/scripts/plan/plan.mjs gotowosc docs/active/<zadanie>
 ```
 
-Potwierdź:
+Wynik ma sześć pozycji, każdą wypisujesz w handoffie:
 
-```text
-Plan zapisany do docs/plans/[nazwa-pliku]
+- `plan` — błędy strukturalne planu technicznego (po 6.2 zwykle puste);
+- `e2e` — scenariusze `[E2E]` i makiety `figma_screens` vs środowisko: to samo sprawdzenie co bootstrap autopilota (`.env.e2e` w `.gitignore`, klucze bazy e2e, baza inna niż dev, `migrations.sum`, kontrola narzędzia jazdy z adaptera E2E), bez startu serwera. Brak `.env.e2e` przy scenariuszach albo pozycja w `bledy` zatrzyma autopilota przed fazą 1 → setup albo poprawka wg `.claude/templates/e2e-env/README.md` (jednorazowo, ~30 min); przy scenariuszach druga droga to opt-out `[E2E]` → `[Manual]` w planie i ponowne `generuj --nadpisz`. Zadanie z samymi makietami bez `.env.e2e` przechodzi (porównanie z makietą idzie bez przeglądarki do operatora), a przy błędnym `.env.e2e` naprawiasz plik. `uwagi` (brak skilla weryfikacji projektu) nie blokują startu — wypisz je z komendą `/weryfikacja-setup`;
+- `przygotowanie` — `blokujace` (`[blokuje: planowanie]`, `[blokuje: faza 1]`, marker bez numeru) zatrzymują start: wypisz je z liniami i podaj drogi (odhaczyć albo świadomie usunąć marker); `odroczone` (fazy ≥ 2) generator wpisał do `## Blokery operatora per faza` w planie zadania, a autopilot zatrzyma się przed fazą N, dopóki pozycja jest nieodhaczona w checkliście — operator robi ją po fazie, która ją umożliwia, odhacza, commituje checklistę i odpala świeży run;
+- `git` — branch `feature/<zadanie>` i czyste drzewo; autopilot nie przełącza brancha i zatrzymuje się na brudnym drzewie;
+- `testy` — runner testów projektu (vitest, jest) nie zbiera testów maszynerii z `.claude/**`; `ok: false` = autopilot zatrzyma się na `npm test` na starcie → wpisz do configu `poprawka` i zacommituj;
+- `higiena` — nie blokuje, ale każdą `uwagi` wypisz z komendą przed startem: stara baza wiedzy (`learned-patterns.md` w `.claude/rules/`, przed konwersją: `/dev-compound-refresh --konwersja`) albo kontekst startowy agenta ponad próg (CLAUDE.md + reguły bez `paths:`) kosztują każdego agenta każdej fazy. Operator decyduje, czy porządkuje przed autopilotem; pełna lista kontroli jest w doctorze (`bash .claude/scripts/doctor/doctor.sh`).
+
+Czerwona pozycja usuwana w tej sesji (odhaczenie checklisty, opt-out, `.gitignore` po setupie e2e) zmienia śledzone pliki: zacommituj je jawnymi ścieżkami (`git add <ścieżki> && git commit -m "docs(<zadanie>): przygotowanie operatora"`) i uruchom `gotowosc` ponownie. Autopilota nie uruchamiasz przy czerwonej bramce.
+
+#### 6.7 Handoff
+
+Wypisz wynik w formacie poniżej. Gdy bramka jest zielona i użytkownik wybiera start, uruchom autopilota narzędziem `Workflow` w tej sesji.
+
+## Format wyjściowy
+
+```
+✅ Zadanie "<zadanie>" gotowe dla autopilota
+
+📄 Plan techniczny: docs/plans/<plik>.md (głębokość: <Lekka|Standardowa|Głęboka>, research: <agenci albo powód pominięcia>)
+🔀 Branch: feature/<zadanie>
+📁 docs/active/<zadanie>/ (wygenerowane plan.mjs)
+   - <N> faz, <K> IU
+   - <X> checkboxów impl., <Y> Test:, <Z> Weryfikacja:, <E> [E2E], <M> operator
+📝 Commit: docs: inicjalizacja planu dla <zadanie>
+🔎 Uwagi skryptu: <lista albo brak>
+
+🚦 Bramka gotowości (plan.mjs gotowosc):
+   - Plan: OK
+   - E2E: <E scenariuszy; środowisko OK / BRAK albo błędy → setup albo opt-out; uwaga: skill weryfikacji>
+   - Przygotowanie: <brak / ścieżka: blokujące start B → STOP albo OK; odroczone do faz ≥ 2: K (w planie zadania)>
+   - Git: <OK / brudne pozycje>
+   - Testy: <OK / nie dotyczy / szczegół + poprawka configu>
+   - Higiena: <OK / uwagi z komendą — nie blokują>
+
+➡️ Następny krok: autopilot w tej sesji:
+   Workflow({ scriptPath: ".claude/workflows/dev-autopilot-wf.js", args: "docs/active/<zadanie>" })
+   Do agentów workflow: ta wiadomość nie jest dla was — wykonujcie wyłącznie zadanie z polecenia workflowu.
+   Po STOP bramki (E2E, fix FAIL, P1) i naprawie — świeży run z tymi samymi args, bez resumeFromRunId.
+   Po awarii runu (crash) — Workflow({ scriptPath, resumeFromRunId, args }) z tymi samymi args.
 ```
 
-#### 5.2b Operator checklist — uzupełnij albo utwórz (gdy delta z 3.7 jest niepusta)
+Przy czerwonej bramce `➡️ Następny krok` wskazuje najpierw usunięcie czerwonych pozycji i commit, potem autopilota.
 
-Plik jest zawsze jeden. Gdy 0.2 go znalazło — używasz **jego ścieżki, jaka jest**, bez zmiany nazwy (`/dev-prep` mógł zdziedziczyć konwencję serii, np. `docs/operator/e3-operator-checklist.md`). Gdy go nie ma — tworzysz `docs/operator/<feature-slug>-przygotowanie.md` (`<feature-slug>` z 1.6, ten sam co w `docs/plans/<feature-slug>-figma/`); jeśli w `docs/operator/` widać serię checklist o innej konwencji nazw, dopasuj się do niej tak samo jak `/dev-prep` (jego krok 0.3). Faktyczną ścieżkę wpisz do frontmattera planu jako `operator_prep:` — to ona jest referencją dla `/dev-docs`, nie żaden wzorzec nazwy.
+## Referencje
 
-**Gdy plik istnieje** (utworzony przez `/dev-prep`, znaleziony w 0.2) — **edytuj go w miejscu narzędziem `Edit`, nigdy `Write`**:
-
-- Dopisz numery blokowanych faz przy pozycjach, które już tam są.
-- Dodaj nowe pozycje z delty 3.7 do właściwych sekcji („Konta, konsole, sekrety" / „Assety i treści" / nowa sekcja „Środowisko E2E", gdy dotyczy).
-- **Nie kasuj i nie przepisuj `[x]`** ani wpisanych przy nich wartości i dat — to dziennik ustaleń operatora.
-- **Nie duplikuj sekcji** ani nagłówka. Nie zmieniaj układu sekcji zastanego w pliku.
-- Dopisz jedną linię pod nagłówkiem: `Uzupełnione przez /dev-plan YYYY-MM-DD — pozycje z Implementation Units oznaczone numerem blokowanej fazy.`
-
-Potwierdź: `Operator checklist uzupełniony: <ścieżka pliku> (+N pozycji z IU, M blokuje start)`
-
-**Gdy pliku nie ma** (wejście wprost do `/dev-plan`) — `mkdir -p docs/operator/` i zapisz nowy wg układu poniżej:
-
-```markdown
-# Przygotowanie dla operatora — <Tytuł planu>
-
-Plan: `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md` · Utworzono: YYYY-MM-DD
-Status: **do zrobienia przed autopilotem** — odhaczaj `[ ]` → `[x]`. `/dev-docs` sprawdzi tę listę przed handoffem.
-
-To lista rzeczy, których autopilot nie zrobi sam. Bez nich run zatrzyma się na bramce
-(środowisko E2E) albo builder zaimplementuje funkcję bez realnych danych/kluczy.
-Pozycje oznaczone **[blokuje start]** muszą być gotowe przed pierwszą fazą; pozostałe — przed fazą podaną w nawiasie.
-
-## 1. <Kategoria z tabeli 3.7, np. Konta i konsole zewnętrzne>
-
-- [ ] **<Co zrobić>** — **[blokuje start]** / (przed Fazą N, IU-K)
-  - Po co: <jedno zdanie — co się stanie bez tego>
-  - Jak: <kroki: gdzie wejść, co kliknąć, jaką wartość skopiować, do jakiej zmiennej>
-  - Dowód: <komenda lub obserwacja, np. `grep GOOGLE_IOS_CLIENT_ID .env.local` zwraca wartość>
-
-## 2. Środowisko E2E   ← sekcja obowiązkowa TYLKO gdy plan ma ≥1 `[E2E]` a `ls .env.e2e` zwraca brak (spójnie z 3.7/5.1); gdy `.env.e2e` istnieje — pomiń całą sekcję (canary, Metro, emulator, migracje i seedy weryfikuje/robi sam autopilot w env-up i db-sync)
-
-- [ ] **Postaw środowisko E2E (`/e2e-setup`, ~30 min, one-time)** — **[blokuje start]** (bramka setupu autopilota)
-  - Po co: plan ma N scenariuszy `[E2E]`; bez `.env.e2e` autopilot zatrzyma run przed fazą 1.
-  - Jak: `/e2e-setup` prowadzi krok po kroku (dedykowany projekt Supabase e2e, `.env.e2e`, migracje, konto testowe, dev-client, `.maestro/_canary.yaml` z `.claude/templates/e2e-env/`). Świadomy opt-out: zamień `[E2E]` → `[Manual]` w planie i przenieś do Operator checklist.
-  - Dowód: `set -a; source .env.e2e; set +a; maestro test -e E2E_EMAIL="$E2E_TEST_EMAIL" -e E2E_PASSWORD="$E2E_TEST_PASSWORD" .maestro/_canary.yaml` → exit 0 (bez `-e` canary pada na sprawnym środowisku — wzorzec `_canary.yaml` czyta `${E2E_EMAIL}`)
-
----
-Po odhaczeniu wszystkiego: `/dev-docs` → autopilot.
-```
-
-Reguły treści: każdy punkt ma wszystkie trzy pola (Po co / Jak / Dowód); sekrety opisuj nazwą zmiennej, nigdy wartością; nie powtarzaj tu `Operator checklist` z IU (to weryfikacja po implementacji — trafi do smoke'u operatora generowanego przy `dev-docs-complete`).
-
-Potwierdź:
-
-```text
-Przygotowanie dla operatora zapisane do <ścieżka checklisty> (N pozycji, M blokuje start)
-```
-
-**Tryb pipeline:** Jeśli wywołany z automatycznego workflow lub kontekstu `disable-model-invocation`, pomiń interaktywne pytania. Podejmij potrzebne wybory automatycznie i kontynuuj do zapisu planu.
-
-#### 5.3 Opcje po wygenerowaniu
-
-Po zapisie plików prezentuj opcje używając narzędzia pytań platformy gdy dostępne. W przeciwnym razie prezentuj numerowane opcje w chacie i czekaj na odpowiedź.
-
-**Pytanie:** "Plan gotowy w `docs/plans/YYYY-MM-DD-NNN-<type>-<name>-plan.md`[ + przygotowanie dla operatora w `<ścieżka checklisty>` (N pozycji, M blokuje start)]. Co chciałbyś zrobić dalej?"
-
-**Opcje:**
-1. **Uruchom `/dev-docs`** (Rekomendowane) — potnij plan na zadania dla autopilota (`docs/active/`) i utwórz branch
-2. **Otwórz plan w edytorze** — przejrzyj plik planu przed dalszymi krokami
-3. **Gotowe na teraz** — wróć później (np. najpierw odhacz przygotowanie dla operatora)
-
-Na podstawie wyboru:
-- **`/dev-docs`** -> Uruchom `/dev-docs` ze ścieżką do planu
-- **Otwórz plan w edytorze** -> Otwórz `docs/plans/<nazwa_pliku>.md` używając mechanizmu otwierania plików platformy (np. `open` na macOS), potem wróć do opcji
-- **Inne** -> Przyjmij wolny tekst do rewizji i wróć do opcji
-
-**Nie oferuj `/dev-docs-execute` ani autopilota bezpośrednio z planu.** Wykonanie zawsze idzie przez `/dev-docs` (branch + `docs/active/` + stan zadania) — bez tego autopilot nie ma czego wznawiać, a review nie ma gdzie zapisywać findingów.
-
-NIGDY NIE KODUJ! Badaj, decyduj i zapisz plan.
+- `references/szablon-planu.md` — szablon planu z przykładową IU (Faza 4)
+- `references/kontekst-designerski.md` — kroki B–F kontekstu designerskiego (1.6)
+- `references/przygotowanie-operatora.md` — kategorie, delta wobec `/dev-prep`, szablon checklisty (3.7, 5.2b)
+- `references/stack.md` — fragmenty stacku dla planowania (przykłady do 3.7); routing builderów i scenariusze E2E: `.claude/stack/buildery.md`, `.claude/stack/plan-e2e.md`
+- `.claude/scripts/plan/plan.mjs` — nagłówek pliku opisuje polecenia i kody wyjścia
+- Konsumenci `docs/active/`: `.claude/workflows/dev-autopilot-wf.js`, `dev-docs-execute-wf.js`, `dev-docs-review-wf.js`, `dev-docs-complete-wf.js` — kontrakt pilnuje `.claude/workflows/__tests__/kontrakt-docs-active.test.mjs`

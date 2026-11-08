@@ -6,9 +6,7 @@ argument-hint: "[pomysł na feature lub problem do zbadania]"
 
 # Brainstorm — walidacja pomysłu
 
-**Uwaga: Aktualny rok to 2026.** Używaj tego przy datowaniu dokumentów.
-
-**Kontekst stacku:** ten projekt to repo szablonowe pod aplikacje **mobilne** (Expo/React Native). Pytania o store distribution (App Store / Google Play), OTA strategy (EAS Update), native dependencies, deep linking, biometry, push notifications, `expo-secure-store` są **w scope**. Pytania o SEO, SSR, browser compatibility, web bundle size są **poza scope** — przekieruj rozmowę na mobile equivalents (np. "App Store search visibility" zamiast SEO, "embedded vs OTA" zamiast SSR).
+Datę do dokumentów bierz z `date +%F`.
 
 Brainstorming odpowiada na pytanie **CO** budować poprzez dialog. Poprzedza `/dev-plan`, który odpowiada na pytanie **JAK** to zbudować.
 
@@ -159,6 +157,8 @@ Używaj narzędzia pytań platformy gdy dostępne (patrz Zasady interakcji). W p
 - Rozstrzygaj decyzje produktowe tutaj; zostaw wybory implementacji technicznych na planowanie
 - Przynoś pomysły, alternatywy i wyzwania zamiast tylko przeprowadzać wywiad
 
+**Integration check przed wyjściem z dialogu:** zanim uznasz pomysł za jasny, świadomie **połącz** odpowiedzi użytkownika i sonduj nieoczywiste konsekwencje ich kombinacji (np. „jeśli chcemy X i Y, a domyślnie zakładamy Z, to wynika z tego, że...?"). Wyłap konflikty między decyzjami, których użytkownik mógł nie zauważyć, podejmując je osobno. To często ujawnia ukryte wymaganie albo sprzeczność w scope.
+
 **Warunek wyjścia:** Kontynuuj aż pomysł jest jasny LUB użytkownik explicite chce przejść dalej.
 
 ### Faza 2: Eksploruj podejścia
@@ -297,7 +297,7 @@ Przedstaw tylko pasujące opcje:
 - **Zadaj więcej pytań** — kontynuuj doprecyzowywanie scope'u, preferencji lub edge cases
 - **Gotowe na teraz** — wróć później
 
-**Nie oferuj przejścia bezpośrednio do implementacji** (`/dev-docs-execute`, buildery, autopilot) z pominięciem `/dev-plan` i `/dev-docs`. Kod powstaje wyłącznie z Implementation Units planu technicznego — bez planu nie ma `Delegate to:`, scenariuszy `[E2E]`, seedów ani stanu zadania, więc cały harness (review, bramki E2E, resume) nie ma na czym pracować. Nawet dla lekkiego scope'u właściwa ścieżka to krótki plan (`/dev-plan` w głębokości Lekkiej).
+**Nie oferuj przejścia bezpośrednio do implementacji** (buildery, autopilot) z pominięciem `/dev-plan`. Kod powstaje wyłącznie z Implementation Units planu technicznego — bez planu nie ma `Delegate to:`, scenariuszy `[E2E]`, seedów ani zadania w `docs/active/`, więc cały harness (review, bramki E2E, resume) nie ma na czym pracować. Nawet dla lekkiej zmiany właściwa ścieżka to krótki plan (`/dev-plan` w głębokości Lekkiej).
 
 #### 4.2 Obsłuż wybraną opcję
 

@@ -51,10 +51,17 @@ Każdy input MUSI obsłużyć 6 stanów:
 | **Success** | Border accent (green) lub check icon — używaj tylko gdy ma sens (verified email, password strength) |
 
 ```tsx
-// NativeWind variants per state
+// Uniwind: kompletne klasy per stan, bez składania nazw w locie
 function Input({ value, onChangeText, label, error, helper, ...props }: InputProps) {
   const [isFocused, setIsFocused] = useState(false);
   const hasError = !!error;
+
+  useEffect(() => {
+    // iOS nie ma live regionów; na Androidzie ogłasza aria-live niżej
+    if (error && Platform.OS === "ios") {
+      AccessibilityInfo.announceForAccessibility(error);
+    }
+  }, [error]);
 
   return (
     <View className="gap-1.5">
@@ -64,13 +71,16 @@ function Input({ value, onChangeText, label, error, helper, ...props }: InputPro
         onChangeText={onChangeText}
         onFocus={() => setIsFocused(true)}
         onBlur={() => setIsFocused(false)}
-        className={`rounded-md px-3 py-3 text-base border
+        placeholderTextColorClassName="accent-muted-foreground"
+        selectionColorClassName="accent-primary"
+        cursorColorClassName="accent-primary"
+        className={`rounded-md px-3 py-3 text-[16px] text-foreground border
           ${hasError ? "border-destructive" : isFocused ? "border-primary" : "border-border"}
           ${props.editable === false ? "opacity-50" : ""}`}
         {...props}
       />
       {hasError ? (
-        <Text className="text-sm text-destructive" accessibilityLiveRegion="polite">
+        <Text className="text-sm text-destructive" role="alert" aria-live="polite">
           {error}
         </Text>
       ) : helper ? (
@@ -80,6 +90,12 @@ function Input({ value, onChangeText, label, error, helper, ...props }: InputPro
   );
 }
 ```
+
+**`TextInput` w Uniwind:**
+
+- Kolory spoza `style` idą przez propsy `*ClassName` z prefiksem `accent-`: `placeholderTextColorClassName`, `selectionColorClassName`, `cursorColorClassName`. Zwykła klasa `text-*` ich nie ustawi. Własny token działa tak samo (`accent-primary`).
+- Rozmiar tekstu podawaj bez `lineHeight`: `text-[16px]`, nie `text-base` ani `text-lg`. Klasy ze skali niosą `lineHeight` (`text-lg` = 28), a przy nim wpisany tekst siedzi na iOS poniżej środka pola, przy `text-lg` o ok. 7 pt. Android tego przesunięcia nie ma.
+- `aria-live` działa tylko na Androidzie, dlatego na iOS ten sam błąd ogłasza `AccessibilityInfo.announceForAccessibility`.
 
 ---
 
@@ -192,34 +208,77 @@ async function authenticateWithBiometry(): Promise<boolean> {
 Najczęstszy bug: input ukryty pod klawiaturą.
 
 ```tsx
-import { KeyboardAvoidingView, Platform, ScrollView } from "react-native";
+import { useHeaderHeight } from "expo-router/react-navigation";
+import { KeyboardAvoidingView, ScrollView } from "react-native";
 
-<KeyboardAvoidingView
-  behavior={Platform.OS === "ios" ? "padding" : "height"}
-  className="flex-1"
-  keyboardVerticalOffset={Platform.OS === "ios" ? 80 : 0} // header offset
->
-  <ScrollView
-    contentContainerStyle={{ flexGrow: 1 }}
-    keyboardShouldPersistTaps="handled"
-  >
-    {/* form */}
-  </ScrollView>
-</KeyboardAvoidingView>
+function FormScreen() {
+  const headerHeight = useHeaderHeight();
+
+  return (
+    <KeyboardAvoidingView
+      behavior="padding"
+      className="flex-1"
+      keyboardVerticalOffset={headerHeight} // gdy ekran jest pod nagłówkiem nawigacji; wartość zawiera status bar
+    >
+      <ScrollView
+        contentContainerStyle={{ flexGrow: 1 }}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* form */}
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
 ```
 
 | Prop | iOS | Android |
 |------|-----|---------|
-| `behavior` | `"padding"` | `"height"` (czasem nie działa, alternatywa `"padding"`) |
-| `keyboardVerticalOffset` | wysokość headera | 0 (Android handles automatically z `android:windowSoftInputMode`) |
+| `behavior` | `"padding"` | `"padding"`: aplikacje Expo są edge-to-edge, okno nie zmienia rozmiaru pod klawiaturą, a widok bez `behavior` zostaje pod nią |
+| `keyboardVerticalOffset` | `useHeaderHeight()` pod nagłówkiem nawigacji | tak samo |
+
+Na Androidzie nie łącz `softwareKeyboardLayoutMode: "pan"` z `behavior="padding"`: okno się przesuwa, widok dodaje padding i pole jedzie w górę podwójnie.
 
 **Kiedy NIE używać:**
 - Modal full-screen — masz natywny system handling
-- Bottom sheet — sheet obsługuje klawiaturę sam: `BottomSheet` z `@expo/ui` (domyślny wybór, patrz `expo-ui`) robi to natywnie, a `@gorhom/bottom-sheet` ma własny `BottomSheetTextInput`
+- Bottom sheet — sheet obsługuje klawiaturę sam: `BottomSheet` z `@expo/ui` (domyślny wybór, patrz `expo:expo-ui`) robi to natywnie, a `@gorhom/bottom-sheet` ma własny `BottomSheetTextInput`
 
-### Alternative: `react-native-keyboard-controller`
+### Dłuższy formularz: `react-native-keyboard-controller`
 
-Bardziej reliable na obu platformach niż built-in `KeyboardAvoidingView`. Smooth animations, sync z native keyboard. Rekomendowane dla form-heavy apek.
+Expo zaleca tę bibliotekę do większych przewijanych formularzy z wieloma polami: daje spójne zachowanie na obu platformach i natywne wrażenie przy minimalnej konfiguracji. Wymaga development builda (nie ma jej w Expo Go) oraz `react-native-reanimated`. Na SDK 58 instalujesz przez `npx expo install react-native-keyboard-controller` (1.22.7).
+
+```tsx
+// app/_layout.tsx
+import { Stack } from "expo-router";
+import { KeyboardProvider } from "react-native-keyboard-controller";
+
+export default function RootLayout() {
+  return (
+    <KeyboardProvider>
+      <Stack />
+    </KeyboardProvider>
+  );
+}
+```
+
+```tsx
+// Ekran formularza
+import { TextInput } from "react-native";
+import { KeyboardAwareScrollView, KeyboardToolbar } from "react-native-keyboard-controller";
+
+export default function FormScreen() {
+  return (
+    <>
+      <KeyboardAwareScrollView bottomOffset={62} contentContainerStyle={{ gap: 16, padding: 16 }}>
+        <TextInput placeholder="Imię" />
+        <TextInput placeholder="Email" />
+      </KeyboardAwareScrollView>
+      <KeyboardToolbar />
+    </>
+  );
+}
+```
+
+`KeyboardAwareScrollView` sam przewija do aktywnego pola, a `KeyboardToolbar` dodaje przejścia między polami i przycisk zamknięcia klawiatury.
 
 ---
 
@@ -286,7 +345,7 @@ Po submit z błędami:
 1. **Inline errors pod fieldami** — gdzie błąd występuje
 2. **Focus na pierwszym błędnym polu** — `firstErrorRef.current?.focus()`
 3. **Scroll to first error** — żeby user widział błąd
-4. **Live region** — `accessibilityLiveRegion="polite"` (RN equivalent `aria-live`)
+4. **Ogłoszenie błędu** — na Androidzie `aria-live="polite"` na tekście błędu, na iOS `AccessibilityInfo.announceForAccessibility(error)`, bo `aria-live` działa tylko na Androidzie
 5. **NIE alert "Are you sure?"** dla validation
 6. **NIE toast** — toast znika, error pod polem zostaje
 

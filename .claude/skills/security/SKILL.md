@@ -1,236 +1,50 @@
 ---
 name: security
-description: "Systematyczny audyt bezpieczeństwa dla React Native / Expo + Supabase + Edge Functions. Używaj przy review bezpieczeństwa, przed releasem, przy pracy z auth/authz, walidacją inputów, RLS policies, deep linkingiem, storage sekretów (SecureStore), WebView, OWASP (w tym Mobile Top 10)."
+description: "Reguły bezpieczeństwa dla kodu Expo + React Native + Supabase + Edge Functions (RLS, autoryzacja, walidacja wejścia, sekrety, deep linki, SSRF) i protokół audytu bezpieczeństwa w resources. Używaj przy pisaniu kodu z auth/authz, RLS policies, walidacją inputów, Edge Functions i danymi osobowymi, a także przy review bezpieczeństwa, audycie przed deployem, OWASP Top 10 i OWASP Mobile Top 10."
 ---
 
-# Security Audit (mobile)
+# Bezpieczeństwo implementacji
 
-Skill do przeprowadzania systematycznego audytu bezpieczenstwa w projekcie React Native / Expo + Supabase + Edge Functions.
+Reguły dla kodu, który piszesz w projekcie Expo + React Native + Supabase + Edge Functions. Uzupełniają sekcję Bezpieczeństwo w `.claude/rules/coding-rules.md` (sekrety, SQL z parametrami, walidacja wejścia schematem, źródło roli, polityki RLS, funkcje `security definer`, limity) i jej nie powtarzają. Przy każdej regule stoi powód, żeby przypadek spoza przykładu dało się rozstrzygnąć tym samym rozumowaniem. Reguły urządzenia, deep linków i klienta natywnego są w `references/stack.md`.
 
-## Kiedy Uzywac
+## Baza danych i RLS
 
-- Review bezpieczenstwa przed releasem (App Store / Google Play / EAS Update)
-- Dodawanie nowych endpointow (Edge Functions, API routes `+api.ts`)
-- Zmiany w autentykacji lub autoryzacji (auth/authz, OAuth przez deep linking)
-- Tworzenie nowych tabel w bazie danych (RLS policies)
-- Praca z danymi uzytkownikow (PII, GDPR)
-- Nowe deep linki, WebView, obsluga QR / push notifications
-- Podejrzenie o luke bezpieczenstwa w istniejacym kodzie
+- Tabela w schemacie wystawionym przez API (`public`) dostaje `enable row level security` w tej samej migracji, która ją tworzy, bo między migracjami tabela bez RLS jest czytelna dla każdego z kluczem publicznym.
+- Polityki piszesz osobno dla każdej operacji, której jednostka potrzebuje (`select`, `insert`, `update`, `delete`). Operacja bez polityki jest odmową i taka zostaje, gdy plan jej nie zamawia.
+- `insert` ma `with check` z warunkiem własności, a `with check` w `update` nie jest słabszy niż `using` (bez klauzuli Postgres stosuje `using` do nowej wersji wiersza), bo `with check (true)` albo słabszy warunek pozwala założyć wiersz cudzemu właścicielowi albo oddać mu istniejący.
+- `update` potrzebuje też polityki `select` na te same wiersze — bez niej Postgres nie widzi wiersza i aktualizacja zmienia zero wierszy bez błędu.
+- Kolumnę, której użytkownik nie zmienia sam (rola, status płatności, właściciel), chronisz osobno, bo RLS filtruje wiersze, nie kolumny: `revoke update on <tabela> from authenticated` i `grant update (<kolumny dozwolone>) on <tabela> to authenticated`, trigger albo zmiana tylko przez funkcję. Samo `revoke update (kolumna)` nie działa, gdy rola ma UPDATE na całą tabelę, a Supabase nadaje je domyślnie.
+- Widok nad tabelą z RLS tworzysz z `with (security_invoker = true)`, bo widok domyślnie działa z prawami właściciela i omija RLS.
+- Dynamiczny SQL w funkcji PL/pgSQL składasz przez `format()` z `%I` dla identyfikatorów i `execute ... using` (albo `%L`) dla wartości, bo sklejony tekst w funkcji wołanej przez `.rpc()` to SQL injection mimo parametryzowanego klienta.
+- Bucket Storage z plikami użytkowników jest prywatny, dostęp dają polityki na `storage.objects` (pierwszy segment ścieżki = identyfikator właściciela) i podpisane URL-e z krótkim czasem ważności, bo publiczny bucket udostępnia każdy plik pod przewidywalnym adresem.
 
-**Kluczowa rama mentalna mobile:** bundle aplikacji jest PUBLICZNY (kazdy moze go pobrac
-i zdekompilowac), urzadzenie jest NIEZAUFANE (root/jailbreak, wspoldzielone), a deep linki
-to punkty wejscia dostepne dla KAZDEJ innej aplikacji na urzadzeniu.
+## Edge Functions i autoryzacja
 
----
+- Tożsamość wołającego bierzesz ze zweryfikowanego tokenu — `withSupabase({ auth: 'user' })` (`ctx.userClaims`) albo `getClaims()` / `getUser()` — a nie z `getSession()` ani z pola w ciele żądania, bo sesję z klienta i identyfikator w ciele podrobi każdy.
+- Klient z kluczem sekretnym (`ctx.supabaseAdmin`, `service_role`) omija RLS, więc funkcja, która go używa, sprawdza w kodzie własność zasobu i rolę wołającego przed zapytaniem. Gdzie wystarcza klient użytkownika (`ctx.supabase`), używasz jego, bo wtedy RLS jest drugą bramką.
+- Klucz sekretny i `service_role` trzymasz w sekretach Edge Functions; zmienna `EXPO_PUBLIC_*` trafia do paczki aplikacji, więc klucz w niej jest publiczny.
+- Tryb `auth` dobierasz do wołającego i uzupełniasz tym, czego wrapper nie sprawdza: `'secret'` weryfikuje klucz sekretny, więc ciało sprawdza uprawnienie do zasobu; `'publishable'` przepuszcza każdego z publicznym kluczem, więc funkcja ma limit częstości i nie zwraca cudzych danych; `'none'` nie sprawdza niczego, więc kontrola (podpis webhooka, limit) jest w kodzie funkcji.
+- Błąd sprawdzenia uprawnień (wyjątek, przekroczony limit czasu, brak wiersza roli) kończy się odmową, bo gałąź obsługi błędu, która przepuszcza, daje dostęp przy każdej awarii bazy.
+- Webhook weryfikuje podpis na surowym ciele (`await req.text()`, potem `constructEventAsync` dla Stripe) przed parsowaniem i jakimkolwiek zapisem, bo bez podpisu każdy wyśle zdarzenie „zapłacone”.
+- Schemat Zod wejścia ogranicza każde pole: tekst ma `.max()` zgodne z ograniczeniem kolumny, a format (email, URL, UUID, data) ma walidator formatu, bo schemat przepuszczający dowolny string przenosi błąd do bazy albo do odbiorcy.
+- Żądanie serwera pod adres z wejścia użytkownika (podgląd linku, import z URL, webhook wychodzący) idzie tylko do hostów z listy dozwolonych, po parsowaniu `new URL()` i sprawdzeniu protokołu, bo inaczej funkcja czyta adresy wewnętrzne (SSRF).
 
-## Workflow -- 6-skanowy protokol
+## Dane w odpowiedziach i logach
 
-### Krok 1: Input Validation
+- Zapytanie wybiera kolumny potrzebne odbiorcy (`.select('id, title')`), bo `select('*')` wysyła klientowi każdą kolumnę, także dodaną później.
+- Klient dostaje kod i komunikat z koperty błędu, a szczegóły błędu bazy (tabela, ograniczenie, treść SQL) idą do logu, bo ujawniają schemat.
+- W logu i w Sentry użytkownika identyfikuje jego identyfikator, nie email ani imię; maskowanie i redakcję zdarzeń opisuje skill sentry-integration.
 
-Znajdz wszystkie punkty wejscia danych z zewnatrz i zweryfikuj walidacje.
+## Interfejs
 
-1. **Zmapuj punkty wejscia (mobile ma ich wiecej niz web):**
-   - Formularze RN (react-hook-form + Zod)
-   - Edge Functions / API routes (`req.json()`, `req.text()`, query params)
-   - **Deep linki** (expo-linking / Expo Router): parametry z URL — moze je wyslac KAZDA aplikacja
-   - **Skan QR** (expo-camera): tresc kodu to niezaufany input (np. kody dolaczania do gry)
-   - **Push notifications**: payload `data` z notyfikacji
-   - File uploads (expo-image-picker / document-picker): typ, rozmiar, nazwa pliku
-2. **Sprawdz walidacje Zod** na kazdym punkcie wejscia:
-   - Czy schemat Zod istnieje i jest na granicy systemu (nie glebiej)?
-   - Czy typy sa restrykcyjne (`z.string().email()`, nie `z.string()`)?
-   - Czy sa limity dlugosci (`z.string().max(500)`)?
-3. **Szukaj brakujacej walidacji** -- kazdy `req.json()` bez Zod parse i kazdy parametr
-   deep linka uzyty bez walidacji to finding.
+- HTML z danych użytkownika albo CMS sanitujesz po stronie serwera albo nie renderujesz go wcale, bo DOMPurify w RN rzuca `TypeError`, a `WebView` z surowym HTML wykonuje skrypty.
+- URL z danych użytkownika przed `Linking.openURL` i `Image source` przechodzi przez `new URL()` z listą dozwolonych protokołów (`https:`, `http:`, `mailto:`), bo schemat z danych uruchamia dowolną aplikację na urządzeniu.
+- Ukryty przycisk i chroniona trasa to wygoda interfejsu; tę samą regułę egzekwuje RLS albo funkcja serwera, bo klient omija każdy warunek w JS.
 
-### Krok 2: SQL/Query Safety
+## Testy
 
-Supabase query builder jest domyslnie parametryzowany, ale sa pulapki.
+- Każda polityka, trasa i funkcja z kontrolą dostępu ma test odmowy — bez sesji, inny użytkownik, rola bez uprawnienia — bo test tylko na właścicielu przechodzi także przy polityce `using (true)`.
 
-1. **Sprawdz wywolania `.rpc()`** -- czy funkcje PostgreSQL nie konkatenuja stringow w SQL
-2. **Sprawdz RLS** na kazdej tabeli:
-   - `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` -- czy jest?
-   - Czy sa policies dla SELECT, INSERT, UPDATE, DELETE?
-   - Czy policies uzywaja `(SELECT auth.uid())` (nie `auth.email()`)?
-   - RLS to TWOJA JEDYNA bariera — klient mobilny jest niezaufany z definicji
-     (anon key z bundla + dowolne zapytanie da sie wyslac poza aplikacja)
-3. **Sprawdz filtry** -- czy zapytania `.from()` maja odpowiednie `.eq()`, `.match()`
-4. **Sprawdz `.rpc()` z raw SQL** -- szukaj konkatenacji stringow wewnatrz funkcji PostgreSQL
+## Audyt
 
-### Krok 3: Powierzchnia mobilna (storage / deep linki / WebView)
-
-Zamiast webowego XSS — natywne wektory ataku.
-
-1. **Storage sekretow:**
-   - Tokeny, klucze sesji, dane wrazliwe: TYLKO `expo-secure-store` (Keychain/Keystore)
-   - `AsyncStorage` to PLAINTEXT na dysku — finding, jesli laduje tam cokolwiek wrazliwego
-   - Czy klient Supabase ma storage adapter oparty o SecureStore?
-2. **Deep linking:**
-   - Czy parametry deep linkow sa walidowane przed uzyciem (nawigacja, fetch, mutacje)?
-   - Custom scheme (`myapp://`) moze przejac inna aplikacja na Androidzie —
-     dla flowow auth preferuj **App Links / Universal Links** (zweryfikowane domeny)
-   - OAuth redirect: czy uzywa PKCE (expo-auth-session / Supabase OAuth z PKCE)?
-   - Czy deep link nie pozwala ominac ekranow autoryzacji (route hijacking)?
-3. **WebView (jesli istnieje):**
-   - Czy laduje wylacznie zaufane URL-e (whitelist, nie user input)?
-   - `injectedJavaScript` z danymi uzytkownika = odpowiednik XSS — finding
-   - Czy komunikacja WebView<->RN (`onMessage`) waliduje wiadomosci?
-4. **Ekrany wrazliwe:** dane karty/hasla — rozwaz blokade screenshotow i maskowanie
-   w app switcherze (LOW, hardening)
-
-### Krok 4: Auth/Authz Audit
-
-Zmapuj endpointy vs wymagania autoryzacji.
-
-1. **Stworz macierz dostepu:**
-
-| Endpoint / Akcja | Anon | Authenticated | Owner | Admin |
-|-------------------|------|---------------|-------|-------|
-| GET /posts        | tak  | tak           | tak   | tak   |
-| POST /posts       | nie  | tak           | -     | tak   |
-| DELETE /posts/:id | nie  | nie           | tak   | tak   |
-
-2. **Zweryfikuj RLS policies** -- czy odzwierciedlaja macierz dostepu
-3. **Edge Functions JWT** -- czy kazda chroniona funkcja wywoluje `supabase.auth.getUser()` / `getClaims()`?
-4. **Sprawdz `getSession()` vs `getUser()`** -- `getSession()` nie weryfikuje tokena server-side
-5. **Sprawdz role-based access** -- rola z `app_metadata` lub tabeli rol, NIGDY z `user_metadata` (edytowalne przez usera); brak hardcoded email/ID
-6. **Fail-closed** -- blad sprawdzenia dostepu = odmowa, nigdy przyznanie (A10:2025)
-7. **Biometria** (expo-local-authentication) to LOKALNA bramka UX, NIE autoryzacja —
-   serwer nadal musi weryfikowac token; biometria nie zastepuje auth
-
-### Krok 5: Sensitive Data Exposure
-
-Szukaj wyciekow danych wrazliwych. Pamietaj: bundle da sie zdekompilowac (`strings` na IPA/APK).
-
-1. **Hardcoded secrets:**
-   - Szukaj: API keys, tokeny, hasla w kodzie zrodlowym
-   - **Wszystko z prefiksem `EXPO_PUBLIC_*` jest PUBLICZNE w bundlu** — wolno tam trzymac
-     wylacznie anon key i jawne URL-e; klucze platne (OpenAI, Stripe secret) NIGDY —
-     ukrywaj za Edge Function / API route (skill eas-hosting)
-   - Sprawdz `.env.example` -- czy nie zawiera prawdziwych wartosci
-   - Sprawdz git history -- `git log --diff-filter=A -- "*.env*"`
-2. **Service role key:**
-   - `SUPABASE_SERVICE_ROLE_KEY` TYLKO w Edge Functions / backendzie —
-     w bundlu aplikacji to CRITICAL (pelne obejscie RLS dla kazdego, kto pobierze apke)
-3. **Dane w logach:**
-   - `console.log` z obiektami user/session trafia do `adb logcat` / Console.app —
-     czytelne dla innych narzedzi na urzadzeniu deweloperskim
-   - Struktury bledow Supabase wyciekaja info o schemacie DB
-4. **PII w Sentry:**
-   - Czy `captureException` nie wysyla danych osobowych?
-   - Czy `beforeSend` filtruje wrazliwe dane?
-5. **Odpowiedzi API:**
-   - Czy endpointy nie zwracaja wiecej danych niz potrzeba? (`select('*')` vs `select('id, name')`)
-
-### Krok 6: OWASP Compliance
-
-Przejdz kategorie OWASP pod katem stacku:
-
-- **OWASP Mobile Top 10 (2024)** dla warstwy aplikacji: M1 improper credential usage,
-  M2 supply chain (w tym EAS Update jako kanal dostarczania kodu — code signing OTA
-  i kontrola dostepu do kanalow, patrz `resources/owasp-react-supabase.md` A03),
-  M3 insecure auth/authz, M4 insufficient input/output validation, M5 insecure
-  communication, M6 inadequate privacy controls, M7 insufficient binary protections
-  (w Expo managed zakres ograniczony — nie polegaj na obfuskacji, sekrety poza bundlem
-  to krok 5; anti-tampering / root-jailbreak detection to LOW/hardening dla aplikacji
-  wysokiego ryzyka), M8 security misconfiguration, M9 insecure data storage,
-  M10 insufficient cryptography — wiekszosc pokrywaja kroki 1-5.
-- **OWASP Top 10:2025** dla warstwy backendu (Edge Functions / API routes):
-  mapowanie w **[resources/owasp-react-supabase.md](resources/owasp-react-supabase.md)**.
-  Zwroc uwage na zmiany 2025: SSRF wchloniety do A01, nowe A03 (Software Supply Chain --
-  m.in. klucz `service_role` dla agentow AI/MCP) i A10 (Mishandling of Exceptional
-  Conditions -- fail-open, wyciek bledow).
-  (UWAGA: resource pisany pod web — sekcje XSS/CSP czytaj przez pryzmat kroku 3 tego skilla).
-
----
-
-## Klasyfikacja Findings
-
-```
-CRITICAL -- Exploit mozliwy w produkcji, wymaga natychmiastowej naprawy
-   Przyklady: RLS wylaczone na tabeli z PII, service_role key w bundlu aplikacji,
-   SQL injection w .rpc(), brak auth na endpoincie z danymi, token sesji w AsyncStorage
-
-HIGH -- Powazna luka, exploit mozliwy przy okreslonych warunkach
-   Przyklady: brak walidacji inputow na Edge Function, parametry deep linka uzywane
-   bez walidacji (route hijacking / IDOR), OAuth bez PKCE na custom scheme,
-   getSession() do autoryzacji server-side, injectedJavaScript z user input w WebView
-
-MEDIUM -- Potencjalne ryzyko, wymaga analizy kontekstu
-   Przyklady: brak rate limiting, zbyt szerokie CORS na Edge Function, select('*')
-   zamiast konkretnych kolumn, klucz platnego API w EXPO_PUBLIC_*, PII w console.log
-
-LOW -- Hardening, defense-in-depth
-   Przyklady: brak maskowania wrazliwych ekranow w app switcherze, outdated
-   dependencies bez znanych CVE, brak audit logging dla niekrytycznych operacji,
-   brak certificate pinning (rozwaz dla aplikacji wysokiego ryzyka)
-```
-
----
-
-## Format Raportu
-
-```markdown
-## Security Audit Report: [nazwa projektu / scope]
-
-### Executive Summary
-[1-3 zdania: ogolna ocena bezpieczenstwa, liczba findings, najwazniejsze ryzyka]
-
-### Findings
-
-#### CRITICAL
-1. **[plik:linia]** -- [tytul]
-   - Impact: [co moze sie stac]
-   - Remediation: [jak naprawic, z przykladem kodu]
-
-#### HIGH
-[jak wyzej]
-
-#### MEDIUM
-[jak wyzej]
-
-#### LOW
-[jak wyzej]
-
-### Risk Matrix
-
-| Kategoria               | Status | Findings |
-|-------------------------|--------|----------|
-| Input Validation        | [OK/WARN/FAIL] | X |
-| SQL/Query Safety        | [OK/WARN/FAIL] | X |
-| Powierzchnia mobilna    | [OK/WARN/FAIL] | X |
-| Auth/Authz              | [OK/WARN/FAIL] | X |
-| Data Exposure           | [OK/WARN/FAIL] | X |
-| OWASP Compliance        | [OK/WARN/FAIL] | X |
-
-### Remediation Roadmap
-1. [CRITICAL] [opis] -- termin: natychmiast
-2. [HIGH] [opis] -- termin: przed releasem
-3. [MEDIUM] [opis] -- termin: nastepny sprint
-4. [LOW] [opis] -- termin: backlog
-```
-
----
-
-## Zasady
-
-1. **Mysl jak atakujacy** -- zakladaj najgorszy scenariusz, nie optymistyczny
-2. **Klient mobilny jest niezaufany** -- bundle publiczny, urzadzenie obce; jedyna
-   prawdziwa bariera to RLS + walidacja server-side
-3. **Zawsze podawaj rozwiazanie** -- finding bez remediation jest bezuzyteczny
-4. **Nie dismissuj jako pre-existing** -- istniejace luki sa nadal lukami
-5. **Weryfikuj, nie zakladaj** -- "Supabase domyslnie to robi" nie wystarczy, sprawdz konfiguracje
-6. **Najmniejsze uprawnienia** -- kazdy komponent powinien miec minimum potrzebnych uprawnien
-7. **Defense in depth** -- jedna warstwa ochrony to za malo, waliduj na kazdej granicy
-8. **Dokumentuj scope** -- jasno okresl co zostalo sprawdzone, a co nie
-
----
-
-## Dokumentacja Referencyjna
-
-- **OWASP Top 10 (backend/Edge Functions)** -- `resources/owasp-react-supabase.md`
-  (dziedzictwo webowe: sekcje XSS/CSP interpretuj przez krok 3 — powierzchnia mobilna)
-- **Wzorce auth i bezpieczenstwa Supabase** -- `resources/auth-security-patterns.md`
-  (wzorce RLS/JWT/policies uniwersalne; §3 React XSS i §5 Secrets sa webowe — w RN
-  odpowiednio: walidacja protokolu przy `Linking.openURL`/WebView (krok 3 tego skilla)
-  oraz `EXPO_PUBLIC_*` zamiast `VITE_*` (krok 5 tego skilla))
+Audyt bezpieczeństwa (review przed deployem, podejrzenie luki, audyt na prośbę operatora) prowadzisz według `resources/protokol-audytu.md`. Mapowanie OWASP Top 10:2025 na stack jest w `resources/owasp-react-supabase.md`, wzorce auth i bezpieczeństwa — w `resources/auth-security-patterns.md`. Ramy i klasyfikacja mobile: `references/stack.md`, sekcja „Ramy audytu”.

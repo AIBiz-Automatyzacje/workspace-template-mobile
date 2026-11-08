@@ -6,9 +6,9 @@ argument-hint: "[opcjonalnie: kategoria do przejrzenia]"
 
 # Compound Refresh — przegląd i odświeżanie bazy wiedzy
 
-**Uwaga: Aktualny rok to 2026.** Używaj tego przy datowaniu dokumentów.
+Datę do dokumentów bierz z `date +%F`.
 
-Utrzymuje jakość `docs/solutions/` oraz reguł w `.claude/rules/learned-patterns.md` w czasie. Workflow przeglada istniejące dokumenty rozwiązań względem aktualnego codebase, a następnie odświeża dokumenty wzorcowe (pattern docs) zależne od nich.
+Utrzymuje jakość `docs/solutions/` oraz indeksu wiedzy `docs/learned-patterns.md` (generuje go skrypt z pól wiedzy solutions) w czasie. Workflow przeglada istniejące dokumenty rozwiązań względem aktualnego codebase, a następnie odświeża dokumenty wzorcowe (pattern docs) zależne od nich.
 
 ## Tryb pracy
 
@@ -18,6 +18,7 @@ Utrzymuje jakość `docs/solutions/` oraz reguł w `.claude/rules/learned-patter
 |------|-------|------------|
 | **Autonomiczny** (domyślnie) | Bez argumentów lub z argumentem kategorii | Bez interakcji z użytkownikiem. Wykonaj wszystkie jednoznaczne akcje. Oznacz niejednoznaczne przypadki jako stale. Wygeneruj raport końcowy. |
 | **Z argumentem** | Podana kategoria lub słowo kluczowe | Przegląda tylko wskazaną kategorię/obszar |
+| **Konwersja** | Argument `--konwersja` | Jednorazowe przeniesienie reguł ze starego pliku do pól wiedzy solutions — sekcja **Tryb konwersji** |
 
 ### Zasady trybu autonomicznego
 
@@ -39,7 +40,7 @@ Odświeżaj w tej kolejności:
 1. Najpierw przejrzyj poszczególne dokumenty rozwiązań (learnings)
 2. Zanotuj które rozwiązania pozostały aktualne, zostały zaktualizowane, zastąpione lub zarchiwizowane
 3. Następnie przejrzyj dokumenty wzorcowe (pattern docs) zależne od tych rozwiązań
-4. Przejrzyj `.claude/rules/learned-patterns.md` — usuń reguły bez aktualnego źródła, zaktualizuj po Replace, zdeduplikuj, wyegzekwuj limit ~50
+4. Wygeneruj indeks wiedzy `docs/learned-patterns.md` z odświeżonych solutions (Faza 1.7)
 5. Na końcu przejrzyj `docs/CONCEPTS.md` (jeśli istnieje) — słownik domenowy. Usuń hasła, których kod/feature już nie istnieje; scal duplikaty; zweryfikuj, że definicje pasują do aktualnego zachowania; zamień treść skopiowaną z CLAUDE.md na link. Trzymaj formę cienkiego indeksu (1-2 zdania na hasło, alfabetycznie). Nie dubluj tu wiedzy z `docs/solutions/` — to glosariusz pojęć, nie baza rozwiązań.
 
 Dlaczego ta kolejność:
@@ -86,7 +87,7 @@ Znajdź wszystkie pliki `.md` pod `docs/solutions/`, wykluczając pliki `README.
 Jeśli `$ARGUMENTS` podano, użyj go do zawężenia zakresu. Próbuj te strategie dopasowania w kolejności, zatrzymując się na pierwszej która daje wyniki:
 
 1. **Dopasowanie katalogu** — sprawdź czy argument pasuje do nazwy podkatalogu pod `docs/solutions/` (np. `performance-issues`, `database-issues`)
-2. **Dopasowanie frontmatter** — szukaj w polach `module`, `component` lub `tags` we frontmatter
+2. **Dopasowanie frontmatter** — szukaj w polach `tags`, `klasa`, `paths` i `category` we frontmatterze
 3. **Dopasowanie nazwy pliku** — dopasuj do nazw plików (częściowe dopasowania OK)
 4. **Szukanie w treści** — szukaj argumentu jako słowa kluczowego w treści pliku
 
@@ -119,7 +120,7 @@ Przed klasyfikacją czegokolwiek:
 
 Gdy zakres jest szeroki (9+ dokumentów kandydujących), zrób lekki triaż przed głębokim badaniem:
 
-1. **Inwentarz** — przeczytaj frontmatter wszystkich dokumentów kandydujących, grupuj według modułu/komponentu/kategorii
+1. **Inwentarz** — przeczytaj frontmatter wszystkich dokumentów kandydujących, grupuj według kategorii, `klasa` i `paths`
 2. **Klasteryzacja wpływu** — zidentyfikuj obszary z najgęstszymi klastrami dokumentów + wzorców. Klaster 5 rozwiązań i 2 wzorców pokrywających ten sam moduł ma wyższy wpływ niż 5 izolowanych obszarów.
 3. **Kontrola dryfu** — dla każdego klastra sprawdź czy główne referencjowane pliki nadal istnieją. Brakujące referencje w klastrze o wysokim wpływie = najsilniejszy sygnał od czego zacząć.
 4. **Przetwarzaj klastry według wpływu** — zacznij od klastra o najwyższym wpływie, kontynuuj do następnego.
@@ -142,7 +143,7 @@ Dopasuj głębokość badania do specyficzności dokumentu — dokument referenc
 Kluczowe rozróżnienie to czy dryf jest **kosmetyczny** (referencje się przeniosły ale rozwiązanie jest to samo) czy **merytoryczny** (samo rozwiązanie się zmieniło):
 
 - **Terytorium Update** — ścieżki się przeniosły, klasy przemianowane, linki nieaktualne, metadane rozjechane, ale główne rekomendowane podejście nadal odpowiada temu jak kod działa. Napraw bezpośrednio.
-- **Terytorium Replace** — rekomendowane rozwiązanie jest sprzeczne z aktualnym kodem, podejście architektoniczne się zmieniło, lub wzorzec nie jest już preferowanym sposobem. Trzeba napisać nowy dokument. Dokument zastępczy używa formatu `/dev-compound`: frontmatter YAML (title, category, date, module, component, tags), opis problemu, root cause, aktualne rozwiązanie z przykładami kodu i zapobieganie.
+- **Terytorium Replace** — rekomendowane rozwiązanie jest sprzeczne z aktualnym kodem, podejście architektoniczne się zmieniło, lub wzorzec nie jest już preferowanym sposobem. Trzeba napisać nowy dokument. Dokument zastępczy piszesz w formacie `/dev-compound`: frontmatter z polami wiedzy (sekcja „Pola wiedzy” skilla `dev-compound`, sprawdza je `wiedza.mjs sprawdz`), opis problemu, root cause, aktualne rozwiązanie z przykładami kodu i zapobieganie.
 
 **Granica:** jeśli przepisujesz sekcję rozwiązania lub zmieniasz to co dokument rekomenduje, zatrzymaj się — to Replace, nie Update.
 
@@ -162,62 +163,37 @@ Dokumenty wzorcowe mają wysoki dźwignię — przestarzały wzorzec jest bardzi
 
 Dokument wzorcowy bez wyraźnych wspierających rozwiązań to sygnał przestarzałości — zbadaj uważnie przed zostawieniem bez zmian.
 
-## Faza 1.7: Przegląd learned-patterns.md
+## Faza 1.7: Indeks wiedzy
 
-Po przejrzeniu dokumentów rozwiązań i wzorcowych, przejrzyj reguły w `.claude/rules/learned-patterns.md`.
+Indeks `docs/learned-patterns.md` powstaje z pól wiedzy solutions (`klasa`, `regula`, `paths`, `waga`, `szczebel`…), więc
+po Update, Replace i Archive generujesz go od nowa — ręcznie go nie edytujesz:
 
-Jeśli plik nie istnieje — pomiń tę fazę.
+1. `node .claude/scripts/wiedza/wiedza.mjs indeks --zapisz`. Zarchiwizowane solutions (`docs/solutions/_archived/`) wypadają
+   z indeksu same; dokument zastępczy wchodzi, gdy ma pola wiedzy (format `/dev-compound`, sekcja „Pola wiedzy”).
+2. `niepoprawne` w wyniku = solutions z błędnymi polami: popraw pola i sprawdź `wiedza.mjs sprawdz <plik>`.
+3. `zapisany: false` z `bledy` = bramka indeksu, plik zostaje bez zmian:
+   - koszyk „zawsze” ponad limit (`paths: ["**"]`) — zawęź `paths` wpisów z listy w błędzie do katalogów, których reguła dotyczy;
+   - indeks ponad limit znaków — scal solutions o tej samej klasie i sensie reguły (Replace jednym następcą) albo zarchiwizuj
+     te o najmniejszej wartości (najniższa waga, zero ucieczek, najwęższe `paths`).
+   Potem wygeneruj indeks jeszcze raz. Limit dotyczy indeksu, nie wiedzy: solution poza indeksem zostaje w bazie.
+   Treści reguł nie skracasz, żeby zmieścić indeks — skrócona reguła traci to, co dostają buildery i reviewerzy.
+   Wąski przegląd z autopilota bramki rozmiaru nie porządkuje: zwraca ją operatorowi, który uruchamia pełny przegląd.
+4. `duplikaty` w wyniku = ta sama klasa i treść reguły w kilku solutions; indeks bierze nowszy wpis — starszy oceń jak każdy
+   dokument (Keep, gdy wnosi własny opis problemu; Archive, gdy jest redundantny).
+5. `doScalenia` w wyniku = klasa z co najmniej 3 regułami w indeksie. Osobne reguły jednej klasy zajmują limit wycinka
+   buildera i reviewera kilka razy, więc reguły o wspólnym mechanizmie scalasz: Replace jednym następcą, którego `regula`
+   obejmuje warianty (≤ 2 zdania), `regula_krotka` mieści je w jednym zdaniu, `paths` to suma globów, `ucieczki` suma
+   liczników, a starsze solutions idą do `_archived`. Reguła o innym mechanizmie tej samej klasy zostaje (Keep).
+6. `doBramki` w wyniku = klasa z sumą ucieczek do bota co najmniej 3. Kolejna linia reguły jej nie zatrzymała, więc
+   w raporcie proponujesz bramkę mechaniczną — regułę lint (ESLint `no-restricted-syntax` albo reguła lokalna), wzorzec
+   ast-grep albo test w bramkach domknięcia — z plikami klasy i przykładem, który bramka ma odrzucić. Wdrożenie to decyzja
+   operatora; po wdrożeniu solution dostaje szczebel `lint` albo `kod` i pole `bramka`.
 
-Dla KAŻDEJ reguły w pliku:
+## Jeden wątek
 
-1. **Odczytaj ścieżkę Source** z reguły
-2. **Sprawdź status źródła:**
-   - Czy plik źródłowy nadal istnieje w `docs/solutions/`?
-   - Czy plik źródłowy został przeniesiony do `docs/solutions/_archived/` w tej lub wcześniejszej sesji refresh?
-   - Czy plik źródłowy został zastąpiony (Replace) — sprawdź `superseded_by` we frontmatter?
-
-3. **Klasyfikacja akcji na regule:**
-
-| Stan źródła | Akcja na regule |
-|---|---|
-| Źródło istnieje i jest Keep/Update | Zachowaj regułę bez zmian |
-| Źródło zostało Replace | Zaktualizuj Source na nowy plik następcy. Jeśli treść reguły jest nadal prawdziwa — zachowaj. Jeśli następca zmienia rekomendację — przepisz regułę na podstawie nowego następcy |
-| Źródło zostało Archive | Usuń regułę — problem nie jest już aktualny |
-| Źródło nie istnieje (brak pliku, brak archiwum) | Zweryfikuj aktualność reguły na podstawie codebase. Jeśli nadal poprawna — zachowaj z adnotacją `(źródło usunięte, reguła zachowana)`. Jeśli nie można zweryfikować — usuń |
-
-4. **Deduplikacja:**
-   - Porównaj wszystkie reguły parami
-   - Jeśli dwie reguły mówią zasadniczo to samo (nawet różnymi słowami), połącz je w jedną, zachowując oba Source
-   - Preferuj bardziej precyzyjne sformułowanie
-
-5. **Egzekwowanie limitu ~50:**
-   - Po usunięciach i mergach policz reguły
-   - Jeśli nadal > 50: usuń reguły o najniższej wartości (najstarsze Source + najwęższe zastosowanie)
-   - Zaktualizuj `<!-- rule-count: N -->`
-
-6. **Zapisz zmodyfikowany plik** jeśli wprowadzono jakiekolwiek zmiany.
-
-## Strategia subagentów
-
-Używaj subagentów do izolacji kontekstu przy badaniu wielu artefaktów — nie tylko dlatego, że zadanie brzmi złożono. Wybierz najlżejsze podejście które pasuje:
-
-| Podejście | Kiedy użyć |
-|-----------|------------|
-| **Tylko główny wątek** | Mały zakres, krótkie dokumenty |
-| **Sekwencyjne subagenty** | 1-2 artefakty z wieloma wspierającymi plikami do przeczytania |
-| **Równoległe subagenty** | 3+ naprawdę niezależne artefakty z małym nakładaniem |
-| **Wsadowe subagenty** | Szerokie przeglądy — najpierw zawęź zakres, potem badaj partiami |
-
-**Przy uruchamianiu dowolnego subagenta, dołącz tę instrukcję w jego zadaniu:**
-
-> Używaj dedykowanych narzędzi do wyszukiwania i czytania plików (Glob, Grep, Read) do całego badania. NIE używaj komend shell (ls, find, cat, grep, test, bash) do operacji na plikach. Unikaj promptów o uprawnienia i jest to bardziej niezawodne.
-
-Dwie role subagentów:
-
-1. **Subagenty badawcze** — tylko do odczytu. Nie mogą edytować plików, tworzyć następców ani archiwizować. Każdy zwraca: ścieżkę pliku, dowody, rekomendowaną akcję, pewność i otwarte pytania. Mogą działać równolegle gdy artefakty są niezależne.
-2. **Subagenty zastępujące** — piszą pojedynczy nowy dokument zastępujący przestarzały. Działają **jeden na raz, sekwencyjnie** (każdy subagent zastępujący może potrzebować przeczytać znaczną ilość kodu, a uruchomienie wielu równolegle ryzykuje wyczerpanie kontekstu). Orkiestrator obsługuje całą archiwizację i aktualizacje metadanych po zakończeniu każdego zastąpienia.
-
-Orkiestrator łączy wyniki badań, wykrywa sprzeczności, koordynuje subagenty zastępujące i wykonuje wszystkie operacje archiwizacji/metadanych centralnie. Oznacza niejednoznaczne przypadki jako stale. Jeśli dwa artefakty nakładają się lub omawiają ten sam problem, badaj je razem zamiast równolegle.
+Badanie, dokument zastępczy i archiwizację wykonujesz w tym wątku. Pomocnicze wątki badawcze (narzędzie Agent, sam odczyt,
+jeden na klaster) mają sens przy przeglądzie szerokim (9+ dokumentów), gdy klastry z Fazy 0 się nie nakładają —
+zwracają ścieżkę, dowody, rekomendowaną akcję i pewność. Zapisy i archiwizacja zostają w tym wątku.
 
 ## Faza 2: Klasyfikacja właściwej akcji utrzymania
 
@@ -323,18 +299,15 @@ Zastosuj edycje in-place tylko gdy rozwiązanie jest nadal merytorycznie poprawn
 
 ### Replace Flow
 
-Przetwarzaj kandydatów Replace **jeden na raz, sekwencyjnie**. Każde zastępstwo pisane jest przez subagenta dla ochrony głównego okna kontekstu.
+Przetwarzaj kandydatów Replace **jeden na raz, sekwencyjnie**. Dokument zastępczy piszesz sam.
 
 **Gdy dowody wystarczające:**
 
-1. Uruchom pojedynczego subagenta do napisania dokumentu zastępczego. Przekaż mu:
-   - Pełną treść starego dokumentu
-   - Podsumowanie dowodów z badania (co się zmieniło, co aktualny kod robi, dlaczego stare wskazówki są mylące)
-   - Docelową ścieżkę i kategorię (ta sama kategoria co stary dokument chyba że sama kategoria się zmieniła)
-2. Subagent pisze nowy dokument według formatu `/dev-compound`: frontmatter YAML (title, category, date, module, component, tags), opis problemu, root cause, aktualne rozwiązanie z przykładami kodu i zapobieganie.
-3. Po zakończeniu pracy subagenta, orkiestrator:
-   - Dodaje `superseded_by: [ścieżka nowego dokumentu]` do frontmatter starego dokumentu
-   - Przenosi stary dokument do `docs/solutions/_archived/`
+1. Napisz nowy dokument według formatu `/dev-compound`: frontmatter YAML (title, category, date, tags i pola wiedzy
+   z sekcji „Pola wiedzy” — reguła i wzorce według aktualnego kodu), opis problemu, root cause, aktualne rozwiązanie
+   z przykładami kodu i zapobieganie. Ścieżka i kategoria jak w starym dokumencie, chyba że zmieniła się kategoria.
+2. `node .claude/scripts/wiedza/wiedza.mjs sprawdz <nowy plik>` — kod 1: popraw pola wg `bledy`.
+3. Dodaj `superseded_by: [ścieżka nowego dokumentu]` do frontmatter starego dokumentu i przenieś go do `docs/solutions/_archived/`.
 
 **Gdy dowody niewystarczające:**
 
@@ -374,17 +347,18 @@ Następnie dla KAŻDEGO przetworzonego pliku podaj:
 
 Dla wyników **Keep**, umieść je w sekcji przejrzanych-bez-edycji żeby wynik był widoczny bez tworzenia churnu git.
 
-### Learned Patterns (.claude/rules/learned-patterns.md)
+### Indeks wiedzy (docs/learned-patterns.md)
 
-Jeśli plik istnieje i był przeglądany w Fazie 1.7, dodaj sekcję:
+Dodaj sekcję z wyniku `wiedza.mjs indeks --zapisz` z Fazy 1.7:
 
 ```text
-Learned Patterns:
-  Reguł przed refresh: N
-  Reguł po refresh: M
-  Usunięte (źródło zarchiwizowane): X
-  Zaktualizowane (źródło zastąpione): Y
-  Zduplikowane (zmergowane): Z
+Indeks wiedzy:
+  Zapisany: tak / nie (bramka: <błędy>)
+  Wpisy: N (koszyk „zawsze”: Z), znaki: C
+  Niepoprawne pola: <lista albo „brak”>
+  Duplikaty: <lista albo „brak”>
+  Do scalenia: <klasa: scalone w <plik> / zostawione z powodem> albo „brak”
+  Do bramki: <klasa (ucieczki): propozycja bramki> albo „brak”
 ```
 
 ### Format raportu autonomicznego
@@ -401,7 +375,7 @@ Podziel akcje na dwie sekcje:
 
 **Rekomendowane** (akcje których nie udało się zapisać):
 - Te same szczegóły co powyżej, ale sformułowane jako rekomendacje dla człowieka do zastosowania
-- Dołącz wystarczająco kontekstu żeby użytkownik mógł zastosować zmianę ręcznie lub ponownie uruchomić skill interaktywnie
+- Dołącz wystarczająco kontekstu żeby użytkownik mógł zastosować zmianę ręcznie albo uruchomić skill ponownie po usunięciu przeszkody
 
 Jeśli wszystkie zapisy się powiodą, sekcja Rekomendowane jest pusta. Jeśli żaden zapis się nie powiedzie, wszystkie akcje trafiają pod Rekomendowane — raport staje się planem utrzymania.
 
@@ -411,3 +385,35 @@ Jeśli wszystkie zapisy się powiodą, sekcja Rekomendowane jest pusta. Jeśli �
 - `/dev-compound-refresh` utrzymuje starsze dokumenty gdy codebase ewoluuje
 
 Używaj **Replace** tylko gdy proces odświeżania ma wystarczające prawdziwe dowody do napisania godnego zaufania następcy. Gdy dowody są niewystarczające, oznacz jako stale i zarekomenduj `/dev-compound` na gdy użytkownik następnym razem natrafi na ten obszar problemu.
+
+## Tryb konwersji (`--konwersja`)
+
+Jednorazowo, w projekcie, który ma jeszcze stary plik reguł `learned-patterns.md` w katalogu `.claude/rules` (format sprzed
+indeksu wiedzy: `- **tytuł**: treść` + `Source:`). Reguły przechodzą do pól wiedzy ich solutions, indeks powstaje skryptem,
+a stary plik idzie do `docs/archiwum/` — przestaje ładować się do każdego agenta.
+
+1. Start przy czystym drzewie (`git status --porcelain` pusty): konwersja kończy się commitem, cudze zmiany by się do niego dokleiły.
+2. `node .claude/scripts/wiedza/wiedza.mjs konwersja przygotuj > /tmp/wiedza-kandydaci.json` — kandydat na regułę:
+   `nr`, `tytul`, `tresc`, `zrodla`, `solution`, `regula` (tytuł jako propozycja), `paths` (wzorce ze ścieżek cytowanych
+   w solution), `waga`, `uwagi`; pole `klasa` jest puste.
+3. Dla każdego kandydata ustal:
+   - `klasa` — klasa defektu z `KLASY_WIEDZY` w `.claude/scripts/wiedza/klasy.mjs`, wg treści reguły i solution;
+   - `regula` — popraw, gdy tytuł nie mówi, co robić (jedno albo dwa zdania, ≤ 400 zn, „rób X, nie Y”);
+   - `paths` — wybierz z kandydatów albo podaj własne globy katalogów kodu, których reguła dotyczy; `["**"]` dla reguły
+     przekrojowej, a takich w projekcie jest najwyżej 5;
+   - `solution` — jeden plik z `zrodla` wewnątrz `docs/solutions/` (jedna reguła na solution); `null`, gdy żadnego nie ma.
+   Zapisz tablicę `[{"nr", "klasa", "regula", "paths", "solution", "waga"}]` do `/tmp/wiedza-propozycje.json`.
+4. `node .claude/scripts/wiedza/wiedza.mjs konwersja zastosuj --propozycje /tmp/wiedza-propozycje.json` — skrypt waliduje
+   każdą propozycję tym samym walidatorem co compound, zapisuje pola do solutions (szczebel `regula`), generuje indeks
+   i po zapisanym indeksie przenosi stary plik do `docs/archiwum/learned-patterns-<data>.md`, a odrzuty do
+   `docs/archiwum/learned-patterns-odrzuty-<data>.md`. Bramka indeksu (`indeks.zapisany: false`) zostawia stary plik
+   na miejscu: popraw `paths` albo wpisy wg Fazy 1.7 i uruchom `wiedza.mjs indeks --zapisz`, a stary plik przenieś
+   dopiero po zapisanym indeksie.
+5. `odwolania` z wyniku `zastosuj` (`plik:linia` spoza `docs/`, które nadal wskazują stary plik): w `.coderabbit.yaml`
+   zamień ścieżkę na `docs/learned-patterns.md` (bez tego bot szuka kontekstu w usuniętym pliku) i dołącz plik do commitu;
+   pozostałe wypisz w raporcie dla operatora — CLAUDE.md nie edytujesz.
+   Commit: `git add -A docs/solutions docs/learned-patterns.md docs/archiwum .claude/rules` (plus `.coderabbit.yaml`, gdy go
+   poprawiłeś) i `docs(wiedza): konwersja learned-patterns do wiedzy projektu`.
+6. Raport: liczba zapisanych reguł, odrzuty z powodami (plik odrzutów — decyzja operatora: dopisać pola ręcznie albo
+   pominąć), rozmiar indeksu i koszyk „zawsze”. CLAUDE.md projektu nie edytujesz — linię wskazującą indeks dopisuje
+   operator wg README szablonu.

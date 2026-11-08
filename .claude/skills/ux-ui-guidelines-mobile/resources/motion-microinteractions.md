@@ -5,11 +5,11 @@ Animacje na mobile nie są dekoracją — komunikują zmianę stanu, kierunek na
 Stack referencyjny: `react-native-reanimated` + `Easing` z `react-native`. Pryncypia są platform-agnostic.
 
 > **Ten plik odpowiada na „czy i co animować".** Gdy wiesz już, że animujesz — implementację prowadzi
-> skill **`expo-animation`** (wybór wątku, worklety, handoff gestu, degradacja na słabszym
+> skill **`expo:expo-animation`** (wybór wątku, worklety, handoff gestu, degradacja na słabszym
 > urządzeniu). A jeśli animacja miałaby być sheetem, pickerem, sliderem albo togglem — **nie pisz jej
-> ręcznie**: sprawdź `expo-ui`, bo `@expo/ui` daje gotowy komponent natywny.
+> ręcznie**: sprawdź `expo:expo-ui`, bo `@expo/ui` daje gotowy komponent natywny.
 
-> **Wersja:** aktualny major to **Reanimated 4.x** — wymaga New Architecture (Fabric; docs: *„Reanimated 4 works only with the React Native New Architecture"*). **3.x to linia legacy** (Old Architecture) — wg oficjalnej dokumentacji **nie jest już aktywnie utrzymywana** (*„you can use Reanimated in version 3 (which is no longer actively maintained)"*); używaj jej wyłącznie w projektach przed migracją na New Architecture, a samą migrację na 4.x traktuj jako domyślny kierunek. Stan npm: `latest` = 4.6.0, tag `reanimated-3` = 3.19.5. API animacji poniżej (`withTiming`, `withSpring`, `Easing`, `useSharedValue`) jest stabilne między 3.x i 4.x — przykłady w tym pliku działają na obu, poza sekcją Shared Element Transitions niżej.
+> **Wersja:** aktualny major to **Reanimated 4.x** — wymaga New Architecture (Fabric; docs: *„Reanimated 4 works only with the React Native New Architecture"*). **3.x to linia legacy** (Old Architecture) — wg oficjalnej dokumentacji **nie jest już aktywnie utrzymywana** (*„you can use Reanimated in version 3 (which is no longer actively maintained)"*); używaj jej wyłącznie w projektach przed migracją na New Architecture, a samą migrację na 4.x traktuj jako domyślny kierunek. Stan npm i Expo SDK 58: `latest` = 4.7.1 (wymaga RN 0.86–0.88 i `react-native-worklets` 0.13.x), tag `reanimated-3` = 3.19.5. Nazwy API animacji (`withTiming`, `withSpring`, `Easing`, `useSharedValue`) są wspólne dla 3.x i 4.x, ale `withSpring` w 4.x zachowuje się inaczej: ma nowe domyślne parametry, `duration` oznacza czas odczuwany (faktyczny to 1,5 × `duration`), a `energyThreshold` zastępuje `restDisplacementThreshold` i `restSpeedThreshold`. Stare wartości domyślne daje `Reanimated3DefaultSpringConfig`. Przykłady w tym pliku są pisane pod 4.x.
 
 ---
 
@@ -205,6 +205,35 @@ Performance: shared transitions kosztują — używaj 1-2 na ekran max.
 
 ---
 
+## CSS animations i transitions w Reanimated 4
+
+Reanimated 4 ma też deklaratywne animacje i przejścia w stylu CSS na komponentach `Animated`, bez shared values. Przy prostej zmianie stanu to często mniej kodu niż `useAnimatedStyle`.
+
+```tsx
+// Transition: animuje zmianę wskazanej właściwości stylu
+<Animated.View
+  style={{
+    opacity: isVisible ? 1 : 0,
+    transitionProperty: 'opacity',
+    transitionDuration: 300,
+  }}
+  onCSSTransitionEnd={(event) => console.log(event.propertyName)}
+/>
+
+// Animation: keyframes w stylu
+<Animated.View
+  style={{
+    animationName: { '100%': { transform: [{ translateX: 100 }] } },
+    animationDuration: '300ms',
+  }}
+  onCSSAnimationEnd={handleEnd}
+/>
+```
+
+Callbacki `onCSSAnimation*` i `onCSSTransition*` są propsami komponentu, nie częścią `style`. Klasy `transition-*` i `animate-*` w `className` to funkcja Uniwind Pro; szablon używa wersji Free, więc te właściwości podajesz w `style`.
+
+---
+
 ## Anti-patterns
 
 | Anty-pattern | Dlaczego źle | Co zamiast |
@@ -214,7 +243,7 @@ Performance: shared transitions kosztują — używaj 1-2 na ekran max.
 | Wszystkie elementy ekranu animują naraz | Chaos, brak hierarchii | Stagger 50ms |
 | Bounce spring na confirm button | Wygląda dziecięco | Timing 150ms ease-out |
 | Animacja na każdy mount listy podczas scrolla | Distrakcja | Initial render staggered, reszta instant |
-| `transition: all` (CSS pattern, nie ma w Reanimated, ale w NativeWind tak) | Animuje rzeczy które nie powinny | Specyficzne properties |
+| `transitionProperty: 'all'` (Reanimated 4 to ma, dokumentacja odradza) | Animuje rzeczy które nie powinny, grozi problemami z wydajnością | Specyficzne properties |
 | Spring na destructive action confirm | "Confirm delete" nie powinno być wesołe | Subtle timing fade |
 | `useNativeDriver: false` bez powodu | Animacja przez JS thread = jank | Domyślnie native driver (Reanimated robi to automatycznie) |
 
@@ -352,4 +381,4 @@ export function PressableButton({
 
 ---
 
-*Źródła: Apple HIG Motion (developer.apple.com/design/human-interface-guidelines/motion), Material 3 Motion (m3.material.io/styles/motion), react-native-reanimated 4 docs (docs.swmansion.com/react-native-reanimated — bieżąca dokumentacja opisuje 4.x, npm latest 4.6.0 na 08.2026; 3.x to linia archiwalna), Rauno Freiberg (rauno.me/craft), Things 3 / Linear Mobile teardown observations, Android 17 / Material 3 Expressive (android-developers.googleblog.com). Update: 2026-08-23.*
+*Źródła: Apple HIG Motion (developer.apple.com/design/human-interface-guidelines/motion), Material 3 Motion (m3.material.io/styles/motion), react-native-reanimated 4 docs (docs.swmansion.com/react-native-reanimated — bieżąca dokumentacja opisuje 4.x, npm latest 4.7.1 na 11.2026; 3.x to linia archiwalna), Rauno Freiberg (rauno.me/craft), Things 3 / Linear Mobile teardown observations, Android 17 / Material 3 Expressive (android-developers.googleblog.com). Update: 2026-11-05.*

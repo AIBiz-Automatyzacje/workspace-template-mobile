@@ -164,7 +164,7 @@ function EmptyState({
   cta,
   onCtaPress,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon: React.ComponentType<{ size?: number; colorClassName?: string }>; // ikona owinięta w withUniwind, patrz icons.md
   title: string;
   description: string;
   cta?: string;
@@ -173,7 +173,7 @@ function EmptyState({
   return (
     <View className="flex-1 items-center justify-center px-8 gap-3">
       <View className="size-16 rounded-full bg-muted items-center justify-center mb-2">
-        <Icon className="size-8 text-muted-foreground" />
+        <Icon size={32} colorClassName="accent-muted-foreground" />
       </View>
       <Text className="text-xl font-semibold text-foreground text-center">
         {title}
@@ -233,7 +233,7 @@ export function OfflineBanner() {
 
   return (
     <View className="bg-destructive px-4 py-2 flex-row items-center gap-2">
-      <WifiOff className="size-4 text-destructive-foreground" />
+      <WifiOff size={16} colorClassName="accent-destructive-foreground" />
       <Text className="text-destructive-foreground text-sm font-medium">
         Brak połączenia
       </Text>
@@ -261,7 +261,8 @@ NIE alert, NIE toast. **Inline pod fieldem.**
   {error && (
     <Text
       className="text-sm text-destructive"
-      accessibilityLiveRegion="polite"
+      role="alert"
+      aria-live="polite"
     >
       {error}
     </Text>
@@ -271,7 +272,7 @@ NIE alert, NIE toast. **Inline pod fieldem.**
 
 **Reguły:**
 - Focus na pierwszym błędzie po submit
-- `accessibilityLiveRegion="polite"` na błędach (RN equivalent `aria-live`)
+- `aria-live="polite"` na błędach działa tylko na Androidzie; na iOS ogłoś pojawienie się błędu przez `AccessibilityInfo.announceForAccessibility(error)` (przykład w `forms-keyboard.md`)
 - Komunikat = co user MA ZROBIĆ ("Wpisz poprawny email"), nie co spierdolił ("Invalid email")
 
 ### Server error — full screen z retry
@@ -283,7 +284,7 @@ function ErrorScreen({
 }: { onRetry: () => void; message?: string }) {
   return (
     <View className="flex-1 items-center justify-center px-8 gap-3">
-      <AlertCircle className="size-12 text-destructive" />
+      <AlertCircle size={48} colorClassName="accent-destructive" />
       <Text className="text-lg font-semibold text-foreground">{message}</Text>
       <Pressable
         onPress={onRetry}

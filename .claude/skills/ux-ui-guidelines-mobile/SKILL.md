@@ -1,17 +1,13 @@
 ---
 name: ux-ui-guidelines-mobile
-description: Wytyczne UX/UI dla aplikacji mobilnych (Expo + React Native + NativeWind, ale stack-agnostic w pryncypiach). Platform conventions (iOS HIG vs Material 3), typografia natywna (SF Pro/Roboto, Dynamic Type, type scale), 8pt grid + safe areas, semantic colors + dark mode jako redesign, ikony (SF Symbols vs Lucide vs Material Symbols), motion i micro-interactions (Reanimated — aktualny major 4.x, wymaga New Architecture; 3.x legacy — easing, stagger), haptics + native gestures (expo-haptics, RNGH 3.x), stany loading/empty/error, formy + klawiatura mobilna, navigation patterns (tabs/drawer/stack/modal), bottom sheets i modale, listy (FlashList v2, swipe actions), accessibility (VoiceOver, TalkBack, Dynamic Type), pułapki AI-generowanego UI, teardowny premium apek (Things 3, Bear, Linear, Wellspoken), app icon i splash screen. Używaj przy projektowaniu ekranów mobilnych, budowie design system pod mobile, decyzjach iOS vs Android, "ekran wygląda tanio", "feels off na mobile", "native feel vs web feel", review designu mobilnego, mobile polish.
-paths:
-  - "app/**/*.tsx"
-  - "components/**/*.tsx"
-  - "screens/**/*.tsx"
+description: Wytyczne UX/UI dla aplikacji mobilnych (Expo + React Native + Uniwind, ale stack-agnostic w pryncypiach). Platform conventions (iOS HIG vs Material 3), typografia natywna (SF Pro/Roboto, Dynamic Type, type scale), 8pt grid + safe areas, semantic colors + dark mode jako redesign, ikony (SF Symbols vs Lucide vs Material Symbols), motion i micro-interactions (Reanimated — aktualny major 4.x, wymaga New Architecture; 3.x legacy — easing, stagger), haptics + native gestures (expo-haptics, RNGH 3.x), stany loading/empty/error, formy + klawiatura mobilna, navigation patterns (tabs/drawer/stack/modal), bottom sheets i modale, listy (FlashList v2, swipe actions), accessibility (VoiceOver, TalkBack, Dynamic Type), pułapki AI-generowanego UI, teardowny premium apek (Things 3, Bear, Linear, Wellspoken), app icon i splash screen. Używaj przy projektowaniu ekranów mobilnych, budowie design system pod mobile, decyzjach iOS vs Android, "ekran wygląda tanio", "feels off na mobile", "native feel vs web feel", review designu mobilnego, mobile polish.
 ---
 
 # UX/UI Guidelines — Mobile
 
 ## Cel
 
-Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działają w każdym stacku (React Native, native iOS/Swift, native Android/Kotlin, Flutter). Przykłady kodu w **Expo + React Native + NativeWind** (default stack zespołu).
+Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działają w każdym stacku (React Native, native iOS/Swift, native Android/Kotlin, Flutter). Przykłady kodu w **Expo + React Native + Uniwind** (default stack zespołu).
 
 ## Kiedy Używać Tego Skilla
 
@@ -46,7 +42,7 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 - [ ] Loading state: skeleton dla znanej struktury, spinner dla unknown, > 300ms zawsze visible feedback
 - [ ] Empty state ma headline + description + CTA (NIE samo "Brak danych")
 - [ ] Error states z konkretnym recovery action (retry / reload / contact)
-- [ ] Animacje: konkretne `transition-property`, GPU-only (transform + opacity), 200-300ms standard
+- [ ] Animacje: konkretne `transitionProperty` (nigdy `'all'`), GPU-only (transform + opacity), 200-300ms standard
 - [ ] Press feedback: `scale(0.96)` + opcjonalnie haptic na confirm (NIGDY na każdy tap)
 - [ ] Concentric shapes — świadomy wybór typu (fixed/capsule/concentric, iOS 26 Apple official) — patrz [[resources/spacing-grid.md]]
 - [ ] `tabular-nums` (`fontVariant: ['tabular-nums']`) na wszystkich dynamicznych liczbach
@@ -57,9 +53,9 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 - [ ] Label nad inputem (NIE w placeholder long-term)
 - [ ] `keyboardType` properly set (number-pad / email-address / phone-pad / etc.)
 - [ ] `textContentType` (iOS) + `autoComplete` (Android) dla autofill
-- [ ] `KeyboardAvoidingView` z `behavior` per platforma (`padding` iOS / `height` Android)
+- [ ] `KeyboardAvoidingView` z `behavior="padding"` na obu platformach; dłuższy formularz: `KeyboardAwareScrollView` z `react-native-keyboard-controller`
 - [ ] Validation `onBlur` (sweet spot — NIE onChange real-time, NIE tylko onSubmit)
-- [ ] Error display inline pod fieldem z `accessibilityLiveRegion="polite"`
+- [ ] Error display inline pod fieldem, ogłaszany na obu platformach: `aria-live="polite"` (Android) + `AccessibilityInfo.announceForAccessibility` (iOS)
 - [ ] Submit button states: default → loading (spinner inside) → success/error
 - [ ] Tap-outside-to-dismiss keyboard (`Keyboard.dismiss()`)
 - [ ] Multi-step form: split przy >5 polach + step indicator + save progress
@@ -113,7 +109,7 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 |------|------------|
 | [[resources/platform-conventions.md]] | iOS HIG vs Material 3, `Platform.select`, hybrid vs platform-specific design |
 | [[resources/typography.md]] | SF Pro/Roboto, type scale (1.125/1.25/1.5), Dynamic Type, custom fonts w Expo |
-| [[resources/spacing-grid.md]] | 8pt grid, tokeny spacingowe, safe areas, touch targets, NativeWind preset |
+| [[resources/spacing-grid.md]] | 8pt grid, tokeny spacingowe, safe areas, touch targets, tokeny w `@theme` |
 | [[resources/color-darkmode.md]] | Semantic colors, dark mode jako redesign, layering, WCAG, color blindness |
 | [[resources/icons.md]] | SF Symbols vs Lucide vs Material Symbols, sizing matrix, optical alignment |
 
@@ -123,7 +119,7 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 |------|------------|
 | [[resources/motion-microinteractions.md]] | Kiedy animować, timing matrix, easing, stagger, Reanimated 4.x patterns (3.x legacy) |
 | [[resources/haptics-gestures.md]] | expo-haptics matrix, native gestures, RNGH 3.x, gesture conflicts |
-| [[resources/forms-keyboard.md]] | Input states, keyboardType, autofill, KeyboardAvoidingView, react-hook-form + zod |
+| [[resources/forms-keyboard.md]] | Input states, keyboardType, autofill, KeyboardAvoidingView, keyboard-controller, react-hook-form + zod |
 
 ### States & Feedback
 
@@ -163,7 +159,7 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 |-----------------|--------|
 | "iOS czy Android first? Czy unifikować?" | [[resources/platform-conventions.md]] |
 | Skala typograficzna, custom font w Expo | [[resources/typography.md]] |
-| 8pt grid, safe areas, NativeWind tokens | [[resources/spacing-grid.md]] |
+| 8pt grid, safe areas, tokeny w `@theme` | [[resources/spacing-grid.md]] |
 | Semantic colors + dark mode + WCAG | [[resources/color-darkmode.md]] |
 | Wybrać ikony (SF Symbols vs Lucide) | [[resources/icons.md]] |
 | Animować — kiedy, jak, czas, easing | [[resources/motion-microinteractions.md]] |
@@ -187,21 +183,22 @@ Uniwersalny przewodnik po projektowaniu aplikacji mobilnych. Pryncypia działaj�
 Ten skill mówi **co i dlaczego** (pryncypia UX, platform conventions, wzorce wizualne). O tym, **czym
 to zaimplementować**, decydują skille Expo — i to one są źródłem prawdy przy rozbieżności:
 
-- **expo-overview** — hub stack guidelines (decision tree który expo-* skill kiedy)
-- **expo-ui** — **sprawdzaj pierwszy przy wyborze komponentu**: sheet, picker, slider, toggle, menu,
+- **expo-stos-szablonu** — hub stosu tego szablonu: od niego zaczynasz, gdy nie wiesz, po który skill sięgnąć
+- **rn-expo-guidelines** — reguły pisania kodu RN i Expo; ten skill zostaje od UX i designu
+- **expo:expo-ui** — **sprawdzaj pierwszy przy wyborze komponentu**: sheet, picker, slider, toggle, menu,
   sekcja formularza, grouped rows. Natywne SwiftUI / Jetpack Compose, od SDK 56+ w Expo Go.
   Wbudowane komponenty RN i biblioteki community dopiero, gdy `@expo/ui` nie ma odpowiednika
-- **expo-animation** — implementacja ruchu i gestów (Reanimated worklety, Gesture Handler, haptics,
+- **expo:expo-animation** — implementacja ruchu i gestów (Reanimated worklety, Gesture Handler, haptics,
   przejścia ekranów). Tutejszy `motion-microinteractions.md` mówi *kiedy i co animować*; tamten skill
   mówi *jak to napisać, żeby nie tnęło na urządzeniu*
-- **expo-design-system** — gdzie żyją tokeny (kolor, spacing, typografia, radius, shadow, motion),
+- **expo:expo-design-system** — gdzie żyją tokeny (kolor, spacing, typografia, radius, shadow, motion),
   konwencje wariantów komponentów, audyt driftu. Tutejsze pliki dają wartości i uzasadnienie, tamten
   skill — strukturę, w której mają mieszkać
-- **expo-native-ui** — platformowe UI w Expo Router (native tabs, semantic colors, SF Symbols, blur)
-- **expo-tailwind-setup** — TailwindCSS v4 + NativeWind v5 setup
-- **ux-ui-guidelines** — webowy odpowiednik (React 19 + Tailwind v4 web)
+- **expo:expo-native-ui** — platformowe UI w Expo Router (native tabs, semantic colors, SF Symbols, blur)
+- **expo:expo-router** — nawigacja plikowa, stacki, native tabs, sheety jako ekrany
+- **uniwind** — Tailwind v4 w React Native: setup, tokeny w `@theme`, motywy, propsy `accent-*`
 - **mobile-e2e-maestro** — automatyzacja testów E2E mobile
 
 ---
 
-*Skill universal pod każdą aplikację mobilną. 18 plików w `resources/`, ~6400 linii. Ostatni update: 2026-08-23 (iOS 27 — rewizja Liquid Glass pod czytelność + użytkownicki suwak przezroczystości, WWDC 2026-06-08; Android 17 stabilny 16.06.2026/API 37 — M3 Expressive z blur/translucencją w menu, sliderach i quick settings; Apple Design Resources dla iOS/iPadOS/macOS 27 (23.06.2026) + Icon Composer zamiast nieistniejącego „Liquid Glass simulatora"; `expo-glass-effect` dla powierzchni szklanych; monochrome opcjonalny od Android 16 QPR 2; odświeżone wersje bibliotek — Reanimated 4, RNGH 3, gorhom 5.2.x, SF Symbols 7000+, Lucide ISC/1776; wcześniej: iOS 26 Liquid Glass + M3 Expressive 18K data + concentric shapes 3 typy + thumb zone myth busted + Duolingo retention case + Christine Rode platform-native).*
+*Skill universal pod każdą aplikację mobilną. 18 plików w `resources/`, ~7100 linii. Stan: 2026-11-05 (Expo SDK 58: RN 0.88, iOS 27 SDK; stylowanie Uniwind + Tailwind v4 CSS-first; Reanimated 4.7.1, Worklets 0.13.0, RNGH ~3.3.0, FlashList 2.3.2, keyboard-controller 1.22.7; wcześniej: iOS 27 — rewizja Liquid Glass pod czytelność + użytkownicki suwak przezroczystości, WWDC 2026-06-08; Android 17 stabilny 16.06.2026/API 37 — M3 Expressive z blur/translucencją w menu, sliderach i quick settings; Apple Design Resources dla iOS/iPadOS/macOS 27 (23.06.2026) + Icon Composer zamiast nieistniejącego „Liquid Glass simulatora"; `expo-glass-effect` dla powierzchni szklanych; monochrome opcjonalny od Android 16 QPR 2; odświeżone wersje bibliotek — Reanimated 4, RNGH 3, gorhom 5.2.x, SF Symbols 7000+, Lucide ISC/1776; wcześniej: iOS 26 Liquid Glass + M3 Expressive 18K data + concentric shapes 3 typy + thumb zone myth busted + Duolingo retention case + Christine Rode platform-native).*

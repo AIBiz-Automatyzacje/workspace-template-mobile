@@ -90,6 +90,8 @@ SECURITY DEFINER pozwala funkcji działać z uprawnieniami właściciela (zazwyc
 - Wpisów do audit_log
 
 > ⚠️ **`SET search_path = ''` (pusty), nie `= public`.** Funkcja SECURITY DEFINER działa z uprawnieniami właściciela. Jeśli `search_path` zawiera schemat zapisywalny przez atakującego (albo poleganie na domyślnym `public`), może on podstawić własną tabelę/funkcję i przechwycić wykonanie z podniesionymi uprawnieniami (privilege escalation). Pusty `search_path` wymusza rozwiązywanie nazw jednoznacznie — dlatego **wszystkie** obiekty muszą być w pełni kwalifikowane (`public.tabela`, `auth.uid()`).
+>
+> **EXECUTE tylko dla roli, która funkcję woła.** Supabase domyślnie nadaje EXECUTE na nowe funkcje w `public` rolom `anon` i `authenticated`, więc funkcja SECURITY DEFINER jest od razu wołalna przez `.rpc()` z kluczem publicznym. Po `CREATE FUNCTION` odbierz EXECUTE od `PUBLIC` i `anon` (a od `authenticated`, gdy woła ją tylko trigger, inna funkcja albo `service_role`) i nadaj roli, która ją woła; uprawnienia wołającego i tak sprawdza ciało funkcji.
 
 **Wzorzec:**
 ```sql
@@ -109,6 +111,10 @@ BEGIN
     INSERT INTO public.protected_table ...;
 END;
 $$;
+
+-- Funkcja w schemacie API jest wołalna przez .rpc(): EXECUTE tylko dla roli, która ją woła
+REVOKE EXECUTE ON FUNCTION public.my_secure_function() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.my_secure_function() TO authenticated;
 ```
 
 ### Widoki a RLS (PostgreSQL 15+)
@@ -160,6 +166,10 @@ BEGIN
     DELETE FROM auth.users WHERE id = current_user_id;
 END;
 $$;
+
+-- Funkcja w schemacie API jest wołalna przez .rpc(): EXECUTE tylko dla roli, która ją woła
+REVOKE EXECUTE ON FUNCTION public.delete_user_account() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.delete_user_account() TO authenticated;
 ```
 
 ---
@@ -230,8 +240,11 @@ BEGIN
 END;
 $$;
 
+-- Woła ją tylko inna funkcja SECURITY DEFINER (z prawami właściciela): bez EXECUTE dla ról API
+REVOKE EXECUTE ON FUNCTION public.log_audit_event(TEXT, TEXT, UUID, JSONB) FROM PUBLIC, anon, authenticated;
+
 -- Użycie w innych funkcjach
-PERFORM log_audit_event(
+PERFORM public.log_audit_event(
     'PASSWORD_CHANGED',
     'auth.users',
     auth.uid(),
@@ -268,6 +281,9 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+-- Funkcję woła tylko trigger: żadna rola API nie potrzebuje EXECUTE
+REVOKE EXECUTE ON FUNCTION public.log_profile_changes() FROM PUBLIC, anon, authenticated;
 
 CREATE TRIGGER on_profile_change
     AFTER UPDATE ON profiles
@@ -313,8 +329,6 @@ console.error('DB error:', {
 
 ### Rozwiązanie: lib/logger.ts
 ```typescript
-// __DEV__ to globalna zmienna wstrzykiwana przez Metro/Hermes (Expo/RN) —
-// odpowiednik import.meta.env.DEV z Vite, którego w tym środowisku NIE MA.
 const isDev = __DEV__;
 
 export const logger = {
@@ -344,7 +358,7 @@ try {
     await supabase.from('profiles').update(data).eq('id', userId);
 } catch (error) {
     logger.error('Error updating profile', error);
-    toast.error('Wystąpił błąd');  // Generyczny komunikat dla użytkownika
+    Alert.alert('Wystąpił błąd');  // Generyczny komunikat dla użytkownika
 }
 ```
 
@@ -354,25 +368,32 @@ try {
 
 ### Bezpieczeństwo
 ```typescript
-// ❌ NIGDY na froncie
-const supabase = createClient(url, SERVICE_ROLE_KEY);
+// ❌ NIGDY na froncie (secret key w przeglądarce i tak dostaje HTTP 401 — Supabase
+//    blokuje po User-Agent, ale klucz wycieka do bundle'a)
+const supabase = createClient(url, SECRET_KEY);
 
-// ✅ TYLKO w Edge Functions
-const supabase = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-);
+// ✅ TYLKO w Edge Functions — przez withSupabase, bez ręcznego createClient
+export default {
+    fetch: withSupabase({ auth: 'none', cors: 'disabled' }, async (req, ctx) => {
+        // ...weryfikacja podpisu webhooka...
+        const supabase = ctx.supabaseAdmin; // secret key, omija RLS
+    }),
+};
 ```
 
 ### Kiedy Używać
 
 | Kontekst | Klucz |
 |----------|-------|
-| Frontend (przeglądarka) | `ANON_KEY` |
-| Mobile app | `ANON_KEY` |
-| Edge Functions (webhook) | `SERVICE_ROLE_KEY` |
-| Backend server | `SERVICE_ROLE_KEY` |
-| Migracje, seedy | `SERVICE_ROLE_KEY` |
+| Aplikacja mobilna | `PUBLISHABLE_KEY` (`sb_publishable_...`; legacy: `ANON_KEY`) |
+| Mobile app | `PUBLISHABLE_KEY` (legacy: `ANON_KEY`) |
+| Edge Functions (webhook) | `SECRET_KEY` (`sb_secret_...`; legacy: `SERVICE_ROLE_KEY`) — `ctx.supabaseAdmin` |
+| Backend server | `SECRET_KEY` (legacy: `SERVICE_ROLE_KEY`) |
+| Migracje, seedy | `SECRET_KEY` (legacy: `SERVICE_ROLE_KEY`) |
+
+Legacy klucze `anon`/`service_role` (JWT) zostaną wycofane do końca 2026 — działają
+równolegle z nowymi, ale nowe projekty używają publishable/secret keys
+(docs: guides/api/api-keys).
 
 ---
 
@@ -397,7 +418,7 @@ const { error } = await supabase.auth.signUp({ email, password });
 
 if (error) {
     // Generyczny błąd - nie mów czy email istnieje
-    toast.error('Nie udało się utworzyć konta. Sprawdź dane i spróbuj ponownie.');
+    Alert.alert('Nie udało się utworzyć konta. Sprawdź dane i spróbuj ponownie.');
 }
 ```
 
@@ -417,6 +438,7 @@ if (error) {
 
 - [ ] Użyj `SECURITY DEFINER` jeśli wymaga elevated access
 - [ ] Ustaw `SET search_path = ''` (pusty) + w pełni kwalifikowane nazwy (`public.tabela`)
+- [ ] Odbierz EXECUTE od `PUBLIC` i `anon`, nadaj roli, która funkcję woła; kontrola uprawnień w ciele funkcji
 - [ ] Sprawdź `auth.uid() IS NOT NULL`
 - [ ] Loguj krytyczne operacje do audit_log (przez funkcję, nie bezpośrednio)
 
@@ -447,7 +469,7 @@ if (error) {
 **Główne Zasady:**
 1. **RLS zawsze włączony** - każda tabela
 2. **UUID do relacji** - nigdy email (email jest mutowalny)
-3. **SECURITY DEFINER z pustym search_path** - `SET search_path = ''` + w pełni kwalifikowane nazwy (privilege escalation)
+3. **SECURITY DEFINER z pustym search_path i odebranym EXECUTE** - `SET search_path = ''` + w pełni kwalifikowane nazwy (privilege escalation), EXECUTE tylko dla roli, która funkcję woła (`.rpc()` z kluczem publicznym)
 4. **Audit log izolowany** - wpisy tylko przez triggery/funkcje, nie z klienta
 5. **Service role tylko server-side** - Edge Functions, backend
 6. **Production-safe logging** - nie wyciekaj struktury DB

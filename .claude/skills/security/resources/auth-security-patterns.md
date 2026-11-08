@@ -1,6 +1,6 @@
 # Wzorce Bezpieczenstwa Auth
 
-Wzorce bezpieczenstwa specyficzne dla auth flow w stacku React Native (Expo) + Supabase + Edge Functions (resource wspoldzielony z wariantem web — sekcje webowe oznaczone).
+Wzorce bezpieczenstwa specyficzne dla auth flow w stacku Expo + React Native + Supabase + Edge Functions.
 
 ---
 
@@ -57,8 +57,7 @@ WITH CHECK ((SELECT auth.uid()) = user_id);
 
 ### Dostęp administracyjny (role)
 
-> ⚠️ **KRYTYCZNE — najczęstszy błąd autoryzacji w Supabase, notorycznie popełniany przez agentów AI.**
-> NIGDY nie trzymaj roli w `user_metadata`. Pole `raw_user_meta_data` (czyli claim `user_metadata` w JWT) jest **edytowalne przez samego użytkownika** — wystarczy `supabase.auth.updateUser({ data: { role: 'admin' } })` z konsoli/DevTools i atakujący podnosi sobie rolę, po czym RLS przepuszcza go do cudzych danych (privilege escalation).
+> **Rola nie pochodzi z `user_metadata`.** Pole `raw_user_meta_data` (czyli claim `user_metadata` w JWT) jest **edytowalne przez samego użytkownika** — wystarczy `supabase.auth.updateUser({ data: { role: 'admin' } })` z konsoli/DevTools i atakujący podnosi sobie rolę, po czym RLS przepuszcza go do cudzych danych (privilege escalation).
 > Do autoryzacji używaj **`app_metadata`** (ustawiane wyłącznie server-side, użytkownik go nie zmieni) albo **dedykowanej tabeli ról**.
 > Nie używaj też top-levelowego claimu `role` w policy — to zarezerwowany claim Postgres/PostgREST (`authenticated` / `anon` / `service_role`), nie rola aplikacyjna.
 
@@ -115,115 +114,78 @@ await supabaseAdmin.auth.admin.updateUserById(userId, {
 
 Kazda chroniona Edge Function musi weryfikowac JWT.
 
-**getClaims() -- PREFEROWANE server-side.** Od 1 pazdziernika 2025 nowe projekty Supabase
-domyslnie uzywaja asymetrycznych kluczy JWT -- `getClaims()` weryfikuje token lokalnie przez
-JWKS (bez round-tripu do serwera Auth), wiec jest szybsze niz `getUser()`.
+**Edge Function z withSupabase({ auth: 'user' }).** Wedlug wytycznych Supabase (AI-prompt
+`edge-functions.md`, pkt 7-8) eksportujesz domyslny obiekt z handlerem `fetch` owinietym
+w `withSupabase` z `npm:@supabase/server@^1`; `Deno.serve` to wzorzec legacy. Wrapper odrzuca
+request bez waznego JWT **przed** wejsciem do handlera, buduje klienta `ctx.supabase` (RLS
+w kontekscie usera) i `ctx.supabaseAdmin` (secret key, omija RLS) oraz dodaje naglowki CORS
+(`cors: 'default'`). Zweryfikowana tozsamosc masz w `ctx.userClaims` (`id` = user_id).
 
 ```typescript
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { withSupabase } from 'npm:@supabase/server@^1';
 
-Deno.serve(async (req) => {
-    // CORS preflight
-    if (req.method === 'OPTIONS') {
-        return new Response(null, { headers: corsHeaders });
-    }
+export default {
+    // auth: 'user' -- request bez waznego JWT dostaje 401 zanim handler ruszy.
+    // Tryby: 'user' | 'publishable' | 'secret' | 'none' (lub tablica, np. ['user', 'secret']).
+    // Dla trybu innego niz 'user' ustaw verify_jwt = false w supabase/config.toml.
+    fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
+        try {
+            // ctx.userClaims.id to zweryfikowany user_id -- NIE czytaj go z body/naglowkow
+            const userId = ctx.userClaims?.id;
 
-    try {
-        const authHeader = req.headers.get('Authorization');
-        if (!authHeader) {
-            return new Response(
-                JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Brak tokena' } }),
-                { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            // Wrapper NIE robi za Ciebie: walidacji Zod, autoryzacji zasobu, rate limitu.
+            // ctx.supabase respektuje RLS -- to pierwsza linia autoryzacji zasobu.
+            const { data, error } = await ctx.supabase
+                .from('posts')
+                .select('id, title')
+                .eq('user_id', userId);
+            if (error) throw error;
+
+            return Response.json({ data });
+        } catch (error) {
+            // Loguj bez wrazliwych danych
+            console.error('Edge Function error:', error instanceof Error ? error.message : 'Unknown');
+            return Response.json(
+                { error: { code: 'INTERNAL', message: 'Blad serwera' } },
+                { status: 500 }
             );
         }
-
-        const token = authHeader.replace('Bearer ', '');
-        const supabase = createClient(
-            Deno.env.get('SUPABASE_URL')!,
-            Deno.env.get('SUPABASE_ANON_KEY')!
-        );
-
-        // Weryfikacja lokalna przez JWKS -- bez sieciowego zapytania do Auth
-        const { data, error: claimsError } = await supabase.auth.getClaims(token);
-        if (claimsError || !data) {
-            return new Response(
-                JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Nieprawidlowy token' } }),
-                { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-            );
-        }
-
-        // Logika biznesowa z zweryfikowanym data.claims.sub (user_id)
-        // ...
-
-        return new Response(
-            JSON.stringify({ data: { success: true } }),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-    } catch (error) {
-        // Loguj bez wrazliwych danych
-        console.error('Edge Function error:', error instanceof Error ? error.message : 'Unknown');
-        return new Response(
-            JSON.stringify({ error: { code: 'INTERNAL', message: 'Blad serwera' } }),
-            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-    }
-});
+    }),
+};
 ```
 
-**getUser() -- fallback dla starszych projektow.** Projekty na starszych symetrycznych kluczach
-JWT nie maja jeszcze JWKS do lokalnej weryfikacji -- `getUser()` kontaktuje sie z serwerem Auth
-przy kazdym wywolaniu i pozostaje jedyna opcja.
+> Pin `npm:@supabase/server@^1` -- aktualna 1.4.1 (npm, 2026-08). Przy podbiciu majora sprawdz
+> w README (github.com/supabase/server) sygnature `withSupabase`, pola `SupabaseContext`
+> i kształt opcji `cors` (`'default' | 'disabled' | { headers }`; formy `true`/`false` sa deprecated).
+
+**getClaims() / getUser() -- gdy weryfikujesz token recznie.** Potrzebne tylko poza wrapperem
+(np. `auth: 'none'` z wlasna logika auth albo token z innego zrodla niz naglowek). Od
+1 pazdziernika 2025 nowe projekty Supabase domyslnie uzywaja asymetrycznych kluczy JWT --
+`getClaims()` weryfikuje token lokalnie przez JWKS (bez round-tripu do serwera Auth), wiec jest
+szybsze niz `getUser()`. Na projektach z symetrycznym secretem JWT `getClaims()` wykonuje
+fallback do weryfikacji zdalnej (jak `getUser()`) -- dziala, ale bez zysku wydajnosci;
+`getUser()` pozostaje rownowazna alternatywa.
 
 ```typescript
-import { createClient } from 'jsr:@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 
-Deno.serve(async (req) => {
-    // CORS preflight
-    if (req.method === 'OPTIONS') {
-        return new Response(null, { headers: corsHeaders });
-    }
+// Wewnatrz handlera withSupabase({ auth: 'none' }, ...) -- recznie weryfikujesz token
+const token = req.headers.get('Authorization')?.replace('Bearer ', '');
+if (!token) {
+    return Response.json({ error: { code: 'UNAUTHORIZED', message: 'Brak tokena' } }, { status: 401 });
+}
 
-    try {
-        // Utworz klienta z tokenem uzytkownika
-        const authHeader = req.headers.get('Authorization');
-        if (!authHeader) {
-            return new Response(
-                JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Brak tokena' } }),
-                { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-            );
-        }
+const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    JSON.parse(Deno.env.get('SUPABASE_PUBLISHABLE_KEYS') ?? '{}').default // legacy: SUPABASE_ANON_KEY
+);
 
-        const supabase = createClient(
-            Deno.env.get('SUPABASE_URL')!,
-            Deno.env.get('SUPABASE_ANON_KEY')!,
-            { global: { headers: { Authorization: authHeader } } }
-        );
-
-        // Weryfikacja -- getUser() kontaktuje sie z serwerem Auth (fallback, patrz getClaims() wyzej)
-        const { data: { user }, error: authError } = await supabase.auth.getUser();
-        if (authError || !user) {
-            return new Response(
-                JSON.stringify({ error: { code: 'UNAUTHORIZED', message: 'Nieprawidlowy token' } }),
-                { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-            );
-        }
-
-        // Logika biznesowa z zweryfikowanym user.id
-        // ...
-
-        return new Response(
-            JSON.stringify({ data: { success: true } }),
-            { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-    } catch (error) {
-        // Loguj bez wrazliwych danych
-        console.error('Edge Function error:', error instanceof Error ? error.message : 'Unknown');
-        return new Response(
-            JSON.stringify({ error: { code: 'INTERNAL', message: 'Blad serwera' } }),
-            { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-    }
-});
+// Weryfikacja lokalna przez JWKS (asymetryczne klucze) lub zdalna (symetryczne)
+const { data, error: claimsError } = await supabase.auth.getClaims(token);
+if (claimsError || !data) {
+    return Response.json({ error: { code: 'UNAUTHORIZED', message: 'Nieprawidlowy token' } }, { status: 401 });
+}
+// data.claims.sub = zweryfikowany user_id
 ```
 
 ### Service Role -- Kiedy i Jak
@@ -231,14 +193,12 @@ Deno.serve(async (req) => {
 Service role omija RLS. Uzywaj TYLKO gdy operacja wymaga dostepu do danych innych uzytkownikow lub tabel bez policies.
 
 ```typescript
-// Service role client -- TYLKO w Edge Functions, NIGDY na froncie
-const supabaseAdmin = createClient(
-    Deno.env.get('SUPABASE_URL')!,
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-);
+// Klient admin jest gotowy na ctx.supabaseAdmin (withSupabase) -- TYLKO w Edge Functions, NIGDY na froncie.
+// Bez wrappera: createClient(SUPABASE_URL, JSON.parse(Deno.env.get('SUPABASE_SECRET_KEYS')!).default)
+// (legacy: SUPABASE_SERVICE_ROLE_KEY).
 
-// Przyklad: webhook Stripe musi zaktualizowac subskrypcje dowolnego uzytkownika
-const { error } = await supabaseAdmin
+// Przyklad: webhook Stripe (auth: 'none') musi zaktualizowac subskrypcje dowolnego uzytkownika
+const { error } = await ctx.supabaseAdmin
     .from('subscriptions')
     .update({ status: 'active' })
     .eq('stripe_customer_id', customerId);
@@ -252,6 +212,10 @@ const { error } = await supabaseAdmin
 
 ### CORS Handling
 
+`withSupabase` domyslnie (`cors: 'default'`) dodaje standardowe naglowki CORS supabase-js.
+Do produkcji ogranicz origin przez `cors: { headers: {...} }`; dla webhookow serwer-serwer
+wylacz CORS (`cors: 'disabled'`).
+
 ```typescript
 // supabase/functions/_shared/cors.ts
 const ALLOWED_ORIGIN = Deno.env.get('ALLOWED_ORIGIN') ?? 'https://myapp.com';
@@ -261,6 +225,13 @@ export const corsHeaders: Record<string, string> = {
     'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
     'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Access-Control-Max-Age': '86400',
+};
+
+// index.ts -- przekaz naglowki do wrappera zamiast obslugiwac OPTIONS recznie
+export default {
+    fetch: withSupabase({ auth: 'user', cors: { headers: corsHeaders } }, async (req, ctx) => {
+        // ...
+    }),
 };
 ```
 
@@ -277,122 +248,49 @@ const CreatePostSchema = z.object({
     published: z.boolean().default(false),
 });
 
-Deno.serve(async (req) => {
-    // ... auth verification ...
+export default {
+    // withSupabase weryfikuje JWT, ale NIE waliduje body -- Zod jest nadal obowiazkowy
+    fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
+        const body = await req.json();
+        const parsed = CreatePostSchema.safeParse(body);
 
-    const body = await req.json();
-    const parsed = CreatePostSchema.safeParse(body);
-
-    if (!parsed.success) {
-        return new Response(
-            JSON.stringify({
-                error: {
-                    code: 'VALIDATION_ERROR',
-                    message: 'Nieprawidlowe dane',
-                    details: parsed.error.flatten().fieldErrors,
+        if (!parsed.success) {
+            return Response.json(
+                {
+                    error: {
+                        code: 'VALIDATION_ERROR',
+                        message: 'Nieprawidlowe dane',
+                        details: parsed.error.flatten().fieldErrors,
+                    },
                 },
-            }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-    }
+                { status: 400 }
+            );
+        }
 
-    // Uzyj parsed.data -- typowany i zwalidowany
-    const { title, content, published } = parsed.data;
-    // ...
-});
+        // Uzyj parsed.data -- typowany i zwalidowany
+        const { title, content, published } = parsed.data;
+        // ...
+    }),
+};
 ```
 
 ---
 
-## 3. React XSS Prevention
+## 3. Tresc i URL-e z danych w RN
 
-### React Domyslnie Escapuje -- Ale Sa Pulapki
+RN renderuje tekst w `<Text>` bez interpretacji, wiec ryzyko to `WebView` i URL z danych.
 
-React automatycznie escapuje wartosci w JSX. Ponizsze jest bezpieczne:
+- HTML z danych uzytkownika sanitujesz na serwerze albo go nie renderujesz: DOMPurify w RN rzuca `TypeError`, bo nie ma `window.document`.
+- `injectedJavaScript` bez danych uzytkownika, `WebView` z lista dozwolonych URL, `onMessage` po walidacji.
 
 ```typescript
-// BEZPIECZNE -- React escapuje userInput
-function SafeComponent({ userInput }: { userInput: string }) {
-    return <p>{userInput}</p>; // <script> zostanie wyswietlone jako tekst
+function bezpiecznyUrl(url: string): string | null {
+    const adres = new URL(url);
+    return ['https:', 'http:', 'mailto:'].includes(adres.protocol) ? adres.href : null;
 }
 ```
 
-### Pulapka 1: Niebezpieczne renderowanie raw HTML
-
-Kazde wstawianie surowego HTML od uzytkownika do DOM jest niebezpieczne -- zarowno przez React API (`__html`), jak i natywne DOM API. Zawsze sanityzuj przez DOMPurify.
-
-> ⚠️ **React Native: DOMPurify nie dziala bez DOM** -- w RN `global.window` istnieje, ale `window.document` nie, wiec `createDOMPurify()` konczy sie wczesnym returnem (ustawia `isSupported = false` i zwraca obiekt PRZED przypisaniem metody `sanitize`). Wywolanie `DOMPurify.sanitize(...)` rzuca wtedy **TypeError** -- to nie jest cichy no-op. (Pass-through zwracajacy input bez zmian dotyczy tylko srodowisk, ktore maja `window`/`document`, ale nie pelne DOM API -- nie RN.) Referencja: DOMPurify 3.4.14, `src/purify.ts` -- wczesny return w bloku `if (!window || !window.document || ...)` vs pozniejsza definicja `DOMPurify.sanitize`. NIGDY nie sanityzuj DOMPurify w runtime RN; sanityzacja user-HTML wylacznie server-side (Edge Function) albo nie renderuj HTML w ogole; tresc do WebView traktuj wg kroku 3 SKILL.md.
-
-```typescript
-// BEZPIECZNE -- tylko web/server-side (DOM dostepny); w RN patrz ostrzezenie wyzej -- sanityzacja DOMPurify przed renderowaniem HTML
-import DOMPurify from 'dompurify';
-
-function SafeComment({ html }: { html: string }) {
-    const clean = DOMPurify.sanitize(html, {
-        ALLOWED_TAGS: ['b', 'i', 'em', 'strong', 'a', 'p', 'br'],
-        ALLOWED_ATTR: ['href', 'target', 'rel'],
-    });
-    // Renderuj tylko po sanityzacji -- uzyj odpowiedniego API React do wstawienia HTML
-    return <div>{clean}</div>;
-}
-```
-
-### Pulapka 2: User-Generated URLs
-
-Protokol `javascript:` w atrybutach `href` i `src` pozwala na wykonanie kodu.
-
-```typescript
-// NIEBEZPIECZNE -- javascript: protocol
-function UserProfile({ websiteUrl }: { websiteUrl: string }) {
-    return <a href={websiteUrl}>Strona</a>;
-    // Jesli websiteUrl = "javascript:alert(document.cookie)" -- XSS
-}
-
-// BEZPIECZNE -- walidacja protokolu
-function UserProfile({ websiteUrl }: { websiteUrl: string }) {
-    const isSafe = /^https?:\/\//i.test(websiteUrl);
-    if (!isSafe) return null;
-
-    return (
-        <a href={websiteUrl} rel="noopener noreferrer" target="_blank">
-            Strona
-        </a>
-    );
-}
-```
-
-### Pulapka 3: Dynamiczne Atrybuty src/href
-
-```typescript
-// NIEBEZPIECZNE -- user input w src bez walidacji
-function Avatar({ imageUrl }: { imageUrl: string }) {
-    return <img src={imageUrl} alt="Avatar" />;
-    // Moze prowadzic do request do wewnetrznych serwisow
-}
-
-// BEZPIECZNE -- whitelist domen
-const ALLOWED_IMAGE_DOMAINS = [
-    'avatars.githubusercontent.com',
-    'lh3.googleusercontent.com',
-    'your-supabase-project.supabase.co',
-];
-
-function Avatar({ imageUrl }: { imageUrl: string }) {
-    let isSafe = false;
-    try {
-        const url = new URL(imageUrl);
-        isSafe = url.protocol === 'https:' && ALLOWED_IMAGE_DOMAINS.includes(url.hostname);
-    } catch {
-        isSafe = false;
-    }
-
-    if (!isSafe) {
-        return <div className="w-10 h-10 bg-muted rounded-full" />; // Placeholder
-    }
-
-    return <img src={imageUrl} alt="Avatar" />;
-}
-```
+`new URL()` rzuca przy zlym adresie: lapiesz konkretny `TypeError` i pokazujesz fallback (`Image` bez `source`, link nieaktywny).
 
 ---
 
@@ -451,26 +349,29 @@ const QueryItemsSchema = z.object({
 
 ```typescript
 // Edge Function
-Deno.serve(async (req) => {
-    const body = await req.json();
-    const result = CreateItemSchema.safeParse(body);
+export default {
+    fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
+        const body = await req.json();
+        const result = CreateItemSchema.safeParse(body);
 
-    if (!result.success) {
-        return new Response(
-            JSON.stringify({
-                error: {
-                    code: 'VALIDATION_ERROR',
-                    message: 'Nieprawidlowe dane wejsciowe',
-                    details: result.error.flatten().fieldErrors,
+        if (!result.success) {
+            return Response.json(
+                {
+                    error: {
+                        code: 'VALIDATION_ERROR',
+                        message: 'Nieprawidlowe dane wejsciowe',
+                        details: result.error.flatten().fieldErrors,
+                    },
                 },
-            }),
-            { status: 400 }
-        );
-    }
+                { status: 400 }
+            );
+        }
 
-    // Od tego momentu result.data jest typowane i bezpieczne
-    const item = result.data;
-});
+        // Od tego momentu result.data jest typowane i bezpieczne
+        const item = result.data;
+        // ...
+    }),
+};
 
 // React Hook Form + Zod (frontend)
 import { useForm } from 'react-hook-form';
@@ -493,50 +394,15 @@ function CreateItemForm() {
 
 ## 5. Secrets Management
 
-### Co NIE moze byc w VITE_* (dostepne w przegladarce)
+### Co NIE moze byc w EXPO_PUBLIC_* (jawny tekst w paczce aplikacji)
 
-Zmienne z prefixem `VITE_` sa wbudowane w bundle JavaScript i widoczne dla kazdego uzytkownika.
+- Klucz sekretny i `service_role`, klucze Stripe, tokeny platnych API, `SENTRY_AUTH_TOKEN`.
 
-**NIGDY nie umieszczaj w VITE_*:**
-- `SUPABASE_SERVICE_ROLE_KEY` -- omija RLS, pelny dostep do bazy
-- `STRIPE_SECRET_KEY` -- pelny dostep do Stripe API
-- `STRIPE_WEBHOOK_SECRET` -- weryfikacja webhookow
-- Jakiekolwiek klucze z prefixem `sk_`, `secret_`, `private_`
-- Hasla do baz danych, API keys z pelnym dostepem
-- Klucze szyfrowania, JWT secret
+### Co MOZE byc w EXPO_PUBLIC_*
 
-### Co MOZE byc w VITE_* (bezpieczne do ekspozycji)
+- `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (ograniczony przez RLS), `EXPO_PUBLIC_SENTRY_DSN`.
 
-- `VITE_SUPABASE_URL` -- publiczny URL projektu
-- `VITE_SUPABASE_ANON_KEY` -- anon key (ograniczony przez RLS)
-- `VITE_SENTRY_DSN` -- DSN do raportowania bledow
-- `VITE_APP_URL` -- URL aplikacji
-- Publiczne identyfikatory (np. Google Analytics ID, Facebook App ID)
-
-### Pattern: .env -> .env.local -> .env.example
-
-```bash
-# .env.example (commitowany do repo -- TYLKO klucze bez wartosci)
-VITE_SUPABASE_URL=
-VITE_SUPABASE_ANON_KEY=
-VITE_SENTRY_DSN=
-VITE_APP_URL=
-
-# .env.local (NIE commitowany -- w .gitignore)
-VITE_SUPABASE_URL=https://abc123.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJ...
-VITE_SENTRY_DSN=https://abc@sentry.io/123
-VITE_APP_URL=http://localhost:5173
-```
-
-**Weryfikacja .gitignore:**
-```gitignore
-# Secrets
-.env
-.env.local
-.env.*.local
-!.env.example
-```
+`.env.example` idzie do repo bez wartosci, a `.env.local` zostaje w `.gitignore`.
 
 ### Edge Functions -- Zmienne Srodowiskowe
 
@@ -559,7 +425,9 @@ const stripeKey = Deno.env.get('STRIPE_SECRET_KEY');
 const webhookSecret = Deno.env.get('STRIPE_WEBHOOK_SECRET');
 
 // Zmienne Supabase dostepne automatycznie:
-// SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+// SUPABASE_URL, SUPABASE_PUBLISHABLE_KEYS, SUPABASE_SECRET_KEYS (JSON-mapy, klucz 'default');
+// legacy: SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY. Z withSupabase nie czytasz ich
+// recznie -- klienci sa gotowi na ctx.supabase / ctx.supabaseAdmin.
 const supabaseUrl = Deno.env.get('SUPABASE_URL');
 ```
 
@@ -575,10 +443,10 @@ const supabaseUrl = Deno.env.get('SUPABASE_URL');
 
 **Najwazniejsze zasady:**
 1. RLS zawsze wlaczony, policies na kazdej operacji, `(SELECT auth.uid())` zamiast `auth.email()`
-2. Edge Functions -- `getClaims()` (asymetryczne klucze, preferowane) / `getUser()` (fallback) do weryfikacji JWT, service_role tylko gdy konieczne
-3. React -- uwazaj na niebezpieczne renderowanie raw HTML, user URLs, dynamiczne `src`/`href`
+2. Edge Functions -- `export default { fetch: withSupabase({ auth: 'user' }, ...) }` weryfikuje JWT za Ciebie; recznie `getClaims()` (`getUser()` tylko jako rownowazny fallback), `ctx.supabaseAdmin` / secret key tylko gdy konieczne
+3. RN -- `WebView`, URL-e z danych i parametry deep linku traktujesz jak wejscie z zewnatrz
 4. Zod na kazdej granicy systemu (Edge Functions, formularze, query params)
-5. Secrets -- VITE_* tylko dla publicznych kluczy, reszta w Edge Functions env vars
+5. Secrets -- EXPO_PUBLIC_* tylko dla publicznych kluczy, reszta w Edge Functions env vars
 
 **Zobacz takze:**
 - [owasp-react-supabase.md](owasp-react-supabase.md) -- OWASP Top 10 mapowanie

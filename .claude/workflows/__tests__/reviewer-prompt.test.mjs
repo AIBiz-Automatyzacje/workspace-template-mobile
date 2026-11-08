@@ -1,0 +1,232 @@
+// Polecenie reviewera osi w dev-docs-review-wf.js (PLAN-POPRAWY P11): jedno `reviewerPrompt` dla wszystkich osi, procedura
+// w pliku roli. Test-coverage nie ma osobnego polecenia — dostaje blok dlugich komend jako dodatek (uruchamia testy),
+// a procedura semantyki pol siedzi w plikach rol spec i test-coverage. Funkcje wyciete ze zrodla workflowu.
+//
+// Uruchomienie:  node --test .claude/workflows/__tests__/reviewer-prompt.test.mjs
+
+import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+import { liczbaPolecen } from '../../scripts/doctor/warstwa-stala.mjs'
+
+const KATALOG = dirname(fileURLToPath(import.meta.url))
+const AGENCI = resolve(KATALOG, '../../agents')
+const zrodlo = readFileSync(resolve(KATALOG, '../dev-docs-review-wf.js'), 'utf8')
+
+/** @param {string} kotwica @param {string} koniec @returns {string} */
+function wytnij(kotwica, koniec) {
+  const start = zrodlo.indexOf(kotwica)
+  assert.notEqual(start, -1, `nie znaleziono "${kotwica}" — kotwica testu wymaga aktualizacji`)
+  const stop = zrodlo.indexOf(koniec, start)
+  assert.notEqual(stop, -1, `nie znaleziono konca fragmentu od "${kotwica}"`)
+  return zrodlo.slice(start, stop + koniec.length)
+}
+
+// Bloki wspolne podstawione znacznikami: test sprawdza sklad polecenia, tresc blokow maja ich wlasni odbiorcy.
+// eslint-disable-next-line no-new-func -- ekstrakcja z pliku workflowu tego repo, nie z inputu
+const reviewerPrompt = new Function(
+  `const BLOK_ZAUFANIE = '[ZAUFANIE]'
+   const BLOK_LIMIT_P3 = '[LIMIT-P3]'
+   const mapaBlok = () => '[MAPA]'
+   const rereviewBlok = (p) => (p.length ? '[REREVIEW]' : '')
+   ${wytnij('function zrodlaBlok(', '\n}')}
+   ${wytnij('function reviewerPrompt(', '\n}')}
+   return reviewerPrompt`,
+)()
+
+test('reviewerPrompt: os, faza i folder w poleceniu; bloki wspolne; dodatek osi przed blokami', () => {
+  const p = reviewerPrompt('docs/active/z', 2, 'testy fazy wg list z pliku Twojej roli', [], null, '[KOMENDY]')
+  assert.match(p, /fazy 2/)
+  assert.match(p, /docs\/active\/z/)
+  assert.match(p, /testy fazy wg list z pliku Twojej roli/)
+  assert.match(p, /\[KOMENDY\]\[ZAUFANIE\]\[LIMIT-P3\]\[MAPA\]$/)
+})
+
+test('reviewerPrompt: bez dodatku i z poprzednimi findingami = tryb re-review na koncu', () => {
+  const p = reviewerPrompt('docs/active/z', 1, 'os', [{ severity: 'P2' }], null)
+  assert.match(p, /\[ZAUFANIE\]\[LIMIT-P3\]\[MAPA\]\[REREVIEW\]$/)
+  assert.doesNotMatch(p, /undefined/)
+})
+
+test('reviewerPrompt: bez tozsamosci "Jestes" (mandat jest w pliku roli)', () => {
+  assert.doesNotMatch(reviewerPrompt('x', 1, 'os', [], null), /^Jeste[sś]/m)
+})
+
+test('wiring: test-coverage przez reviewerPrompt z blokiem dlugich komend; osobnego polecenia i bloku semantyki brak', () => {
+  assert.match(zrodlo, /r\.key === 'test-coverage'\) return agent\(reviewerPrompt\(sciezka, faza, r\.fokus, poprzTest, kontekst, BLOK_DLUGIE_KOMENDY\)/)
+  assert.doesNotMatch(zrodlo, /function testCoveragePrompt|BLOK_SEMANTYKA/)
+})
+
+// Prompt osi w jednym miejscu: os, ktorej plik roli ma blok polecen, dostaje w fokusie sama nazwe osi — procedura
+// w fokusie i w pliku rozjezdza sie przy pierwszej zmianie jednego z nich.
+// eslint-disable-next-line no-new-func -- ekstrakcja z pliku workflowu tego repo, nie z inputu
+const REVIEWERZY = /** @type {{ key: string, agentType: string, fokus: string }[]} */ (new Function(`${wytnij('const REVIEWERZY = [', '\n]')}\nreturn REVIEWERZY`)())
+const MAKS_FOKUSU_OSI_Z_PLIKIEM = 80
+
+test('fokus: os z blokiem polecen w pliku roli niesie w fokusie sama nazwe osi', () => {
+  const zPlikiem = REVIEWERZY.filter((r) => liczbaPolecen(readFileSync(join(AGENCI, `${r.agentType}.md`), 'utf8')) > 0)
+  assert.ok(zPlikiem.some((r) => r.key === 'code-quality'))
+  for (const r of zPlikiem) {
+    assert.match(r.fokus, /wg list z pliku Twojej roli$/, r.key)
+    assert.ok(r.fokus.length <= MAKS_FOKUSU_OSI_Z_PLIKIEM, `${r.key}: fokus ${r.fokus.length} zn.`)
+  }
+})
+
+// Bloki doklejane do polecen reviewerow (granice zaufania dla osi i sceptykow, limit P3, mapa zmian, tryb re-review)
+// wg zasad pisania: powod zamiast nacisku. Wersaliki zostaja w liniach-znacznikach `===` i w skrotach oraz nazwach typow.
+const WERSALIKI = /\b[A-Z]{3,}\b/g
+const SKROTY = new Set(['API', 'ETL', 'OPERATOR', 'JSON'])
+const BLOKI = [
+  ['BLOK_ZAUFANIE', 'const BLOK_ZAUFANIE = `', '=== KONIEC BLOKU'],
+  ['BLOK_LIMIT_P3', 'const BLOK_LIMIT_P3 = `', '=== KONIEC BLOKU'],
+  ['rereviewBlok', 'function rereviewBlok(', '\n}'],
+  ['mapaBlok', 'function mapaBlok(', '\n}'],
+]
+
+for (const [nazwa, kotwica, koniec] of BLOKI) {
+  test(`${nazwa}: bez wersalikow nacisku poza liniami-znacznikami`, () => {
+    const tresc = wytnij(kotwica, koniec).split('\n').filter((l) => !/^\s*(?:===|\/\/|const |function )/.test(l)).join('\n')
+    assert.deepEqual([...tresc.matchAll(WERSALIKI)].map((m) => m[0]).filter((w) => !SKROTY.has(w)), [])
+  })
+}
+
+// P17: advisors biegnie na bazie e2e po wgraniu migracji fazy (db-sync autopilota), nie w domknieciu — wynik dostaje tylko
+// security, jako dodatek osi. Bez wyniku blok mowi to wprost: security sprawdza RLS recznie (pozycja warunkowa roli).
+// eslint-disable-next-line no-new-func -- ekstrakcja z pliku workflowu tego repo, nie z inputu
+const blokAdvisors = new Function(`${wytnij('function blokAdvisors(', '\n}')}
+  return blokAdvisors`)()
+
+test('blokAdvisors: status, bledy ERROR i ostrzezenia WARN z bazy e2e; bez wyniku = jawne „brak wyniku”; dodatek tylko dla security', () => {
+  const blok = blokAdvisors({ status: 'porazka', detal: '1 bledow (ERROR), 1 ostrzezen (WARN)', bledy: [{ regula: 'advisors/rls_disabled_in_public', opis: 'RLS Disabled in Public: public.projects' }], ostrzezenia: [{ regula: 'advisors/auth_rls_initplan', opis: 'Auth RLS Initialization Plan' }] })
+  assert.match(blok, /=== ADVISORS BAZY E2E \(lint Supabase po wgraniu migracji fazy\) ===\nStatus: porazka — 1 bledow/)
+  assert.match(blok, /Bledy \(ERROR\):\n- advisors\/rls_disabled_in_public — RLS Disabled in Public: public\.projects\n/)
+  assert.match(blok, /Ostrzezenia \(WARN\):\n- advisors\/auth_rls_initplan — Auth RLS Initialization Plan\n/)
+  assert.match(blokAdvisors({ status: 'ok', detal: '', bledy: [], ostrzezenia: [] }), /Bledy \(ERROR\):\n- brak\nOstrzezenia \(WARN\):\n- brak/)
+  assert.match(blokAdvisors(null), /Status: brak wyniku/)
+  assert.match(zrodlo, /const dodatek = r\.key === 'security' \? blokAdvisors\(advisorsE2e\) : r\.key === 'correctness' \? blokRestartu\(restartE2e\) : ''/)
+  const rola = readFileSync(join(AGENCI, 'security-sentinel.md'), 'utf8')
+  assert.match(rola, /\(blok „Advisors bazy e2e” ze statusem ok albo porazka\)/)
+  assert.match(rola, /błąd \(ERROR\) wprowadzony w tej fazie to finding P1, ostrzeżenie \(WARN\) — P2/)
+})
+
+// P17 (recenzja): serwer, ktory nie wstal po restarcie przed testerem, to czesto defekt fazy (import, wtyczka, konfiguracja).
+// Tester gra wtedy bez przegladarki, wiec ogon logu dostaje correctness — inaczej defekt ginal jako „awaria srodowiska”.
+// eslint-disable-next-line no-new-func -- ekstrakcja z pliku workflowu tego repo, nie z inputu
+const blokRestartu = new Function(`${wytnij('function blokRestartu(', '\n}')}
+  return blokRestartu`)()
+
+test('blokRestartu: ogon logu nieudanego restartu z instrukcja P1 KOD dla correctness; restart udany = pusty dodatek', () => {
+  const blok = blokRestartu('komenda startu zakonczyla sie (1). Log /tmp/x.log:\nError: Cannot find module vite-plugin-x')
+  assert.match(blok, /=== SERWER APLIKACJI NIE WSTAL PO ZMIANACH FAZY ===/)
+  assert.match(blok, /Cannot find module vite-plugin-x/)
+  assert.match(blok, /finding P1 typ KOD/)
+  assert.equal(blokRestartu(null), '')
+  assert.match(zrodlo, /const restartE2e = \(args && args\.restartE2e\) \|\| null/)
+})
+
+// P27 S2 (plan paczki P27-P29-E5): reguly plikow rol wpiete w istniejace pozycje list — liczba polecen bez zmian.
+/** @param {string} rola @returns {string} */
+const rola = (rola) => readFileSync(join(AGENCI, `${rola}.md`), 'utf8')
+/** @param {string} tresc @param {RegExp} wzor @returns {string} */
+const pozycja = (tresc, wzor) => {
+  const linia = tresc.split('\n').find((l) => l.startsWith('- ') && wzor.test(l))
+  assert.ok(linia, `brak pozycji listy ${wzor}`)
+  return String(linia)
+}
+
+test('correctness: waga — zly widoczny wynik na zwyklej sciezce to P2, nie P3 (E5-2(a): duplikat, 413 na poprawnym komentarzu)', () => {
+  const waga = pozycja(rola('correctness-reviewer'), /^- Nadaj P1/)
+  assert.match(waga, /zwykłej ścieżce użytkownika[^.]*to P2, nie P3/)
+  assert.match(waga, /413/)
+  assert.match(waga, /duplikat/)
+  assert.equal(liczbaPolecen(rola('correctness-reviewer')), 19)
+})
+
+test('security: strażnik seeda sprawdza zakres, nie istnienie (E5-4(a), E5-12 seed) — filtr = lista strażnika, \\getenv nie nadpisuje -v', () => {
+  const seed = pozycja(rola('security-sentinel'), /^- \(seed albo skrypt usuwający/)
+  assert.match(seed, /każdej operacji niszczącej/)
+  assert.match(seed, /listę ze strażnika/)
+  assert.match(seed, /LIKE 'prefiks-%'/)
+  assert.match(seed, /owner_id/)
+  assert.match(seed, /\\getenv[^.]*-v/)
+  assert.equal(liczbaPolecen(rola('security-sentinel')), 33)
+})
+
+test('klucz testowy dostawcy (E5-7 + P27(3)): test-coverage — atrapa bez wariantu klucza testowego = P2 TEST; security — bez warunku srodowiska = P1', () => {
+  const atrapy = pozycja(rola('test-coverage-reviewer'), /^- \(atrapy w diffie\)/)
+  assert.match(atrapy, /kluczem testowym[^.]*wariantu odpowiedzi tego klucza[^.]*P2 TEST/)
+  const sekrety = pozycja(rola('security-sentinel'), /^- Przeszukaj diff fazy pod kątem sekretów/)
+  assert.match(sekrety, /[Kk]lucz testowy dostawcy[^.]*bez warunku środowiska[^.]*P1/)
+  assert.equal(liczbaPolecen(rola('test-coverage-reviewer')), 18)
+  assert.equal(liczbaPolecen(rola('security-sentinel')), 33)
+})
+
+test('test-coverage (E5-22(b)): test wyscigu — kolejnosc rozwiazywania obietnic w punkcie testow niefalsyfikowalnych, bez nowej pozycji', () => {
+  const niefalsyfikowalne = pozycja(rola('test-coverage-reviewer'), /^- Wypisz każdą asercję z diffu o jednym z pięciu kształtów/)
+  assert.match(niefalsyfikowalne, /teście wyścigu/)
+  assert.match(niefalsyfikowalne, /Promise\.resolve/)
+  assert.match(niefalsyfikowalne, /odroczon/)
+  assert.equal(liczbaPolecen(rola('test-coverage-reviewer')), 18)
+})
+
+// E5-12: propozycje compoundu vibersi (etap 5, docs/reviews/propozycje-do-reviewerow.md) wpiete w istniejace pozycje
+// correctness (:17, :21, :24, :25) — liczba polecen bez zmian; seed poszedl do security (E5-4(a), test wyzej).
+test('correctness (E5-12): PATCH z migawki, cykl zycia + jednorazowy znacznik, bodyLimit w bajtach, kursor po mutacji — w istniejacych pozycjach', () => {
+  const tresc = rola('correctness-reviewer')
+  assert.match(pozycja(tresc, /^- Dla każdej operacji zmieniającej stan/), /PATCH[^.]*migawk/)
+  const hooki = pozycja(tresc, /^- \(hooki, subskrypcje/)
+  assert.match(hooki, /jednorazow[^.]*znacznik[^.]*(błęd|ścieżce błędu)/)
+  assert.match(hooki, /poprzedni[^.]*wartoś[^.]*(dwa|ten sam rzut)/)
+  assert.match(pozycja(tresc, /^- Wypisz każdą wartość graniczną/), /bajt[^.]*× 12/)
+  assert.match(pozycja(tresc, /^- \(zapis do pamięci podręcznej/), /kursor[^.]*mutacj/)
+  assert.equal(liczbaPolecen(tresc), 19)
+})
+
+// 6a pkt 111 (1): propozycje compoundu vibersi etapow 6a i 6b wpiete w istniejace pozycje — liczba polecen bez zmian.
+test('correctness (6a): cztery stany zapytania w pozycji o galeziach widoku; security (6b): sekret dostawcy sprawdzany u dostawcy w pozycji o kluczu testowym', () => {
+  const galezie = pozycja(rola('correctness-reviewer'), /^- \(komponent z rozgałęzieniem renderowania/)
+  assert.match(galezie, /data === undefined/)
+  assert.match(galezie, /cztery stany[^.]*dane i błąd odświeżenia/)
+  assert.match(galezie, /stara lista bez komunikatu błędu i bez ponowienia[^.]*P2/)
+  assert.equal(liczbaPolecen(rola('correctness-reviewer')), 19)
+  const sekrety = pozycja(rola('security-sentinel'), /^- Przeszukaj diff fazy pod kątem sekretów/)
+  assert.match(sekrety, /przed zapisem pyta dostawcę/)
+  assert.match(sekrety, /sam prefiks[^.]*P2/)
+  assert.equal(liczbaPolecen(rola('security-sentinel')), 33)
+})
+
+// 6a pkt 111 (2): falszywy sukces skryptu celu prod (vibersi konfiguruj.sh, PR #15 zmergowany z otwartym P3) = P2 w wadze
+// correctness i test-coverage — w istniejacych pozycjach wagi, liczba polecen bez zmian.
+test('waga (6a pkt 111): falszywy sukces skryptu celu prod to P2, nie P3 — correctness i test-coverage', () => {
+  const kod = pozycja(rola('correctness-reviewer'), /^- Nadaj P1/)
+  assert.match(kod, /[Ff]ałszywy sukces skryptu[^.]*`prod`[^.]*P2, nie P3/)
+  assert.match(kod, /jq -r[^.]*pusty rozjazd/)
+  const testy = pozycja(rola('test-coverage-reviewer'), /^- Nadaj P1/)
+  assert.match(testy, /pustej albo niepoprawnej odpowiedzi[^.]*`prod`[^.]*P2, nie P3/)
+  assert.equal(liczbaPolecen(rola('correctness-reviewer')), 19)
+  assert.equal(liczbaPolecen(rola('test-coverage-reviewer')), 18)
+})
+
+// 6a pkt 113: propozycja compoundu vibersi PR #16 (correctness ← spojnosc-dwoch-systemow, strażnik jq) wpieta w pozycje
+// o parserach — wejscie puste, null, sklejone obiekty, kontrola ksztaltu; P2 dla celu prod, P3 poza nim.
+test('correctness (PR #16 vibersi): straznik jq na odpowiedzi HTTP w pozycji o parserach — puste cialo, null, sklejone obiekty', () => {
+  const parsery = pozycja(rola('correctness-reviewer'), /^- \(wyrażenie regularne, ręczny parser albo `jq`/)
+  assert.match(parsery, /pustego ciała, `null` i dwóch sklejonych obiektów/)
+  assert.match(parsery, /jq -se 'length == 1/)
+  assert.match(parsery, /P2 w skrypcie celu `prod`/)
+  assert.equal(liczbaPolecen(rola('correctness-reviewer')), 19)
+})
+
+// 6a pkt 115: propozycja compoundu vibersi PR #20 (correctness ← sciezka-bledu, przerwany odczyt ciala 429) wpieta
+// w pozycje o limitach czasu wywolan sieci — odczyt ciala pod tym samym AbortSignal nie moze zmienic wyniku statusu.
+test('correctness (PR #20 vibersi): przerwany odczyt ciala po fetch z AbortSignal.timeout w pozycji o limitach czasu', () => {
+  const siec = pozycja(rola('correctness-reviewer'), /^- Dla każdego wywołania sieci i klienta bazy/)
+  assert.match(siec, /pod tym samym `AbortSignal\.timeout`/)
+  assert.match(siec, /`TimeoutError`\/`AbortError`, `TypeError`/)
+  assert.match(siec, /429 → `'limit'` zamienione na ogólny `'blad'`/)
+  assert.match(siec, /strumień ciała rzuca `DOMException`, to finding P2/)
+  assert.equal(liczbaPolecen(rola('correctness-reviewer')), 19)
+})

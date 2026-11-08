@@ -1,12 +1,12 @@
 export const meta = {
   name: 'dev-docs-complete-wf',
-  description: 'Archiwizacja ukonczonego zadania: generuje smoke operatora (docs/operator/), przenosi docs/active/<zadanie> -> docs/completed/, tworzy podsumowanie, aktualizuje dokumentacje projektu i commituje archiwizacje.',
-  whenToUse: 'Po ukonczeniu wszystkich faz. Wolany przez dev-autopilot lub standalone z args {nazwaZadania}.',
+  description: 'Archiwizacja ukonczonego zadania: smoke operatora, docs/completed/, commit.',
+  whenToUse: 'Wolany przez dev-autopilot-wf; standalone: args {nazwaZadania}.',
   phases: [{ title: 'Smoke operatora' }, { title: 'Archiwizacja' }],
 }
 
 // Smoke operatora = dokument #2 dla czlowieka: "co sprawdzic recznie po tym, jak automat (typecheck,
-// testy, Maestro) byl zielony". Generowany PRZED archiwizacja, bo wtedy sciezki docs/active/ jeszcze zyja
+// testy, E2E w przegladarce) byl zielony". Generowany PRZED archiwizacja, bo wtedy sciezki docs/active/ jeszcze zyja
 // i latwo zebrac: sekcje "## Operator checklist faza N", scenariusze [Manual], findingi OPERATOR z raportow
 // review, known-issues oraz — jako czerwona flaga — niezaznaczone [E2E] (w autopilocie completion-gate je
 // blokuje, ale standalone archiwizacja idzie dalej; operator musi to ZOBACZYC).
@@ -18,8 +18,9 @@ const SMOKE_RESULT = {
     pozycje: { type: 'integer', description: 'liczba checkboxow do recznego sprawdzenia' },
     e2eNieuruchomione: { type: 'integer', description: 'ile [E2E] z zadania pozostalo NIEZAZNACZONYCH (powinno byc 0 po completion-gate)' },
     zrodla: { type: 'array', items: { type: 'string' }, description: 'skad zebrano pozycje (sekcje/pliki)' },
+    zmienne: { type: 'string', description: 'ostatnia linia stdout ostatniego `zmienne.mjs` 1:1 (JSON w jednej linii)' },
   },
-  required: ['plik', 'pozycje', 'e2eNieuruchomione'],
+  required: ['plik', 'pozycje', 'e2eNieuruchomione', 'zmienne'],
 }
 
 const COMPLETE_RESULT = {
@@ -28,12 +29,141 @@ const COMPLETE_RESULT = {
   properties: {
     archiwum: { type: 'string', description: 'sciezka docs/completed/<zadanie>/' },
     pliki: { type: 'array', items: { type: 'string' } },
-    aktualizacje: { type: 'array', items: { type: 'string' }, description: 'co gdzie dopisano (lub puste)' },
     rezultaty: { type: 'array', items: { type: 'string' } },
     commit: { type: 'string', description: 'hash commita archiwizacji ("" gdy nie bylo czego commitowac)' },
+    decyzje: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        plik: { type: 'string', description: 'sciezka docs/decisions/<data>-<zadanie>.md ("" gdy nie powstal)' },
+        claudeMd: { type: 'string', description: 'wartosc pola claude_md odczytana z dysku' },
+      },
+      required: ['plik', 'claudeMd'],
+    },
+    rozmiarPr: { type: 'string', description: 'ostatnia linia stdout `czesci.mjs` po commicie 1:1 (JSON w jednej linii)' },
   },
-  required: ['archiwum', 'pliki', 'commit'],
+  required: ['archiwum', 'pliki', 'commit', 'decyzje', 'rozmiarPr'],
 }
+
+const DOPISEK_RESULT = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { zapisano: { type: 'boolean' }, commit: { type: 'string' } },
+  required: ['zapisano', 'commit'],
+}
+
+// ── Archiwum (P4) ─────────────────────────────────────────────────────────
+// Archiwizacja nie edytuje CLAUDE.md ani .claude/rules/: CLAUDE.md oferty urosl 3,4k -> 89,7k zn w 4 tygodnie, a czyta go
+// kazdy builder i reviewer. Decyzje zadania ida do docs/decisions/<data>-<zadanie>.md z polem claude_md — CLAUDE.md
+// uzgadnia sie z kodem po merge'u PR. Funkcje czyste: __tests__/start-koniec.test.mjs.
+
+// Bot recenzji odmowil PR-a z 222 plikami (ETAP1 §5); limit CodeRabbit Pro 150. Liczymy pliki, ktore bot recenzuje (P19,
+// rozmiar.mjs: filtry .coderabbit.yaml, bez binariow). Kopia PROG_PLIKOW_PR z .claude/scripts/pr/rozmiar.mjs — test rownosci.
+const PROG_PLIKOW_PR = 150
+
+// Mapa funkcji skilla weryfikacji projektu (P14): archiwizacja dopisuje do niej funkcje ze scenariuszy [E2E] zadania.
+// Kopia PLIK_MAPY z .claude/scripts/e2e/weryfikacja.mjs (workflowy sa self-contained) — test rownosci w start-koniec.test.mjs.
+const MAPA_FUNKCJI = '.claude/skills/weryfikacja/mapa-funkcji.md'
+
+// Pathspec git add: wylacznie sciezki z tej listy. *.bak to kopie robocze operatora (np. stanu przed reczna edycja) —
+// nie wchodza do archiwum. Wyjscia compound (solution, indeks wiedzy) przychodza z autopilota. Mapa funkcji jest na liscie
+// zawsze; w projekcie bez skilla weryfikacji agent pomija ja jak kazda nieistniejaca sciezke (krok 8).
+function pathspecArchiwum(nazwaZadania, smokePlik, dodatkowe) {
+  return [
+    `docs/active/${nazwaZadania}`, `docs/completed/${nazwaZadania}`,
+    ...(smokePlik ? [smokePlik, 'docs/operator'] : []),
+    'docs/decisions', ...dodatkowe, MAPA_FUNKCJI, "':(exclude,glob)**/*.bak'",
+  ].join(' ')
+}
+
+// Sekcja „Ogrod” (P15) liczy autopilot z pomiaru ogrodnika; agent archiwizacji wkleja ja doslownie na koniec podsumowania.
+// Standalone (bez autopilota) sekcji nie ma — krok znika z polecenia.
+function krokOgrodu(nazwaZadania, sekcja) {
+  if (!sekcja) return ''
+  return `4b. Na koniec docs/completed/${nazwaZadania}/${nazwaZadania}-podsumowanie.md dopisz sekcje ogrodnika DOSLOWNIE — tekst miedzy
+   znacznikami, bez znacznikow, bez zmian i bez wlasnych dopiskow (propozycje w niej czekaja na decyzje operatora):
+<<<OGROD
+${sekcja.trim()}
+OGROD>>>
+`
+}
+
+// Komunikat liczony tutaj: agent dal raz commitowi archiwizacji temat commita feature (IT1-ODCZYT §6).
+function komunikatArchiwum(nazwaZadania) {
+  return `docs(${nazwaZadania}): archiwum`
+}
+
+function szkieletDecyzji(nazwaZadania) {
+  return `---\nzadanie: ${nazwaZadania}\ndata: <data z \`date +%F\`>\nclaude_md: do-uzgodnienia\n---\n`
+}
+
+function sprawdzDecyzje(decyzje, nazwaZadania) {
+  const wzor = new RegExp(`^docs/decisions/\\d{4}-\\d{2}-\\d{2}-${nazwaZadania}\\.md$`)
+  if (!decyzje || !wzor.test(decyzje.plik)) return `UWAGA: brak pliku decyzji docs/decisions/<data>-${nazwaZadania}.md (zwrocono: ${(decyzje && decyzje.plik) || 'nic'})`
+  if (decyzje.claudeMd !== 'do-uzgodnienia') return `UWAGA: ${decyzje.plik} ma claude_md: ${decyzje.claudeMd || 'brak'} zamiast do-uzgodnienia`
+  return null
+}
+
+// Wynik `czesci.mjs` od agenta (string) -> obiekt; nieczytelny albo wyjatek skryptu = null (uwaga o braku pomiaru zamiast cichego „ok”).
+function czesciZWyniku(tekst) {
+  const linia = String(tekst || '').trim().split('\n').pop() || ''
+  try {
+    const w = JSON.parse(linia)
+    const czesci = w && Array.isArray(w.czesci) ? w.czesci : null
+    const poprawne = czesci && czesci.length && czesci.every((c) => c && Number.isInteger(c.doRecenzji) && /^[0-9a-f]{7,40}$/.test(String(c.od)) && /^[0-9a-f]{7,40}$/.test(String(c.do)))
+    return poprawne && typeof w.ok === 'boolean' ? w : null
+  } catch (e) {
+    if (!(e instanceof SyntaxError)) throw e
+    return null
+  }
+}
+
+// Zmienne srodowiska galezi vs smoke (P19, vibersi etap 2: SUPABASE_SECRET_KEY spoza planu nie trafila do smoke'u). Kontrola
+// biegnie w agencie smoke'u; JS sprawdza jej ostatni wynik: braki albo nowe zmienne bez pliku smoke'u = UWAGA dla operatora.
+function uwagaZmiennych(smoke) {
+  if (!smoke) return null
+  const linia = String(smoke.zmienne || '').trim().split('\n').pop() || ''
+  let w = null
+  try {
+    w = JSON.parse(linia)
+  } catch (e) {
+    if (!(e instanceof SyntaxError)) throw e
+  }
+  if (!w || !Array.isArray(w.zmienne)) return 'UWAGA: kontrola zmiennych srodowiska w smoke\'u bez wyniku — sprawdz: `node .claude/scripts/smoke/zmienne.mjs --smoke <plik smoke\'u>`'
+  const nazwy = w.zmienne.map((z) => z && z.nazwa).filter(Boolean)
+  const braki = !smoke.plik ? nazwy : Array.isArray(w.braki) ? w.braki : null
+  if (braki === null) return 'UWAGA: kontrola zmiennych srodowiska bez --smoke — wynik nie mowi, czy smoke je wymienia'
+  return braki.length ? `UWAGA: zmienne srodowiska dodane w galezi bez pozycji w smoke'u: ${braki.join(', ')} — ustaw je przed deployem (zrodla: zmienne.mjs)` : null
+}
+
+// PR wieloczesciowy (P20 S2, vibersi etap 3: 172 pliki do recenzji, podzial reczny po fazie 3 = 93 / 121). Czesci mierzy
+// czesci.mjs na commitach konca faz; tabela trafia do podsumowania, z niej `/dev-pr --czesc N` bierze commity ciecia.
+// Wynik: { uwaga } (UWAGA dla operatora albo informacja o czesciach) i { sekcja } (tabela do podsumowania; null = jeden PR).
+function czesciPr(czesci, nazwaZadania) {
+  const komenda = `node .claude/scripts/pr/czesci.mjs --zadanie docs/completed/${nazwaZadania}`
+  if (!czesci) return { uwaga: `UWAGA: części PR niezmierzone (wynik czesci.mjs nieczytelny) — sprawdz: \`${komenda}\``, sekcja: null }
+  const lista = czesci.czesci
+  const opis = lista.map((c) => `część ${c.czesc}: fazy ${c.fazy} (${c.doRecenzji})`).join(', ')
+  // Jeden PR do progu wlacznie (P19), czesc PR wieloczesciowego ponizej progu (czesci.mjs).
+  const zaDuza = lista.some((c) => (lista.length === 1 ? c.doRecenzji > PROG_PLIKOW_PR : c.doRecenzji >= PROG_PLIKOW_PR))
+  const uwaga = zaDuza || czesci.uwaga
+    ? `UWAGA: ${czesci.uwaga || (lista.length === 1 ? `PR powyżej progu ${PROG_PLIKOW_PR} plików do recenzji bota` : `część z ${PROG_PLIKOW_PR} lub więcej plikami do recenzji bota (część ma mieć mniej)`)} — ${opis}`
+    : lista.length > 1 ? `PR w ${lista.length} częściach: ${opis} — commity cięcia w podsumowaniu, po smoke'u: \`/clear\`, potem \`/dev-pr --czesc 1\`` : null
+  if (lista.length === 1) return { uwaga, sekcja: null }
+  const skrot = (sha) => String(sha).slice(0, 12)
+  const zrodlo = czesci.zrodlo === 'plan' ? 'sekcja „Części PR” planu' : 'pomiar na końcach faz'
+  const sekcja = [
+    `PR w ${lista.length} częściach (cięcie: ${zrodlo}; pliki do recenzji bota po filtrach .coderabbit.yaml, próg ${PROG_PLIKOW_PR}).`,
+    '',
+    '| Część | Fazy | Od | Do | Plików do recenzji |',
+    '|---|---|---|---|---|',
+    ...lista.map((c, i) => `| ${c.czesc} | ${c.fazy} | ${skrot(c.od)} | ${i === lista.length - 1 ? 'czubek gałęzi' : skrot(c.do)} | ${c.doRecenzji} |`),
+    '',
+    `Wysyłka po smoke'u: \`/clear\`, potem \`/dev-pr --czesc 1\`; po merge'u każdej części \`/clear\` i następna, do \`/dev-pr 3 --bez-merge --czesc ${lista.length}\` (rebase na główną gałąź).`,
+  ].join('\n')
+  return { uwaga, sekcja }
+}
+// ── Koniec archiwum ───────────────────────────────────────────────────────
 
 // smokeStatus liczony w JS (agent archiwizacji nie wie tego lepiej niz orkiestrator):
 //   'plik'           = smoke powstal (sciezka w smokeOperatora)
@@ -43,10 +173,12 @@ const COMPLETE_RESULT = {
 //   'nie-uruchomiono' = early return (brak args)
 const nazwaZadania = typeof args === 'string' ? args : args && args.nazwaZadania
 // Dodatkowe sciezki do commita archiwizacji (autopilot przekazuje wyjscia compound/refresh: solution,
-// docs/CONCEPTS.md, learned-patterns.md) — nikt inny ich nie commituje.
+// docs/CONCEPTS.md, docs/learned-patterns.md) — nikt inny ich nie commituje.
 const dodatkowePathspec = (args && Array.isArray(args.dodatkowePathspec)) ? args.dodatkowePathspec.filter((x) => typeof x === 'string' && x) : []
+// Sekcja „Ogrod” z pomiaru ogrodnika (autopilot, P15) — do podsumowania zadania doslownie.
+const sekcjaOgrodu = (args && typeof args.sekcjaOgrodu === 'string') ? args.sekcjaOgrodu : ''
 if (!nazwaZadania) {
-  return { archiwum: '', pliki: [], aktualizacje: ['BLAD: brak args {nazwaZadania}'], rezultaty: [], commit: '', smokeOperatora: '', smokeStatus: 'nie-uruchomiono' }
+  return { archiwum: '', pliki: [], rezultaty: ['BLAD: brak args {nazwaZadania}'], commit: '', uwagi: [], smokeOperatora: '', smokeStatus: 'nie-uruchomiono' }
 }
 
 const smokePrompt = `Jestes autorem checklisty smoke dla OPERATORA (czlowieka) po zamknieciu zadania: ${nazwaZadania}.
@@ -61,54 +193,79 @@ Zbierz WYLACZNIE to, czego automat nie sprawdzil:
 2. Scenariusze z markerem [Manual] (z *-zadania.md i z planu technicznego wskazanego w "Plan techniczny:").
 3. Findingi typu OPERATOR z review-faza-*.md — tylko jako wzbogacenie krokow pozycji z (1); pozycja spoza (1)
    wchodzi wylacznie, gdy w zadaniach nie ma jej wcale (dopasowanie po IU-K / pliku / ekranie). Warunki
-   srodowiskowe (rebuild dev-clienta, seedy na projekt e2e, przelaczenie .env.local na e2e) NIE sa pozycjami
-   smoke'u: rebuild to tylko check "dev-client aktualny" w sekcji 0; kroki pod przebieg E2E pomin calkowicie
+   srodowiskowe (serwer aplikacji w trybie e2e, seedy na projekt e2e) NIE sa pozycjami smoke'u: uruchomienie apki
+   to tylko check startu aplikacji w sekcji 0 (tresc: .claude/skills/dev-docs-complete/references/stack.md,
+   sekcja „Smoke operatora”); kroki pod przebieg E2E pomin calkowicie
    (smoke leci na projekcie GLOWNYM, nie e2e).
-4. Otwarte wpisy z docs/active/${nazwaZadania}/known-issues.md (jesli plik istnieje) i otwarte P3 z
-   "## Do poprawy po review fazy N". "Otwarte" = poza sekcja "## Zamkniete"; gdy sekcji nie ma — pomin wpisy,
+4. Otwarte wpisy z docs/active/${nazwaZadania}/known-issues.md (jesli plik istnieje) i otwarte [P1]/[P2] z
+   "## Do poprawy po review fazy N". Z known-issues sekcje "## P3 faza N" pomin — nity zostaja w known-issues
+   (opis PR, bot), smoke ich nie sprawdza. "Otwarte" = poza sekcja "## Zamkniete"; gdy sekcji nie ma — pomin wpisy,
    ktore same lub pozniejsza faza oznaczaja jako ZAMKNIETY/naprawione. Z OBU zrodel bierz WYLACZNIE wpisy
-   opisujace zachowanie na ekranie/urzadzeniu lub flow do recznego przejscia; notatki srodowiskowe, dane
+   opisujace zachowanie na ekranie/w przegladarce lub flow do recznego przejscia; notatki srodowiskowe, dane
    testowe i pulapki narzedziowe pomin.
+4b. Scenariusze [E2E] przeniesione w trakcie runu na [Manual] (srodowisko padlo, limit zewnetrzny, harness, pad testera — automat
+   ich nie wykonal): \`node .claude/scripts/e2e/e2e.mjs lista-manual --zadanie docs/active/${nazwaZadania}\` (JSON: pozycje z faza,
+   tresc, przyczyna, powod). Sekcja "## E2E do odegrania recznie (srodowisko w trakcie runu)" na poczatku dokumentu, po czerwonych
+   flagach z (5): jeden checkbox na pozycje — scenariusz i oczekiwany stan z tresci linii, powod ("<przyczyna>: <powod>").
+   To nie jest czerwona flaga: run swiadomie oddal je czlowiekowi. W sekcjach ekranow ich nie powtarzaj.
 5. CZERWONA FLAGA: niezaznaczone checkboxy [E2E] (\`grep -nE '^- \\[ \\].*\\[E2E\\]' docs/active/${nazwaZadania}/*-zadania.md | grep -vE 'Operator:|\\[P[123]\\]'\`
    — ten sam grep co completion-gate autopilota; kopie "Operator:" w Operator checklist i pozycje findingow [P1]/[P2]/[P3] w "Do poprawy" nie sa scenariuszami;
    brak trafien = exit 1, to NIE blad). Rozdziel: linie z suffixem "(FAIL:" -> sekcja "## ⚠️ E2E przebieglo i padlo (znany defekt)" z odeslaniem
    do known-issues (NIE radz zmiany na [Manual]); pozostale -> sekcja "## ⚠️ E2E nieuruchomione". Obie na poczatku
    dokumentu; obie licz w e2eNieuruchomione. NIE odhaczaj ich.
+6. ZMIENNE SRODOWISKA dodane w galezi: \`node .claude/scripts/smoke/zmienne.mjs\` (JSON: zmienne[] z nazwa i zrodla plik:linia —
+   z .env*.example i uzyc w kodzie, takze dodane odchyleniem w fazach, ktorych plan nie wymienia). Kazda zmienna to checkbox
+   w sekcji "0. Przygotowanie": nazwa, gdzie ja ustawic (lokalnie albo w zmiennych runtime deployu) i zrodlo — wartosci nigdy.
 
 DEDUP: kazdy temat raz — Test [Manual] z IU, jego kopia w Operator checklist i wzmianka w findingu OPERATOR
 to JEDEN checkbox w sekcji ekranu; kroki scal, nie powielaj.
 
-Jesli po zastosowaniu hierarchii (1)-(5) nie ma ANI JEDNEJ pozycji — nie tworz pliku, zwroc plik:"" i pozycje:0.
+Jesli po zastosowaniu hierarchii (1)-(6) nie ma ANI JEDNEJ pozycji — nie tworz pliku, zwroc plik:"" i pozycje:0, a w zmienne
+ostatnia linie stdout \`zmienne.mjs\` z kroku 6.
 
-DANE DO NAGLOWKA I SEKCJI 0 — NIE uruchamiaj testow ani Maestro (wynik juz jest w artefaktach):
+DANE DO NAGLOWKA I SEKCJI 0 — NIE uruchamiaj testow ani scenariuszy E2E (wynik juz jest w artefaktach):
 - <N> testow: docs/active/${nazwaZadania}/.autopilot-state.json -> walidacjaWynik.testy ("PASS X/Y"); brak -> "testy zielone wg walidacji koncowej" bez liczby.
-- <M> scenariuszy Maestro: \`grep -hE '^- \\[x\\].*\\[E2E\\]' docs/active/${nazwaZadania}/*-zadania.md | grep -vcE 'Operator:|\\[P[123]\\]'\` (bez kopii "Operator:" i pozycji findingow; brak trafien = 0).
-- marker projektu glownego / ref e2e: TYLKO pierwsze 6 znakow hosta: \`grep -ohE 'SUPABASE_URL=https://[a-z0-9]{6}' .env.local .env.e2e 2>/dev/null\`;
-  jesli istnieje .env.local.bak (swap e2e niecofniety) — marker projektu glownego bierz z .bak.
-- nazwa zmiennej z haslem konta testowego: TYLKO nazwy: \`grep -oE '^[A-Z0-9_]*(PASSWORD|PASS|HASLO)[A-Z0-9_]*=' .env.local .env.e2e 2>/dev/null | cut -d= -f1 | sort -u\`.
+- <M> scenariuszy E2E: \`grep -hE '^- \\[x\\].*\\[E2E\\]' docs/active/${nazwaZadania}/*-zadania.md | grep -vcE 'Operator:|\\[P[123]\\]'\` (bez kopii "Operator:" i pozycji findingow; brak trafien = 0).
+- marker projektu glownego / ref e2e: TYLKO pierwsze 6 znakow hosta: \`grep -ohE 'SUPABASE_URL=https://[a-z0-9]{6}' .env .env.local .env.e2e 2>/dev/null\`.
+- nazwa zmiennej z haslem konta testowego: TYLKO nazwy: \`grep -oE '^[A-Z0-9_]*(PASSWORD|PASS|HASLO)[A-Z0-9_]*=' .env .env.local .env.e2e 2>/dev/null | cut -d= -f1 | sort -u\`.
 ZAKAZ cat/Read calego .env* — nigdy nie wczytuj wartosci sekretow do kontekstu.
 
 W przeciwnym razie zapisz docs/operator/<YYYY-MM-DD>-${nazwaZadania}-smoke.md (data z \`date +%F\`,
 \`mkdir -p docs/operator\`) wedlug ukladu ze skilla: naglowek ze statusem, akapit "dlaczego to nie jest
 formalnosc", sekcja "0. Przygotowanie" (ktory projekt/baza po markerze; jak uruchomic apke; jakie dane/konta
 potrzebne), potem sekcje per wymaganie/ekran w kolejnosci przechodzenia apki (nie per faza) z checkboxami,
-kazdy z konkretnym oczekiwanym wynikiem. Pozycje wymagajace fizycznego urzadzenia oznacz **[fizyczne urzadzenie]**.
-Na koncu sekcja "Jak kontynuowac w nowej sesji" z jedna ramka do wklejenia jako pierwsza wiadomosc.
+kazdy z konkretnym oczekiwanym wynikiem. Pozycje wymagajace fizycznego urzadzenia (np. realny telefon
+zamiast mobilnego viewportu) oznacz **[fizyczne urządzenie]**.
+PR WIELOCZESCIOWY: pozycje przypisuj do czesci, w ktorej kod faktycznie wchodzi (sprawdz plik w tabeli czesci, nie w tekscie planu; aa-exam: pole z czesci 4 w sekcji po deployu czesci 3). Przed merge'em kazdej
+czesci pozycja: przejscie kluczowego flow na stanie tej czesci, lokalnie. Odhaczanie miedzy czesciami: plik smoke'u lezy na \`feature/<zadanie>\`, commit lokalny tam jedzie z ostatnia czescia.
+ZMIANA SCHEMATU BEZ TRANSAKCJI (\`db:push\` i podobne): pozycja przed wdrozeniem to podglad SQL i sprawdzenie danych pod KAZDE nowe ograniczenie z tego podgladu, nie tylko to z planu.
+[Manual agent]: wykonaj je w tej sesji smoke'u przed pytaniem operatora, wynik wpisz przy pozycji.
+PUNKTY WIZUALNE: Punktem wizualnym jest pozycja ze źródeł (1)–(6), która porównuje ekran z makietą, gdy \`docs/active/<zadanie>/visual-diff/<ekran>-figma.png\` istnieje; W×H to wymiary makiety z tabeli SPEC.md albo nagłówka \`ekrany/<ekran>.md\`, ze znakiem ×. Punkt wizualny ma postać „- [ ] <Urządzenie>[, <stan>]: \`<trasa>\` obok \`visual-diff/<ekran>-figma.png\` (viewport <W>×<H>) → Wejście: <adres z przykładowym slugiem z seeda i co kliknąć>. Porównaj: <2–4 konkretne elementy z makiety albo SPEC>. Stany: <każdy stan i jak go wywołać: panel „Sieć”, konto, dane; „brak” dla ekranu bez stanów>”: trasa w backtickach z przykładowym slugiem z seeda (bez znanej trasy „<opis wejścia> obok …”), jedna makieta na punkt, viewport bez dwukropka, bez ogólników typu „zgodne z makietą”.
+Przed pierwszym punktem wizualnym smoke'u stoi zdanie z .claude/skills/dev-docs-complete/references/stack.md, sekcja „Punkty wizualne”.
+Na koncu sekcja "Jak kontynuowac w nowej sesji" z jedna ramka do wklejenia jako pierwsza wiadomosc. W smoke'u z punktami wizualnymi
+ramka ma zdanie do ramki z tej samej sekcji przed zdaniami koncowymi. Ramka konczy sie zdaniami:
+"Po ostatnim punkcie zakończ linią „Następny krok: /clear, potem /dev-pr --czesc 1” (podsumowanie zadania bez sekcji „Części PR”:
+„Następny krok: /clear, potem /dev-pr”). /dev-pr w tej sesji nie uruchamiaj." — smoke i PR w jednej sesji kosztuja kilka razy wiecej.
 Jesli w projekcie istnieje wczesniejszy docs/operator/*-smoke.md — trzymaj sie jego ukladu sekcji.
 
 W CALYM pliku zadnych wartosci hasel/tokenow/kluczy — takze gdy cytujesz known-issues lub review;
 zastap nazwa zmiennej lub fraza "<haslo w .env.e2e>". E-mail konta testowego moze zostac.
 
-Nie wymyslaj pozycji spoza zrodel (1)-(5). Nie modyfikuj *-zadania.md ani raportow review.
+KONTROLA ZMIENNYCH po zapisie pliku: \`node .claude/scripts/smoke/zmienne.mjs --smoke <plik>\`. Kod 1 = pole braki: zmienne,
+ktorych nazwy nie ma w pliku — dopisz je wedlug kroku 6 i uruchom kontrole ponownie. Nie konczysz, dopoki kod nie jest 0;
+ostatnia linie stdout ostatniej kontroli zwracasz w polu zmienne.
+Kontrola makiet po zapisie pliku: wg .claude/skills/dev-docs-complete/references/stack.md, sekcja „Punkty wizualne”.
+
+Nie wymyslaj pozycji spoza zrodel (1)-(6). Nie modyfikuj *-zadania.md ani raportow review.
 Zwroc obiekt zgodny ze schematem.`
 
 phase('Smoke operatora')
-let smoke = await agent(smokePrompt, { schema: SMOKE_RESULT, label: `smoke-operatora:${nazwaZadania}` })
+let smoke = await agent(smokePrompt, { schema: SMOKE_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `smoke-operatora:${nazwaZadania}` })
 if (!smoke) {
   // Jeden retry po null (wzorzec env-up w autopilocie): null to realny, obslugiwany stan agenta, a smoke jest
   // JEDYNYM kanalem, ktorym Operator checklist/[Manual] docieraja do czlowieka — bez retry cicho gina.
   log('Smoke operatora: agent zwrocil null — retry raz')
-  smoke = await agent(smokePrompt, { schema: SMOKE_RESULT, label: `smoke-operatora-retry:${nazwaZadania}` })
+  smoke = await agent(smokePrompt, { schema: SMOKE_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `smoke-operatora-retry:${nazwaZadania}` })
 }
 const smokePlik = (smoke && smoke.plik) || ''
 const smokeStatus = !smoke ? 'agent-null' : (smokePlik ? 'plik' : 'brak-pozycji')
@@ -138,7 +295,8 @@ const podsumowanieSmoke = smokeStatus === 'plik'
 // zostaja w indeksie, git dopasowuje pathspec do indeksu) — ale NIE po `git mv`/`git rm` (wpisy znikaja z indeksu
 // i pathspec pada). Dlatego prompt zakazuje `git mv`/`git rm`, a krok 8 kaze sprawdzic `git ls-files`.
 // docs/operator katalogowo obok dokladnej sciezki smoke'u: agent mogl zapisac plik pod inna data/nazwa niz zwrocil.
-const pathspec = `docs/active/${nazwaZadania} docs/completed/${nazwaZadania}${smokeStatus === 'plik' ? ` ${smokePlik} docs/operator` : ''}${dodatkowePathspec.length ? ` ${dodatkowePathspec.join(' ')}` : ''}`
+const pathspec = pathspecArchiwum(nazwaZadania, smokeStatus === 'plik' ? smokePlik : '', dodatkowePathspec)
+const komunikat = komunikatArchiwum(nazwaZadania)
 
 phase('Archiwizacja')
 const wynik = await agent(
@@ -151,33 +309,68 @@ Kroki (zgodnie ze skillem):
 1. Zlokalizuj docs/active/${nazwaZadania}/.
 2. Zweryfikuj ukonczenie (czytaj *-zadania.md wg puli z kroku 2 skilla). Jesli zostaly nieukonczone — i tak archiwizuj (tryb autopilota), ale wypisz je w rezultaty.
 3. Wyciagnij kluczowe wnioski z *-kontekst.md.
-4. Przenies wszystkie pliki do docs/completed/${nazwaZadania}/ przez zwykle \`mv\` (NIE \`git mv\`, NIE \`git rm\` —
+3a. Mapa funkcji (przed krokiem 4 — skrypt czyta plan zadania z docs/active/):
+   \`node .claude/scripts/e2e/e2e.mjs mapa --zadanie docs/active/${nazwaZadania}\`. JSON z \`pominieto\` (projekt bez skilla
+   weryfikacji), z \`dodane\`/\`zaktualizowane\` (flow dopisane do ${MAPA_FUNKCJI}) albo kod 1 z \`blad\` — w kazdym przypadku
+   jedna linia w rezultaty i archiwizacja idzie dalej.
+4. Przenies wszystkie pliki poza *.bak do docs/completed/${nazwaZadania}/ przez zwykle \`mv\` (NIE \`git mv\`, NIE \`git rm\` —
    pathspec w kroku 8 zaklada, ze wpisy docs/active/ sa nadal w indeksie) + dodaj ${nazwaZadania}-podsumowanie.md
    (data ukonczenia, co dostarczono, kluczowe decyzje, glowne pliki, wnioski${podsumowanieSmoke}).
-5. Jesli wsrod przenoszonych plikow jest .autopilot-state.json: ustaw w nim "complete": "done"
+   Pliki *.bak to kopie robocze operatora: zostaja w docs/active/${nazwaZadania}/, wypisz je w rezultaty.
+${krokOgrodu(nazwaZadania, sekcjaOgrodu)}5. Jesli wsrod przenoszonych plikow jest .autopilot-state.json: ustaw w nim "complete": "done"
    (stempel archiwizacji — orkiestrator celowo nie zapisuje stanu po przeniesieniu folderu,
    wiec bez stempla archiwum klamaloby ze complete jest pending).
-6. Zaktualizuj dokumentacje projektu jesli istotne (CLAUDE.md / .claude/rules/).
-7. Usun pusty katalog docs/active/${nazwaZadania}/.
+6. Nie edytuj CLAUDE.md ani .claude/rules/ — CLAUDE.md uzgadnia sie z kodem po merge'u pull requesta, a reguly
+   zapisal juz compound. Decyzje zadania ida do pliku z kroku 6a.
+6a. Plik decyzji (krok 6a skilla): docs/decisions/<data>-${nazwaZadania}.md (data z \`date +%F\`, \`mkdir -p docs/decisions\`),
+   zaczynajacy sie dokladnie od frontmattera (z data wstawiona w miejsce znacznika):
+${szkieletDecyzji(nazwaZadania)}   Tresc: sekcje "## Decyzje" i "## Do CLAUDE.md po merge'u" wg skilla, zrodlo — sekcja "## Dziennik" w *-kontekst.md.
+   Na koniec docs/decisions/README.md dopisz jedna linie indeksu wg skilla (brak pliku — utworz go z naglowkiem ze skilla).
+   Odczytaj pole z dysku: \`grep -m1 '^claude_md:' <plik>\` -> decyzje.claudeMd (sama wartosc), decyzje.plik = sciezka.
+7. Usun katalog docs/active/${nazwaZadania}/, jesli jest pusty (zostaly w nim *.bak — zostaw go).
 8. Zacommituj archiwizacje. Pathspec do git add (NIC poza tym, zadnego git add -A):
    ${pathspec}
-   oraz ew. CLAUDE.md / .claude/rules/<plik> — te TYLKO jesli faktycznie je zmieniles w kroku 6.
-   PRZED git add: dla kazdej sciezki z listy sprawdz, ze istnieje na dysku (\`test -e\`) LUB jest w indeksie
+   PRZED git add: dla kazdej sciezki z listy (poza wpisem ':(exclude…)') sprawdz, ze istnieje na dysku (\`test -e\`) LUB jest w indeksie
    (\`git ls-files <sciezka> | grep -q .\`); sciezke, ktora nie spelnia zadnego warunku, POMIN i opisz w rezultaty
-   (nieistniejacy pathspec = fatal i git add nie stage'uje NICZEGO). Jesli docs/active/${nazwaZadania} nie ma juz
+   (nieistniejacy pathspec = fatal i git add nie stage'uje NICZEGO). Pomin tez sciezke ignorowana przez git
+   (\`git check-ignore -q <sciezka>\` = 0, np. .claude/ w .gitignore projektu) — git add konczy sie wtedy kodem 1. Jesli docs/active/${nazwaZadania} nie ma juz
    w indeksie (uzyles git mv wbrew krokowi 4) — pomin te sciezke, rename'y sa juz zestage'owane.
    SIATKA BEZPIECZENSTWA: sprawdz \`git status --porcelain\` i jesli wisza niezacommitowane
-   artefakty bazy wiedzy — docs/solutions/, docs/CONCEPTS.md, .claude/rules/learned-patterns.md
-   — dolacz je do TEGO commita (compound albo compound-refresh nie domknal swojego commita).
-   Powod: brudne drzewo blokuje bramke bootstrapu nastepnego runu autopilota (STOP "niezacommitowane zmiany").
-   Commit z message "docs(${nazwaZadania}): archiwizacja zadania — completed + podsumowanie${smokeStatus === 'plik' ? ' + smoke operatora' : ''}".
+   artefakty bazy wiedzy — docs/solutions/, docs/CONCEPTS.md, docs/learned-patterns.md
+   — dolacz je do TEGO commita (compound albo compound-refresh nie domknal swojego commita);
+   takze tutaj dodawaj wylacznie sciezki istniejace na dysku lub w indeksie.
+   Powod: dwa runy z rzedu zostawily te pliki w drzewie, a brudne drzewo blokuje bramke bootstrapu
+   nastepnego runu autopilota (STOP "niezacommitowane zmiany").
+   Commit: \`git commit -m "${komunikat}"\` — temat dokladnie taki, w jednej linii; stopke (np. Co-Authored-By) dopisujesz
+   wylacznie drugim \`-m\` (git oddzieli ja pusta linia). Sprawdz \`git log -1 --format=%s\` = "${komunikat}".
    Jesli git commit nie powiedzie sie lub nie ma zmian — zwroc commit: "" i opisz powod w rezultaty (nie przerywaj archiwizacji).
+9. Czesci PR-a: \`node .claude/scripts/pr/czesci.mjs --zadanie docs/completed/${nazwaZadania}\` -> rozmiarPr = ostatnia linia stdout 1:1
+   (JSON w jednej linii), bez zmian — takze przy kodzie 1 (czesc za duza) i 3 (wyjatek).
 
 NIE uruchamiaj /dev-compound (zrobi to orkiestrator). Dzialaj autonomicznie.
 Zwroc obiekt zgodny ze schematem CompleteResult (commit = hash z kroku 8 lub "").`,
-  { schema: COMPLETE_RESULT, label: `complete:${nazwaZadania}` }
+  { schema: COMPLETE_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `complete:${nazwaZadania}` }
 )
 if (!wynik) {
-  return { archiwum: '', pliki: [], aktualizacje: ['BLAD: agent archiwizacji zwrocil null'], rezultaty: [], commit: '', smokeOperatora: smokePlik, smokeStatus }
+  return { archiwum: '', pliki: [], rezultaty: ['BLAD: agent archiwizacji zwrocil null'], commit: '', uwagi: [], smokeOperatora: smokePlik, smokeStatus }
 }
-return { ...wynik, smokeOperatora: smokePlik, smokeStatus }
+
+// Uwagi archiwizacji liczone w JS: brak pliku decyzji psuje krok CLAUDE.md po merge'u, a czesc PR ponad progiem omija bot.
+const pr = czesciPr(czesciZWyniku(wynik.rozmiarPr), nazwaZadania)
+const uwagi = [sprawdzDecyzje(wynik.decyzje, nazwaZadania), pr.uwaga, uwagaZmiennych(smoke)].filter(Boolean)
+for (const u of uwagi) log(u)
+if (pr.sekcja && wynik.commit) {
+  const dopisek = await agent(
+    `Dopisz na koncu pliku docs/completed/${nazwaZadania}/${nazwaZadania}-podsumowanie.md sekcje (tresc 1:1):
+
+## Części PR
+
+${pr.sekcja}
+
+Potem \`git add docs/completed/${nazwaZadania}/${nazwaZadania}-podsumowanie.md\` i \`git commit -m "docs(${nazwaZadania}): części PR w podsumowaniu"\`
+(stopka tylko drugim \`-m\`). Nic poza tym nie zmieniaj. Zwroc {zapisano, commit} (commit = krotki hash albo "").`,
+    { schema: DOPISEK_RESULT, agentType: 'klasa-mechaniczny', label: `complete:czesci-pr:${nazwaZadania}` }
+  )
+  if (!dopisek || !dopisek.zapisano) log('UWAGA: sekcja „Części PR” nie trafila do podsumowania — jest w wyniku runu (czesciPr); /dev-pr --czesc jej potrzebuje')
+}
+return { ...wynik, uwagi, czesciPr: pr.sekcja, smokeOperatora: smokePlik, smokeStatus }

@@ -1,0 +1,179 @@
+// Test wspolnego szkieletu plikow builderow i skilli, ktore buildery dostaja z `skills:` (PLAN-POPRAWY P12).
+//
+// Uruchomienie:  node --test .claude/workflows/__tests__/szkielet-buildera.test.mjs
+//
+// DLACZEGO: warstwe stala sprawdza warstwa-stala.test.mjs (blok polecen, mandat, daty). Builder ma ponadto wspolny
+// szkielet: jawny odczyt regul kodu (`paths:` nie dziala, gdy builder czyta pliki Bashem), samosprawdzenie na plikach
+// jednostki (D7-1), pytanie „undefined”, wynik tylko w schemacie BUILD_RESULT i zero powtorzen tresci regul kodu (dwie
+// kopie reguly rozjezdzaja sie po cichu). Skill wstrzykiwany builderowi jest jego warstwa stala, wiec nie niesie protokolu
+// audytu ani krzyku wersalikami (PA-24, PA-17). Kazde sprawdzenie ma test na podlozonym zlym tekscie.
+// Wszystkie buildery maja szkielet (P12), wiec planner nie dokleja im juz wlasnego bloku wymagan wykonania.
+// Tu sa asercje rdzenia — kontrakt, ktory spelnia builder kazdego stacku (D3, D22). Asercje stacku web (runner testow,
+// skille web) sa w stacks/web/__tests__/role.test.mjs; wariant stacku dostaje wlasne obok swojej nakladki.
+
+import { readFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import test from 'node:test'
+import assert from 'node:assert/strict'
+
+import { PROFIL } from '../../scripts/stack/profil.mjs'
+import { AGENCI, agenci, blokPolecen, wersaliki } from './agenci-pipeline.mjs'
+
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
+const BUILDERY_ZE_SZKIELETEM = ['feature-builder-data', 'feature-builder-ui', 'feature-builder-fullstack', 'feature-builder-ui-figma',
+  'feature-builder-fullstack-figma']
+// Skille wspolne przepisane wg PA-17 (jedna zasada = jedno zdanie z powodem).
+const SKILLE_BEZ_WERSALIKOW = ['security', 'sentry-integration', 'supabase-dev-guidelines']
+
+const REGULY_KODU = '.claude/rules/coding-rules.md'
+// `[E2E]`: scenariusze narzedzia jazdy i reczne wykonuja tester i operator — builder pisze tylko seed z pola Pliki.
+// Komenda testow powiazanych w samosprawdzeniu pochodzi z profilu stacku (A0.7 §6 p.2, IU-1.7).
+const WYMAGANE_W_POLECENIACH = [REGULY_KODU, 'samosprawdzenie plików jednostki', 'tsc --noEmit', 'pytaniem „undefined”',
+  'Scenariusze `[E2E]` i `[Manual]` wykonują tester i operator', PROFIL.testy.powiazane]
+// Tokeny regul kodu, ktorych builder nie przepisuje — odwoluje sie do sekcji po nazwie.
+const TOKENY_REGUL_KODU = ['auth.uid()', 'auth.jwt()', 'strictObject', 'search_path', 'AbortSignal', 'eslint-disable', 'toBeDefined',
+  'user_metadata', '`any`']
+// Znaczniki protokolu audytu i jego raportu (skill security przed P12).
+const ZNACZNIKI_AUDYTU = ['Executive Summary', 'Risk Matrix', 'Remediation Roadmap', 'Format Raportu', 'Klasyfikacja Findings',
+  'skanowy protokol', 'jak atakujacy']
+
+const zrodloExecute = readFileSync(join(REPO, '.claude/workflows/dev-docs-execute-wf.js'), 'utf8')
+
+/**
+ * @returns {string[]}  pola BUILD_RESULT z dev-docs-execute-wf.js
+ */
+function polaWyniku() {
+  const start = zrodloExecute.indexOf('const BUILD_RESULT = {')
+  assert.notEqual(start, -1, 'nie znaleziono BUILD_RESULT — kotwica testu wymaga aktualizacji')
+  const blok = zrodloExecute.slice(start, zrodloExecute.indexOf('\n}', start))
+  return [...blok.matchAll(/^ {4}(\w+): \{/gm)].map((m) => m[1] ?? '')
+}
+
+/**
+ * @param {string} tekst  pelny plik buildera
+ * @param {string[]} pola  pola schematu wyniku
+ * @returns {string[]}  opisy naruszen szkieletu
+ */
+function naruszeniaSzkieletu(tekst, pola) {
+  const blok = blokPolecen(tekst)
+  /** @type {string[]} */
+  const wynik = []
+  for (const w of WYMAGANE_W_POLECENIACH) if (!blok.includes(w)) wynik.push(`brak w poleceniach: ${w}`)
+  for (const p of pola.filter((n) => n !== 'id')) if (!blok.includes(`\`${p}\``)) wynik.push(`pole wyniku bez polecenia: ${p}`)
+  if (/^```/m.test(tekst) || /^#+ Raport/m.test(tekst) || tekst.includes('**Status:**')) wynik.push('drugi format raportu obok schematu wyniku')
+  for (const t of TOKENY_REGUL_KODU) if (tekst.includes(t)) wynik.push(`powtorzona tresc regul kodu: ${t}`)
+  return wynik
+}
+
+/**
+ * @param {string} tekst  SKILL.md
+ * @returns {string[]}
+ */
+function protokolAudytu(tekst) {
+  const ascii = tekst.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/ł/g, 'l')
+  return ZNACZNIKI_AUDYTU.filter((z) => ascii.includes(z))
+}
+
+const POLA = ['id', 'status', 'pliki', 'odchylenia']
+const DOBRY = `Wdrazasz jednostke.
+
+## Polecenia
+
+- Przeczytaj ${REGULY_KODU}.
+- Uruchom samosprawdzenie plików jednostki: \`tsc --noEmit\` i \`${PROFIL.testy.powiazane}\`; kazdy test przejdz pytaniem „undefined”.
+- Scenariusze \`[E2E]\` i \`[Manual]\` wykonują tester i operator.
+- Zwracasz \`status\`, \`pliki\` i \`odchylenia\`.
+`
+
+test('poprawny szkielet: zero naruszen', () => {
+  assert.deepEqual(naruszeniaSzkieletu(DOBRY, POLA), [])
+})
+
+test('brak odczytu regul, samosprawdzenia, pytania i pola wyniku jest zglaszany', () => {
+  const tekst = 'Wdrazasz jednostke.\n\n## Polecenia\n\n- Zwracasz `status`.\n\n## Inne\n\nCzytasz coding-rules: .claude/rules/coding-rules.md\n'
+  assert.deepEqual(naruszeniaSzkieletu(tekst, POLA), [
+    `brak w poleceniach: ${REGULY_KODU}`,
+    'brak w poleceniach: samosprawdzenie plików jednostki',
+    'brak w poleceniach: tsc --noEmit',
+    'brak w poleceniach: pytaniem „undefined”',
+    'brak w poleceniach: Scenariusze `[E2E]` i `[Manual]` wykonują tester i operator',
+    `brak w poleceniach: ${PROFIL.testy.powiazane}`,
+    'pole wyniku bez polecenia: pliki',
+    'pole wyniku bez polecenia: odchylenia',
+  ])
+})
+
+test('drugi format raportu i powtorzona regula kodu sa zglaszane', () => {
+  assert.deepEqual(naruszeniaSzkieletu(`${DOBRY}\n## Raport\n\n\`\`\`markdown\n**Status:** completed\n\`\`\`\n`, POLA),
+    ['drugi format raportu obok schematu wyniku'])
+  assert.deepEqual(naruszeniaSzkieletu(`${DOBRY}- Polityki z (SELECT auth.uid()), wejscie przez z.strictObject.\n`, POLA),
+    ['powtorzona tresc regul kodu: auth.uid()', 'powtorzona tresc regul kodu: strictObject'])
+})
+
+test('protokol audytu i wersaliki w skillu sa zglaszane, kod i nazwy w backtickach nie', () => {
+  assert.deepEqual(protokolAudytu('## Format Raportu\n### Executive Summary\nMysl jak atakujacy'), ['Executive Summary', 'Format Raportu', 'jak atakujacy'])
+  assert.deepEqual(protokolAudytu('- Polityka RLS dla kazdej operacji, bo brak polityki to odmowa.'), [])
+  assert.deepEqual(wersaliki('**NIGDY NIE ŁAMIESZ** zasad\n```ts\n// ŹLE - NIE!\n```\n`TYLKO` w kodzie, Nie wolno, RLS i SECURITY DEFINER'),
+    ['NIGDY', 'NIE'])
+})
+
+/** @type {(sciezka: string, faza: number) => string} */
+// eslint-disable-next-line no-new-func -- ekstrakcja funkcji z pliku workflowu tego repo, nie z inputu
+const plannerPrompt = new Function(`${zrodloExecute.slice(zrodloExecute.indexOf('function plannerPrompt('),
+  zrodloExecute.indexOf('\n}', zrodloExecute.indexOf('function plannerPrompt(')) + 2)}\nreturn plannerPrompt`)()
+
+test('planner: jednostki z migracja szeregowo — buildery danych dziela lokalna baze i plik typow', () => {
+  assert.match(plannerPrompt('docs/active/x', 2), /Jesli ktorykolwiek IU ma migracje bazy albo generuje typy bazy — strategia serial/)
+})
+
+test('planner nie dokleja bloku wymagan wykonania — te polecenia sa w szkielecie kazdego buildera', () => {
+  assert.doesNotMatch(plannerPrompt('docs/active/x', 2), /Wymagania wykonania/)
+})
+
+test('planner: pliki innych IU tej fazy w prompcie i serial — builder UI nie widzi planu, a hook powstaje w IU danych', () => {
+  const p = plannerPrompt('docs/active/x', 2)
+  assert.match(p, /blok "Pliki innych jednostek tej fazy:"/)
+  assert.match(p, /Jesli IU korzysta z pliku, ktory tworzy inny IU tej fazy \(hook, serwis, schemat, typy\) — strategia serial/)
+})
+
+test('planner: kontekst designerski dla UI i fullstack, warianty -figma przy makietach', () => {
+  const p = plannerPrompt('docs/active/x', 2)
+  // P21 B2: blok liczy skrypt z pola Makiety jednostki (naglowek „Mandatory designerski kontekst” sprawdza makiety.test.mjs)
+  assert.match(p, /node \.claude\/scripts\/plan\/plan\.mjs designerski <sciezka z linii "Plan techniczny:"> --iu <id IU>/)
+  assert.match(p, /SPEC i PNG tylko ekranow\s+z pola Makiety jednostki/)
+  assert.doesNotMatch(p, /Screeny referencyjne \(PNG\): <nazwa>: <sciezka>, jedna linia na screen/)
+  assert.match(p, /feature-builder-ui-figma, feature-builder-fullstack-figma/)
+  assert.match(p, /Dla feature-builder-data blok pomijasz zawsze/)
+})
+
+test('pola BUILD_RESULT czytane z workflowu', () => {
+  assert.deepEqual(polaWyniku(), ['id', 'status', 'pliki', 'odchylenia', 'nastepneKroki', 'pytanie'])
+})
+
+for (const builder of BUILDERY_ZE_SZKIELETEM) {
+  test(`szkielet buildera: ${builder}.md`, () => {
+    const tekst = readFileSync(join(REPO, AGENCI, `${builder}.md`), 'utf8')
+    assert.deepEqual(naruszeniaSzkieletu(tekst, polaWyniku()), [])
+  })
+}
+
+const skilleBuilderow = [...new Set([...agenci(REPO)].filter(([n]) => n.startsWith('feature-builder-'))
+  .flatMap(([, fm]) => (fm.get('skills') ?? '').replace(/[[\]]/g, '').split(',').map((s) => s.trim()))
+  .filter((s) => s && !s.includes(':')))].sort()
+
+test('buildery maja skille z katalogu szablonu (lista do sprawdzen nizej nie jest pusta)', () => {
+  assert.ok(skilleBuilderow.includes('security'), `skille builderow: ${skilleBuilderow.join(', ')}`)
+})
+
+for (const skill of skilleBuilderow) {
+  test(`skill wstrzykiwany builderom bez protokolu audytu: ${skill}`, () => {
+    assert.deepEqual(protokolAudytu(readFileSync(join(REPO, '.claude/skills', skill, 'SKILL.md'), 'utf8')), [])
+  })
+}
+
+for (const skill of SKILLE_BEZ_WERSALIKOW) {
+  test(`skill bez krzyku wersalikami: ${skill}`, () => {
+    assert.deepEqual(wersaliki(readFileSync(join(REPO, '.claude/skills', skill, 'SKILL.md'), 'utf8')), [])
+  })
+}

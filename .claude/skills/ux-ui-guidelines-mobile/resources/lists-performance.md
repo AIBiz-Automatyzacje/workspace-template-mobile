@@ -127,7 +127,7 @@ const renderItem = useCallback(({ item }: { item: Item }) => (
 // ŹLE — new object every render
 <View style={{ padding: 16, flexDirection: 'row' }} />
 
-// DOBRZE — NativeWind className jest static
+// DOBRZE — Uniwind kompiluje className przy budowaniu
 <View className="p-4 flex-row" />
 ```
 

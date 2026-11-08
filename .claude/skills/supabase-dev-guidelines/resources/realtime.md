@@ -129,18 +129,9 @@ USING ((SELECT auth.uid()) = user_id);
 -- Uzytkownik otrzyma tylko zmiany SWOICH ulubionych
 ```
 
-## Realtime Authorization
+## Realtime Authorization (Public Beta)
 
 Od `supabase-js >= v2.44.0` dostępna jest autoryzacja kanałów Realtime przez RLS na tabeli `realtime.messages`.
-
-> **Ważne:** dla kanałów prywatnych (`config: { private: true }`) wyłącz **„Allow public access"**
-> (Channel Restrictions) na ekranie **Realtime Settings** —
-> `https://supabase.com/dashboard/project/_/realtime/settings`. Dopóki jest włączone, RLS na
-> `realtime.messages` nie jest wymuszane przy joinie, więc każdy z anon key może subskrybować
-> i nadawać na dowolnym kanale.
->
-> *(Ustawienie NIE leży już w Database → Replication — ma dedykowany ekran Realtime Settings.
-> Operator idący starą ścieżką nie znajdzie przełącznika i zostawi kanał prywatny z publicznym dostępem.)*
 
 ### Konfiguracja
 
@@ -173,8 +164,15 @@ const channel = supabase.channel('room:' + userId, {
 });
 ```
 
-> **Uwaga:** pamiętaj o wyłączeniu „Allow public access" w Dashboardzie (patrz wyżej) — bez tego
-> RLS na `realtime.messages` nie jest wymuszane.
+> **KRYTYCZNE — wyłącz „Allow public access":** dopóki to ustawienie jest włączone,
+> kanały prywatne NIE są egzekwowane — RLS na `realtime.messages` nie blokuje joinu,
+> więc każdy z anon key subskrybuje i nadaje na dowolnym kanale mimo poprawnych policy.
+> Ustawienie leży na ekranie **Realtime Settings**
+> (`/dashboard/project/_/realtime/settings`) — to NIE jest `Database → Replication`
+> (tam włącza się tylko publikację tabel, patrz sekcja „Konfiguracja Publikacji").
+> Źródło: https://supabase.com/docs/guides/realtime/authorization
+
+> **Uwaga:** Realtime Authorization jest w Public Beta — API może się zmienić.
 
 ---
 
@@ -185,15 +183,17 @@ const channel = supabase.channel('room:' + userId, {
 ```typescript
 function useOnlineUsers() {
     const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
-    const { user } = useAuth();
+    const { auth } = useAuth();
+    // Zależność efektu to identyfikator, nie obiekt — nowa sesja po TOKEN_REFRESHED nie restartuje kanału.
+    const userId = auth.status === 'zalogowany' ? auth.session.user.id : null;
 
     useEffect(() => {
-        if (!user) return;
+        if (!userId) return;
 
         const channel = supabase.channel('online-users', {
             config: {
                 presence: {
-                    key: user.id,
+                    key: userId,
                 },
             },
         });
@@ -213,7 +213,7 @@ function useOnlineUsers() {
             .subscribe(async (status) => {
                 if (status === 'SUBSCRIBED') {
                     await channel.track({
-                        user_id: user.id,
+                        user_id: userId,
                         online_at: new Date().toISOString(),
                     });
                 }
@@ -222,7 +222,7 @@ function useOnlineUsers() {
         return () => {
             supabase.removeChannel(channel);
         };
-    }, [user]);
+    }, [userId]);
 
     return onlineUsers;
 }
@@ -366,9 +366,8 @@ useEffect(() => {
 
 ### Limity Supabase
 
-- Max 200 concurrent connections per project (Free tier)
-- Max 100 channels per connection (wszystkie plany)
-- Free tier opcjonalnie: limit ~100 messages/s
+- Równoległe połączenia na projekt: 200 (Free), 500 (Pro), 10 000 (Pro bez limitu wydatków, Team)
+- Max 100 kanałów na połączenie — na każdym planie (https://supabase.com/docs/guides/realtime/limits, stan 2026-11)
 - RLS policies musza przepuszczac SELECT
 
 ### Optymalizacje

@@ -2,7 +2,7 @@
 
 Haptyka i gesty to dwie warstwy które odróżniają mobile od desktopu. Źle użyte są męczące lub mylące. Dobrze użyte — niewidoczne, ale brakuje ich gdy znikają. Things 3 i Linear Mobile to wzorce: haptyka tylko w momentach które **komunikują informację**, nigdy jako ozdoba.
 
-Stack referencyjny: `expo-haptics` + `react-native-gesture-handler` (RNGH) — aktualny major **3.x** + `react-native-reanimated` — aktualny major **4.x** (3.x legacy, patrz [motion-microinteractions.md](motion-microinteractions.md)).
+Stack referencyjny: `expo-haptics` + `react-native-gesture-handler` (RNGH) — aktualny major **3.x** + `react-native-reanimated` — aktualny major **4.x** (3.x legacy, patrz [motion-microinteractions.md](motion-microinteractions.md)) + `react-native-worklets`. Na Expo SDK 58: `expo-haptics` ~58.0.7, RNGH ~3.3.0, Reanimated 4.7.1, Worklets 0.13.0.
 
 ---
 
@@ -92,7 +92,7 @@ Haptics.performAndroidHapticsAsync(Haptics.AndroidHaptics.Confirm);
 | Warning modal trigger | `notificationAsync` | `Warning` |
 | Drag start | `impactAsync` | `Light` |
 | Drag drop | `impactAsync` | `Light` |
-| Android — natywny haptic engine (precyzyjniejsze wzorce niż `impactAsync`) | `performAndroidHapticsAsync` | np. `AndroidHaptics.Confirm`, `.Reject`, `.GestureStart` |
+| Android — natywny haptic engine (precyzyjniejsze wzorce niż `impactAsync`) | `performAndroidHapticsAsync` | np. `AndroidHaptics.Confirm`, `.Reject`, `.Gesture_Start`, `.Drag_Start`, `.Toggle_On` |
 
 ---
 
@@ -127,18 +127,18 @@ async function gentleConfirm(): Promise<void> {
 
 ## Gesty natywne
 
-`react-native-gesture-handler` (RNGH) — od 2.x działa builder API (`Gesture.Tap()`, `Gesture.LongPress()`, `Gesture.Pan()`, `Gesture.Pinch()`), pokazane niżej. Stary `PanResponder` z core RN — nie używaj, słabsza wydajność i brak natywnego wątku.
+`react-native-gesture-handler` (RNGH) 3.x opisuje gesty hookami z obiektem konfiguracji (`useTapGesture()`, `usePanGesture()` i pozostałe), pokazanymi niżej. Stary `PanResponder` z core RN — nie używaj, słabsza wydajność i brak natywnego wątku.
 
-> **Nota v3:** RNGH 3.x wprowadza nowe, hookowe API (np. `useTapGesture()`) kompatybilne z React Compiler i **deprecatuje builder API** (`Gesture.Tap()` i pozostałe `Gesture.*` mają zostać usunięte w przyszłej wersji). Przykłady niżej w builder API nadal działają na 3.x, ale w nowym kodzie preferuj hooki — sprawdź aktualny przewodnik migracji RNGH przed startem nowego projektu.
+> **Nota v3:** hooki zastępują builder API (`Gesture.*`), które RNGH 3 oznacza jako przestarzałe. Callbacki zmieniają nazwy: `onStart` na `onActivate`, `onEnd` na `onDeactivate`, a `onChange` znika, bo `onUpdate` niesie też właściwości `change*`. Zamiast drugiego parametru `success` zdarzenie ma pole `canceled`. Relacji między gestami nie ustawisz w poprzek obu API, więc gesty w jednym układzie piszesz jednym stylem.
 
 | Gest | API | Use case |
 |------|-----|----------|
-| Tap | `Gesture.Tap()` | Press buttonów (preferuj `Pressable` jeśli prosta akcja) |
-| Long press | `Gesture.LongPress()` | Context menu, drag-to-reorder grab |
-| Pan | `Gesture.Pan()` | Swipe-to-delete, drawer, sheet, drag |
-| Pinch | `Gesture.Pinch()` | Zoom obrazka, mapy |
-| Swipe | `Gesture.Fling()` | Swipe nawigacja |
-| Native (system) | `Gesture.Native()` | Kompozycja z natywnym ScrollView |
+| Tap | `useTapGesture()` | Press buttonów (preferuj `Pressable` jeśli prosta akcja) |
+| Long press | `useLongPressGesture()` | Context menu, drag-to-reorder grab |
+| Pan | `usePanGesture()` | Swipe-to-delete, drawer, sheet, drag |
+| Pinch | `usePinchGesture()` | Zoom obrazka, mapy |
+| Swipe | `useFlingGesture()` | Swipe nawigacja |
+| Native (system) | `useNativeGesture()` | Kompozycja z natywnym ScrollView |
 
 ---
 
@@ -149,7 +149,7 @@ async function gentleConfirm(): Promise<void> {
 | **`Pressable`** | Default 2026 | Wszystkie buttony, klikalne karty — preferowany |
 | `TouchableOpacity` | Legacy | Stare projekty — migruj do Pressable |
 | `TouchableWithoutFeedback` | Legacy | Bardzo rzadko (kiedy nie chcesz feedback) |
-| `Gesture.Tap()` (RNGH) | Specjalistyczny | Gdy potrzebujesz kompozycji z innymi gestami |
+| `useTapGesture()` (RNGH) | Specjalistyczny | Gdy potrzebujesz kompozycji z innymi gestami |
 
 `Pressable` daje:
 - `onPress`, `onPressIn`, `onPressOut`, `onLongPress`
@@ -164,23 +164,24 @@ async function gentleConfirm(): Promise<void> {
 Częsty problem: scroll lista zawiera swipeable rows. Gdy user przeciąga pionowo, ma scrollować. Gdy przeciąga poziomo, ma swipe'ować row. Domyślnie gesty się "kradną".
 
 ```tsx
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { GestureDetector, usePanGesture } from 'react-native-gesture-handler';
 
-const panGesture = Gesture.Pan()
-  .activeOffsetX([-10, 10]) // poziomy pan dopiero po 10px
-  .failOffsetY([-5, 5])      // jeśli pionowy ruch większy — fail i oddaj scrollowi
-  .onUpdate((e) => {
-    'worklet';
+const panGesture = usePanGesture({
+  activeOffsetX: [-10, 10], // poziomy pan dopiero po 10px
+  failOffsetY: [-5, 5],     // jeśli pionowy ruch większy — fail i oddaj scrollowi
+  onUpdate: (e) => {
     translateX.value = e.translationX;
-  });
+  },
+});
 ```
 
 **Reguły kompozycji:**
 - `activeOffsetX/Y` — kiedy gest zaczyna się aktywować
 - `failOffsetX/Y` — kiedy gest oddaje kontrolę innemu
-- `Gesture.Simultaneous(g1, g2)` — oba mogą działać równocześnie (np. pinch + pan na obrazku)
-- `Gesture.Exclusive(g1, g2)` — tylko jeden naraz, priorytet g1
-- `.requireExternalGestureToFail(other)` — czeka aż inny gest sfailuje (alternatywa dla `waitFor`)
+- `useSimultaneousGestures(g1, g2)` — oba mogą działać równocześnie (np. pinch + pan na obrazku)
+- `useExclusiveGestures(g1, g2)` — tylko jeden naraz, priorytet według kolejności argumentów (g1 najwyższy)
+- `useCompetingGestures(g1, g2)` — tylko jeden naraz, pierwszy aktywowany anuluje pozostałe
+- `requireToFail: other` w konfiguracji — czeka aż inny gest sfailuje; relacje dopełniają `simultaneousWith` i `block`
 
 ---
 
@@ -252,14 +253,14 @@ export function HapticButton({
 Wzorzec Things 3 / Mail.app — przesunięcie w lewo odsłania akcję delete.
 
 ```tsx
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { GestureDetector, usePanGesture } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withTiming,
   withSpring,
-  runOnJS,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import * as Haptics from 'expo-haptics';
 
 const SWIPE_THRESHOLD = -80;
@@ -277,31 +278,30 @@ export function SwipeableRow({ onDelete, children }: SwipeableRowProps): React.J
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
   };
 
-  const panGesture = Gesture.Pan()
-    .activeOffsetX([-10, 10])
-    .failOffsetY([-5, 5])
-    .onUpdate((e) => {
-      'worklet';
+  const panGesture = usePanGesture({
+    activeOffsetX: [-10, 10],
+    failOffsetY: [-5, 5],
+    onUpdate: (e) => {
       translateX.value = Math.min(0, e.translationX);
       // haptic threshold trigger (raz na gest)
       if (!hasTriggered.value && e.translationX < SWIPE_THRESHOLD) {
         hasTriggered.value = true;
-        runOnJS(triggerHaptic)();
+        scheduleOnRN(triggerHaptic);
       }
       if (hasTriggered.value && e.translationX > SWIPE_THRESHOLD) {
         hasTriggered.value = false;
       }
-    })
-    .onEnd((e) => {
-      'worklet';
-      if (e.translationX < SWIPE_THRESHOLD) {
+    },
+    onDeactivate: (e) => {
+      if (!e.canceled && e.translationX < SWIPE_THRESHOLD) {
         translateX.value = withTiming(-100);
-        runOnJS(onDelete)();
+        scheduleOnRN(onDelete);
       } else {
         translateX.value = withSpring(0, { damping: 18, stiffness: 200 });
       }
       hasTriggered.value = false;
-    });
+    },
+  });
 
   const style = useAnimatedStyle(() => ({
     transform: [{ translateX: translateX.value }],
@@ -315,20 +315,22 @@ export function SwipeableRow({ onDelete, children }: SwipeableRowProps): React.J
 }
 ```
 
-> **Uwaga:** `runOnJS` — Reanimated worklet działa na UI thread, ale `Haptics.impactAsync` i `onDelete` muszą iść na JS thread. Bez `runOnJS` — crash.
+> **Uwaga:** callback gestu działa jako worklet na UI thread, ale `Haptics.impactAsync` i `onDelete` muszą iść na JS thread, więc wołasz je przez `scheduleOnRN` z `react-native-worklets`. Bez tego — crash. Argumenty podajesz po funkcji: `scheduleOnRN(fn, arg)`. `runOnJS` z Reanimated jest przestarzałe, a `scheduleOnUI` analogicznie zastępuje `runOnUI`.
+>
+> **Dyrektywa `'worklet'`:** plugin Babela `react-native-worklets/plugin` sam oznacza callbacki podane wprost w konfiguracji hooka, więc w przykładach jej nie ma. Dopisujesz ją tylko w funkcji zdefiniowanej osobno i przekazanej przez referencję albo owiniętej w `useCallback` lub `useMemo`.
 
 ---
 
 ## Pełny przykład: Bottom sheet drag handle
 
 ```tsx
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { GestureDetector, usePanGesture } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
   withSpring,
-  runOnJS,
 } from 'react-native-reanimated';
+import { scheduleOnRN } from 'react-native-worklets';
 import * as Haptics from 'expo-haptics';
 
 const SNAP_POINTS = [0, 300, 600];
@@ -341,25 +343,23 @@ export function BottomSheet({ children }: { children: React.ReactNode }): React.
     Haptics.selectionAsync();
   };
 
-  const panGesture = Gesture.Pan()
-    .onStart(() => {
-      'worklet';
+  const panGesture = usePanGesture({
+    onActivate: () => {
       startY.value = translateY.value;
-    })
-    .onUpdate((e) => {
-      'worklet';
+    },
+    onUpdate: (e) => {
       translateY.value = Math.max(SNAP_POINTS[0], startY.value + e.translationY);
-    })
-    .onEnd((e) => {
-      'worklet';
+    },
+    onDeactivate: (e) => {
       // znajdź najbliższy snap point
       const current = translateY.value + e.velocityY * 0.2;
       const closest = SNAP_POINTS.reduce((prev, curr) =>
         Math.abs(curr - current) < Math.abs(prev - current) ? curr : prev
       );
       translateY.value = withSpring(closest, { damping: 20, stiffness: 200 });
-      runOnJS(snapHaptic)();
-    });
+      scheduleOnRN(snapHaptic);
+    },
+  });
 
   const style = useAnimatedStyle(() => ({
     transform: [{ translateY: translateY.value }],
@@ -383,4 +383,4 @@ export function BottomSheet({ children }: { children: React.ReactNode }): React.
 
 ---
 
-*Źródła: Apple HIG Haptics (developer.apple.com/design/human-interface-guidelines/playing-haptics), expo-haptics docs (docs.expo.dev/versions/latest/sdk/haptics), react-native-gesture-handler 3 docs (docs.swmansion.com/react-native-gesture-handler — domyślna wersja docs to 3.x; 2.x i 1.x są w archiwum pod `/docs/2.x/` i `/docs/1.x/`; migracja: guide *Upgrading to the new API introduced in Gesture Handler 3*, `/docs/guides/upgrading-to-3` — konfiguracja obiektem zamiast builderów, `onStart`→`onActivate`, `onEnd`→`onDeactivate`, relacje przez hooki `useSimultaneousGestures()`), Things 3 haptic teardown (Cultured Code blog), Linear Mobile UX patterns. Update: 2026-08-23.*
+*Źródła: Apple HIG Haptics (developer.apple.com/design/human-interface-guidelines/playing-haptics), expo-haptics docs (docs.expo.dev/versions/latest/sdk/haptics), react-native-gesture-handler 3 docs (docs.swmansion.com/react-native-gesture-handler — domyślna wersja docs to 3.x; 2.x i 1.x są w archiwum pod `/docs/2.x/` i `/docs/1.x/`; migracja: guide *Upgrading to the new API introduced in Gesture Handler 3*, `/docs/guides/upgrading-to-3` — konfiguracja obiektem zamiast builderów, `onStart`→`onActivate`, `onEnd`→`onDeactivate`, relacje przez hooki `useSimultaneousGestures()`), Things 3 haptic teardown (Cultured Code blog), react-native-reanimated migration from 3.x (docs.swmansion.com/react-native-reanimated/docs/guides/migration-from-3.x), Linear Mobile UX patterns. Update: 2026-11-05.*

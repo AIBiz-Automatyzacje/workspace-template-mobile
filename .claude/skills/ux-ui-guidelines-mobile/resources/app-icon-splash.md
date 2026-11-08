@@ -301,11 +301,11 @@ if (supportsAlternateIcons) {
       [
         "expo-splash-screen",
         {
-          "image": "./assets/splash.png",
-          "resizeMode": "contain",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
           "backgroundColor": "#0f172a",
           "dark": {
-            "image": "./assets/splash-dark.png",
+            "image": "./assets/splash-icon-dark.png",
             "backgroundColor": "#020617"
           }
         }
@@ -317,18 +317,16 @@ if (supportsAlternateIcons) {
 
 **Image guidelines:**
 
-- 1242×2436 (iPhone 11 Pro / 14 Pro size) — wystarczy do scaling
-- PNG z transparent background (jeśli content-only)
-- `resizeMode`:
-  - `'contain'` — logo centered, full visible (most common)
-  - `'cover'` — logo fills, może być cropped (rzadko)
-  - `'native'` — Android only, native splash
+- `image` to ikona albo logo, nie pełny ekran: 1024×1024, przezroczyste tło. Szerokość na ekranie ustawia `imageWidth` (domyślnie 100).
+- `resizeMode` skaluje obraz w kontenerze o szerokości `imageWidth`: `contain`, `cover` albo `native`.
+- Pełnoekranowy obraz działa tylko na iOS przez `enableFullScreenImage_legacy`, opcję przejściową, którą Expo zapowiada do usunięcia. Nie buduj na niej nowego splasha.
+- Od SDK 52 obowiązuje aktualne Android Splash API, więc Expo Go i development buildy nie odtwarzają splasha w pełni. Sprawdzasz go na buildzie release.
 
 ### Programmatic hide
 
 Splash by default hides after JS bundle loaded. Ale **Twoje data nie są jeszcze ready** — fonty, initial query, auth check.
 
-Pattern: `preventAutoHideAsync` → load critical resources → `hideAsync`.
+Pattern: `preventAutoHideAsync` → load critical resources → `hide`.
 
 ```tsx
 import { useEffect, useState } from 'react';
@@ -363,7 +361,7 @@ export default function App() {
 
   useEffect(() => {
     if (fontsLoaded && isReady) {
-      SplashScreen.hideAsync();
+      SplashScreen.hide();
     }
   }, [fontsLoaded, isReady]);
 
@@ -375,7 +373,7 @@ export default function App() {
 }
 ```
 
-**Pamiętaj:** `preventAutoHideAsync` ZAWSZE z `hideAsync` w `finally`. Inaczej user trapped na splash forever przy error.
+**Pamiętaj:** `preventAutoHideAsync` ZAWSZE z `hide` w `finally`. Inaczej user trapped na splash forever przy error. `hideAsync` zostaje tylko dla zgodności wstecznej.
 
 ---
 
@@ -447,7 +445,7 @@ Dla complex animation (Headspace flowing shapes). `lottie-react-native` package.
 - [ ] Logo only — bez tekstu, bez wersji
 - [ ] Brand color background
 - [ ] Dark mode variant
-- [ ] `preventAutoHideAsync` + `hideAsync` w finally
+- [ ] `preventAutoHideAsync` + `hide` w finally
 - [ ] Match style entry screen (color, mood)
 - [ ] Brak loading bar
 - [ ] Brak audio

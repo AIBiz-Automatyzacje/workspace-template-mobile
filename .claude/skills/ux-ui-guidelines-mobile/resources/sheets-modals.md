@@ -7,11 +7,12 @@ Bottom sheety, modale, popovery, alerty, toasty. Decision tree który overlay ki
 ## Czym to zaimplementować — kolejność wyboru
 
 Ten dokument mówi **który overlay** i **jak ma się zachowywać** (to jest warstwa UX). O tym, **jakim
-komponentem** go zbudować, decyduje skill **`expo-ui`** — i tam jest źródło prawdy:
+komponentem** go zbudować, decyduje skill **`expo:expo-ui`** — i tam jest źródło prawdy:
 
 1. **`BottomSheet` z `@expo/ui`** — domyślny wybór dla sheetów. Prawdziwe SwiftUI / Jetpack Compose,
    od SDK 56+ działa w Expo Go bez custom builda. Sterowanie: `isPresented` / `onDismiss`,
-   `snapPoints` przyjmuje `'half'`, `'full'`, `{ fraction }`, `{ height }`.
+   `snapPoints` przyjmuje `'half'`, `'full'`, `{ fraction }`, `{ height }`, ale dwie ostatnie formy
+   działają dokładnie tylko na iOS i web: na Androidzie przyciągają do najbliższego z `'half'` / `'full'`.
 2. **Native iOS sheet przez `expo-router`** — gdy sheet jest ekranem w nawigacji (detents, routing).
 3. **`@gorhom/bottom-sheet`** — dopiero gdy potrzebujesz czegoś, czego `@expo/ui` nie daje (patrz
    sekcja „Gorhom Bottom Sheet" niżej), albo gdy migrujesz istniejącą integrację.
@@ -120,13 +121,13 @@ export const unstable_settings = {
 ## Gorhom Bottom Sheet
 
 > **To jest ścieżka fallback, nie domyślna.** Najpierw sprawdź `BottomSheet` z `@expo/ui` (skill
-> `expo-ui`). Do gorhoma schodź tylko z konkretnego powodu z listy niżej — a przy istniejącej
+> `expo:expo-ui`). Do gorhoma schodź tylko z konkretnego powodu z listy niżej — a przy istniejącej
 > integracji rozważ drop-in `@expo/ui/community/bottom-sheet` zamiast pełnej zależności.
 
 **Kiedy zejść do gorhoma:**
 - Custom animacje, których uniwersalny `BottomSheet` nie wyraża (np. crossfade content między snap pointami)
 - Custom backdrop (blur, gradient, interaktywne elementy w backdropie)
-- Precyzyjne, procentowe snap pointy (3+) poza `'half'` / `'full'` / `{ fraction }` / `{ height }`
+- Precyzyjne snap pointy na Androidzie, gdzie `@expo/ui` zna tylko `'half'` i `'full'`, oraz 3+ punkty poza tym zestawem
 - Sheet jako trwała część layoutu strony, nie modal navigation
 - Projekt na SDK < 56, gdzie warstwa uniwersalna `@expo/ui` jeszcze nie istnieje
 
@@ -158,7 +159,7 @@ export function FilterSheet({ onClose }: { onClose: () => void }) {
       handleIndicatorStyle={{ backgroundColor: '#9ca3af', width: 36 }}
       backgroundStyle={{ backgroundColor: '#ffffff' }}
     >
-      <BottomSheetView className="flex-1 px-6 pt-2 pb-8">
+      <BottomSheetView style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8, paddingBottom: 32 }}>
         {/* Content */}
       </BottomSheetView>
     </BottomSheet>
@@ -342,7 +343,7 @@ export function FilterSheet({ isVisible, onClose }: FilterSheetProps) {
       backdropComponent={renderBackdrop}
       handleIndicatorStyle={{ backgroundColor: '#9ca3af', width: 36, height: 4 }}
     >
-      <BottomSheetView className="flex-1 px-6 pt-2 pb-8">
+      <BottomSheetView style={{ flex: 1, paddingHorizontal: 24, paddingTop: 8, paddingBottom: 32 }}>
         <View className="flex-row items-center justify-between mb-6">
           <Text className="text-xl font-semibold">Filtruj</Text>
           <Pressable

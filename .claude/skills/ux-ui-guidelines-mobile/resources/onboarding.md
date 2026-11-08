@@ -59,12 +59,12 @@ Co empty state powinien zawierać:
 4. **Primary CTA** — duży przycisk z akcją
 
 ```tsx
-// Expo + NativeWind empty state
+// Expo + Uniwind empty state
 function EmptyTasks({ onCreate }: { onCreate: () => void }) {
   return (
     <View className="flex-1 items-center justify-center px-8 gap-4">
       <View className="size-16 rounded-full bg-muted items-center justify-center">
-        <CheckCircle2 className="size-8 text-muted-foreground" />
+        <CheckCircle2 size={32} colorClassName="accent-muted-foreground" />
       </View>
       <Text className="text-xl font-semibold text-foreground">
         Brak zadań na dziś

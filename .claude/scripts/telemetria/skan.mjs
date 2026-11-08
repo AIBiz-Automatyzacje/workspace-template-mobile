@@ -1,0 +1,80 @@
+// Skladanie rekordow jednego runu: run + fazy + agenci. Wejscie z dysku (zrodla.mjs), git dla plikow fixa i ucieczek watkow bota.
+
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
+
+import { rekordyFaz } from './faza.mjs'
+import { zmianyCommitow } from './git.mjs'
+import { rekordRunu, statusBezHarnessu, statusRunu } from './run.mjs'
+import { wersjaSzablonu } from './szablon.mjs'
+import { ucieczkiPr } from './ucieczki.mjs'
+import { klasyZRegula } from './wiedza.mjs'
+import { agenciRunu, czytajHarness, czytajJournal, katalogProjektu } from './zrodla.mjs'
+
+/** @typedef {import('./zrodla.mjs').Run} Run */
+
+/**
+ * @typedef {object} RekordyRunu
+ * @property {import('./run.mjs').RekordRunu} run
+ * @property {import('./faza.mjs').RekordFazy[]} fazy
+ * @property {import('./agent.mjs').RekordAgenta[]} agenci
+ */
+
+/** @param {unknown} x @returns {Record<string, unknown>} */
+function obiektWyniku(x) {
+  return x !== null && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x)) : {}
+}
+
+/** @param {Run} run @returns {number} czas ostatniego zapisu do katalogu runu (journal albo transkrypt) */
+function ostatniaAktywnosc(run) {
+  const journal = join(run.katalogRunu, 'journal.jsonl')
+  try {
+    return statSync(journal).mtimeMs
+  } catch (e) {
+    if (e instanceof Error && 'code' in e && e.code === 'ENOENT') return statSync(run.katalogRunu).mtimeMs
+    throw e
+  }
+}
+
+/**
+ * Rekordy jednego runu; null = run w toku (pomijany do nastepnego skanu).
+ * @param {Run} run
+ * @param {{ terazMs: number, sesjeWToku: Set<string> }} kontekst sesjeWToku = sesje z dzialajacym workflowem (hook: background_tasks);
+ *   run bez pliku harnessu w takiej sesji jest w toku (background_tasks podaje id zadania, nie wf_ runu)
+ * @returns {RekordyRunu | null}
+ */
+export function rekordyRunu(run, kontekst) {
+  const harness = czytajHarness(run)
+  const status = harness
+    ? statusRunu(harness)
+    : statusBezHarnessu({ wTokuWSesji: kontekst.sesjeWToku.has(run.sesja), ostatniaAktywnoscMs: ostatniaAktywnosc(run), terazMs: kontekst.terazMs })
+  if (!status) return null
+  const agenci = agenciRunu(run)
+  const journal = czytajJournal(run.katalogRunu)
+  const bootstrap = agenci.find((a) => a.rola === 'bootstrap')
+  const repo = katalogProjektu(run)
+  const etapZbierz = harness?.workflowName === 'dev-pr-wf' && obiektWyniku(harness.result).etap === 'zbierz'
+  const rekord = rekordRunu({
+    harness, status, agenci,
+    bootstrap: bootstrap ? journal.get(bootstrap.id)?.wynik : null,
+    klasyZRegula: etapZbierz ? klasyZRegula(repo) : null,
+    szablon: wersjaSzablonu({
+      workflowName: typeof harness?.workflowName === 'string' ? harness.workflowName : null,
+      skrypt: typeof harness?.script === 'string' ? harness.script : null,
+      startMs: typeof harness?.startTime === 'number' ? harness.startTime : null,
+      repo,
+    }),
+  })
+  // Ucieczki watkow bota (E5-20): blame linii na czubku PR i findingi review zadania z drzewa projektu.
+  if (rekord.pr) rekord.pr.klasy = ucieczkiPr({ repo, zadanie: rekord.zadanie, head: rekord.pr.head }, rekord.pr.klasy)
+  return {
+    run: rekord,
+    fazy: rekordyFaz({
+      wynikRunu: harness?.result,
+      agenci,
+      journal,
+      zmianyFixa: (commity) => zmianyCommitow(repo, commity),
+    }),
+    agenci,
+  }
+}

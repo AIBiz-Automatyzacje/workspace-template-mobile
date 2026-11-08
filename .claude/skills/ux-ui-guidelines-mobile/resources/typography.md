@@ -97,7 +97,7 @@ Expo ma `expo-font` z hookiem `useFonts`. Splash screen można utrzymać do zał
 ```tsx
 // app/_layout.tsx
 import { useFonts } from "expo-font";
-import { SplashScreen } from "expo-router";
+import * as SplashScreen from "expo-splash-screen";
 import { useEffect } from "react";
 
 SplashScreen.preventAutoHideAsync();
@@ -111,7 +111,7 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (fontsLoaded || fontError) {
-      SplashScreen.hideAsync();
+      SplashScreen.hide();
     }
   }, [fontsLoaded, fontError]);
 
@@ -128,33 +128,41 @@ export default function RootLayout() {
 
 ---
 
-## NativeWind — text utilities
+## Uniwind — tokeny tekstu
 
-NativeWind v4+ daje pełen Tailwind w RN. Definicja custom presetu:
+Uniwind daje Tailwind v4 w RN, a tokeny definiujesz w `@theme` w `global.css` (setup opisuje skill `uniwind`). Rozmiar i interlinia idą razem przez sufiks `--line-height`:
 
-> **Wersja:** przykład = NativeWind v4 (`tailwind.config.js`). Ten szablon używa **NativeWind v5 preview + Tailwind v4 CSS-first** — setup opisuje skill `expo-tailwind-setup`. Tokeny fontSize poniżej pozostają aktualne konceptualnie.
+```css
+/* global.css */
+@theme {
+  /* Custom hero: jeden font na rodzinę, nazwa jak plik bez rozszerzenia */
+  --font-display: 'Bricolage-Bold';
 
-```js
-// tailwind.config.js
-module.exports = {
-  theme: {
-    extend: {
-      fontFamily: {
-        sans: ["System"],          // SF Pro / Roboto auto
-        display: ["Bricolage-Bold"], // custom hero
-      },
-      fontSize: {
-        caption:    ["11px", { lineHeight: "14px", letterSpacing: "0.4px" }],
-        footnote:   ["12px", { lineHeight: "16px", letterSpacing: "0.2px" }],
-        body:       ["16px", { lineHeight: "24px" }],
-        headline:   ["20px", { lineHeight: "26px", letterSpacing: "-0.2px", fontWeight: "600" }],
-        title2:     ["32px", { lineHeight: "38px", letterSpacing: "-0.4px", fontWeight: "600" }],
-        display:    ["56px", { lineHeight: "60px", letterSpacing: "-1px", fontWeight: "700" }],
-      },
-    },
-  },
-};
+  --text-caption: 11px;
+  --text-caption--line-height: 14px;
+  --text-footnote: 12px;
+  --text-footnote--line-height: 16px;
+  --text-body: 16px;
+  --text-body--line-height: 24px;
+  --text-headline: 20px;
+  --text-headline--line-height: 26px;
+  --text-title2: 32px;
+  --text-title2--line-height: 38px;
+  --text-display: 56px;
+  --text-display--line-height: 60px;
+}
 ```
+
+Font systemowy nie potrzebuje tokenu: `Text` bez klasy `font-*` renderuje się SF Pro na iOS i Robotem na Androidzie. Odstęp liter i wagę dodajesz klasami przy roli:
+
+| Rola | Klasy |
+|------|-------|
+| caption | `text-caption tracking-[0.4px]` |
+| footnote | `text-footnote tracking-[0.2px]` |
+| body | `text-body` |
+| headline | `text-headline tracking-[-0.2px] font-semibold` |
+| title2 | `text-title2 tracking-[-0.4px] font-semibold` |
+| display | `text-display tracking-[-1px] font-display` |
 
 ```tsx
 // Użycie
@@ -162,10 +170,12 @@ module.exports = {
   Body text using system font
 </Text>
 
-<Text className="text-display font-display text-foreground">
+<Text className="text-display tracking-[-1px] font-display text-foreground">
   Hero using custom font
 </Text>
 ```
+
+W `TextInput` nie używaj tokenów z interlinią, bo na iOS przesuwają wpisany tekst w dół; powód i zamiennik są w `forms-keyboard.md`.
 
 ---
 
@@ -334,4 +344,4 @@ export function Display({ className = "", ...props }: TextProps & { className?: 
 - [[resources/color-darkmode.md]] — text contrast WCAG
 - [[resources/ai-pitfalls.md]] — dekoracyjna typografia jako AI signature
 
-*Źródła: Apple HIG Typography (developer.apple.com/design/human-interface-guidelines/typography), Material 3 Typography (m3.material.io/styles/typography), Type Scale (typescale.com), expo-font docs (docs.expo.dev/versions/latest/sdk/font), wiki/typografia-i-spacing. Ostatni update: 2026-05-10.*
+*Źródła: Apple HIG Typography (developer.apple.com/design/human-interface-guidelines/typography), Material 3 Typography (m3.material.io/styles/typography), Type Scale (typescale.com), expo-font docs (docs.expo.dev/versions/latest/sdk/font), wiki/typografia-i-spacing. Ostatni update: 2026-11-05.*

@@ -1,6 +1,6 @@
 # Spacing & Grid — system 8pt
 
-System 8pt grid, tokeny spacingowe, safe areas, Dynamic Island, touch targets, NativeWind preset. Fundament, na którym stoi cały interfejs — jeśli zrobiony dobrze, apka wygląda profesjonalnie nawet z prostymi komponentami.
+System 8pt grid, tokeny spacingowe, safe areas, Dynamic Island, touch targets, tokeny w `@theme`. Fundament, na którym stoi cały interfejs — jeśli zrobiony dobrze, apka wygląda profesjonalnie nawet z prostymi komponentami.
 
 ---
 
@@ -57,7 +57,7 @@ Czasami 8pt jest za luźne. 4pt half-step (`4, 12, 20, 28`) bywa potrzebny.
 
 ## Padding vs margin vs gap — różnice praktyczne
 
-W RN i NativeWind masz wszystkie trzy. Kiedy co?
+W RN i Uniwind masz wszystkie trzy. Kiedy co?
 
 | Konstrukcja | Kiedy używać |
 |-------------|--------------|
@@ -127,6 +127,8 @@ export default function Screen() {
   );
 }
 ```
+
+Uniwind ma też klasy `pt-safe`, `pb-safe`, `px-safe` oraz warianty `pt-safe-or-4` (większa z dwóch wartości) i `pb-safe-offset-4` (inset plus wartość). W wersji Free insety musisz im przekazać: owijasz aplikację w `SafeAreaProvider` i `SafeAreaListener`, a w `onChange` wołasz `Uniwind.updateInsets(insets)`. Szczegóły są w skillu `uniwind`.
 
 ### Kiedy respektować, kiedy ignorować
 
@@ -257,40 +259,33 @@ Reguła: jeśli wygląda nie tak, zaufaj OKU, nie linijce.
 
 ---
 
-## NativeWind preset — `tailwind.config.js`
+## Tokeny w Uniwind — `@theme` w `global.css`
 
-> **Wersja:** przykład poniżej to setup **NativeWind v4 / Tailwind v3** (`tailwind.config.js`, JS-owy `presets`/`theme.extend`). Ten szablon używa **NativeWind v5 preview + Tailwind v4 CSS-first** — pełny setup opisuje skill `expo-tailwind-setup`. Tokeny spacingowe/radius poniżej pozostają aktualne konceptualnie, tylko mechanika configu jest inna w v5 (CSS `@theme`, nie `tailwind.config.js`).
+Uniwind to Tailwind v4 CSS-first: tokeny mieszkają w `global.css`, a pliku konfiguracyjnego JS nie ma. Pełny setup opisuje skill `uniwind`.
 
-```js
-// tailwind.config.js
-module.exports = {
-  content: ["./app/**/*.{js,jsx,ts,tsx}", "./components/**/*.{js,jsx,ts,tsx}"],
-  presets: [require("nativewind/preset")],
-  theme: {
-    extend: {
-      spacing: {
-        // 8pt grid jako default — Tailwind już ma 0.5, 1, 2, 3, 4, 6, 8, 12, 16
-        // Dodatkowe semantic aliases
-        xs: "4px",
-        sm: "8px",
-        md: "12px",
-        lg: "16px",
-        xl: "24px",
-        "2xl": "32px",
-        "3xl": "48px",
-        "4xl": "64px",
-      },
-      borderRadius: {
-        // Tokeny radius — outer = inner + padding (concentric)
-        sm: "6px",
-        md: "10px",
-        lg: "14px",
-        xl: "20px",
-        "2xl": "28px",
-      },
-    },
-  },
-};
+```css
+/* global.css */
+@import 'tailwindcss';
+@import 'uniwind';
+
+@theme {
+  /* 8pt grid jako default: skala Tailwinda (p-2, p-4, gap-3) działa obok tych aliasów */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 12px;
+  --spacing-lg: 16px;
+  --spacing-xl: 24px;
+  --spacing-2xl: 32px;
+  --spacing-3xl: 48px;
+  --spacing-4xl: 64px;
+
+  /* Tokeny radius: outer = inner + padding (concentric) */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-2xl: 28px;
+}
 ```
 
 ```tsx
@@ -300,11 +295,13 @@ module.exports = {
   <Card />
 </View>
 
-// Albo standardowe Tailwind klasy (które NativeWind mapuje na pixele zgodne z 8pt)
+// Albo standardowe klasy Tailwinda: rem = 16 px, więc px-4 = 16 pt, gap-3 = 12 pt
 <View className="px-4 py-6 gap-3">
   <Card />
 </View>
 ```
+
+**1 pt z Figmy = 1 px w klasie.** Wartość arbitralna w `px` równa się punktom (`w-[16px]` = 16 pt), więc liczbę spoza skali przepisujesz z makiety wprost. `@theme` przyjmuje tylko wartości statyczne; funkcje urządzenia, jak `hairlineWidth()`, idą do `@utility`.
 
 ---
 
@@ -418,7 +415,7 @@ concentricInnerRadius = parentRadius - padding
 ## Checklist spacing & grid
 
 - [ ] Wszystkie paddingi/marginesy/gapy = wielokrotność 4 (preferencyjnie 8)
-- [ ] Tokens spacingowe zdefiniowane w `tailwind.config.js`, nie hardcoded
+- [ ] Tokens spacingowe zdefiniowane w `@theme` w `global.css`, nie hardcoded
 - [ ] `gap` zamiast `margin` w kontenerach flex/grid
 - [ ] `useSafeAreaInsets` na każdym screenie z headerem / bottomem
 - [ ] Touch targets minimum 44pt iOS / 48dp Android (recommended 48-56)
@@ -438,4 +435,4 @@ concentricInnerRadius = parentRadius - padding
 - [[resources/polish-checklist.md]] — concentric radius, optical alignment w kontekście "Spacing & layout polish"
 - [[resources/ai-pitfalls.md]] — niespójny spacing jako AI signature
 
-*Źródła: Apple HIG Layout (developer.apple.com/design/human-interface-guidelines/layout), Apple WWDC25 "Get to know the new design system" (concentric shapes 3 typy — primary source), Material 3 Layout (m3.material.io/foundations/layout), Steven Hoober — autor oryginalnych badań thumb zone (4ourth.com/Touch.html, primary research correction), react-native-safe-area-context (github.com/th3rdwave/react-native-safe-area-context), wiki/typografia-i-spacing. Ostatni update: 2026-05-15.*
+*Źródła: Apple HIG Layout (developer.apple.com/design/human-interface-guidelines/layout), Apple WWDC25 "Get to know the new design system" (concentric shapes 3 typy — primary source), Material 3 Layout (m3.material.io/foundations/layout), Steven Hoober — autor oryginalnych badań thumb zone (4ourth.com/Touch.html, primary research correction), react-native-safe-area-context (github.com/th3rdwave/react-native-safe-area-context), wiki/typografia-i-spacing. Ostatni update: 2026-11-05.*

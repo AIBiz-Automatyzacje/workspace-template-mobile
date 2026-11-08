@@ -1,16 +1,16 @@
 ---
 name: sentry-integration
-description: Sentry error tracking i performance monitoring dla React Native (Expo) + Supabase Edge Functions. Aktywuje się przy pracy z błędami, monitoringiem, captureException, error boundary, śledzeniem błędów, diagnostyką, loggerem, Edge Functions, crash, native crash, awaria, wydajność, raportowanie błędów, exception, wyjątek, React Native, Expo.
+description: Sentry error tracking i performance monitoring dla React Native + Supabase Edge Functions. Aktywuje się przy pracy z błędami, monitoringiem, captureException, error boundary, śledzeniem błędów, diagnostyką, loggerem, Edge Functions, crash, awaria, wydajność, raportowanie błędów, exception, wyjątek.
 ---
 
 # Sentry Integration Guidelines
 
-Kompleksowy przewodnik integracji Sentry error tracking i performance monitoring dla projektu React Native (Expo) + Supabase Edge Functions.
+Kompleksowy przewodnik integracji Sentry error tracking i performance monitoring dla projektu Expo + React Native + Supabase Edge Functions. Klient natywny: `references/stack.md`.
 
 > **Stan SDK**
 >
-> - **React Native SDK:** `@sentry/react-native` 8.x (`Sentry.wrap`, `expoRouterIntegration`, `mobileReplayIntegration`) ✅
-> - **Edge Functions:** `@sentry/deno` na Deno 2.x (`beforeSend` działa; SDK **NIE instrumentuje** `Deno.serve` i nie daje scope separation między requestami w tym samym isolate — tak mówi dokumentacja Supabase) ⚠️ — ustaw `defaultIntegrations: false`, używaj `withScope` dla izolacji i `await flush()` przed `Response`
+> - **React Native SDK:** `@sentry/react-native` `>=8.33.0` na Expo SDK 58 (`references/stack.md`)
+> - **Edge Functions:** `npm:@sentry/deno@^10` na Deno 2.x, handler `export default { fetch: withSupabase(...) }` ⚠️ — `denoServeIntegration` z `@sentry/deno` instrumentuje `Deno.serve`, ale jej działania z handlerem `export default { fetch }` na Edge Runtime nie potwierdziliśmy, więc błędy łapiesz ręcznie (`try/catch` → `captureError`); nie podbijaj do v11 (wymaga Deno ≥ 2.8.3, Edge Runtime jest na starszej linii Deno 2.x); ustaw `defaultIntegrations: false` (tak robi oficjalny przykład Supabase), używaj `withScope` dla izolacji i `await flush()` przed `Response`
 
 ## Table of Contents
 
@@ -28,32 +28,31 @@ Kompleksowy przewodnik integracji Sentry error tracking i performance monitoring
 
 ## Critical Rules
 
-**NIGDY NIE ŁAMIESZ TYCH ZASAD:**
-
-1. **ALL ERRORS MUST BE CAPTURED TO SENTRY** - w produkcji każdy błąd musi trafić do Sentry
-2. **NIGDY `console.error` bez Sentry** - w Edge Functions każdy `console.error` musi mieć `captureError()`
-3. **MASKUJ DANE OSOBOWE** - email musi być maskowany: `user@example.com` → `us***@example.com`
-4. **NIE WYSYŁAJ WRAŻLIWYCH DANYCH** - hasła, tokeny, klucze API NIGDY nie trafiają do Sentry
-5. **UŻYWAJ ODPOWIEDNICH POZIOMÓW** - `fatal` tylko dla krytycznych, `error` dla operacji
+1. **Nieoczekiwany błąd trafia do Sentry** — wyjątek bez obsługi, awaria usługi albo błąd bazy wysyłasz przez `logger.error` (frontend) albo `captureError` (Edge Functions), bo w produkcji tylko Sentry pokazuje go operatorowi. Oczekiwana odmowa (błąd walidacji, 401, 403, 404, przekroczony limit) zostaje odpowiedzią z kodem błędu i wpisem `logger.info` (we froncie breadcrumb bez zdarzenia), bo zdarzenia z odmów zakrywają prawdziwe awarie.
+2. **W Edge Functions błąd zapisuje `await captureError(...)`** — helper izoluje kontekst zdarzenia (`withScope`) i robi `flush` przed odpowiedzią; sam log funkcji nie wystarcza, bo nikt go nie przegląda, a izolat może zostać zamrożony, zanim zdarzenie wyjdzie. `console.*` w Edge Functions stoi tylko wewnątrz helperów z `_shared/` (`captureError` i `logger` — wzory w `resources/edge-functions-sentry.md`), bo reguły kodu wyłączają go z reszty kodu produkcyjnego.
+3. **Użytkownika identyfikuje `id`** — `setSentryUser`, `setUser` i kontekst przekazują tylko identyfikator, bez emaila i imienia, a `beforeSend` maskuje email, który trafi do zdarzenia mimo to (`us***@example.com`), bo zdarzenie widzi każdy z dostępem do projektu Sentry, a RODO wymaga minimalizacji danych.
+4. **Kontekst zdarzenia to identyfikatory i nazwy operacji** — hasła, tokeny, klucze API, nagłówek `Authorization` i ciała żądań zostają poza `setContext`, tagami i breadcrumbami, bo Sentry to zewnętrzny serwis i sekret wysłany tam trzeba uznać za ujawniony.
+5. **Poziom odpowiada skutkowi** — `fatal` tylko dla awarii całego systemu, `error` dla nieudanej operacji użytkownika, `warning` dla problemu odwracalnego (tabela Error Levels niżej), bo zawyżony poziom uczy operatora ignorować alerty.
 
 ---
 
 ## Dobre praktyki (Edge Functions / Supabase)
 
-`@sentry/deno` działa na Supabase Edge Runtime (Deno 2.x) i wspiera `beforeSend`, ale
-**nie instrumentuje `Deno.serve`** — oficjalna dokumentacja Supabase mówi wprost, że SDK nie
-zapewnia scope separation między requestami w tym samym isolate. Dlatego izolację kontekstu
-trzeba robić ręcznie przez `withScope()`. Nadal stosuj:
+`@sentry/deno` (v10) działa na Supabase Edge Runtime (Deno 2.x) ze wsparciem `beforeSend`.
+Handler piszemy jako `export default { fetch: withSupabase(...) }` (`Deno.serve` to legacy), a
+`denoServeIntegration` dotyczy `Deno.serve`, a v11 wymaga Deno ≥ 2.8.3, którego Edge Runtime nie ma — instrumentacja jest ręczna (`try/catch`).
+Oficjalny przykład Supabase ustawia `defaultIntegrations: false` na Edge Runtime, bo bez tego nie
+ma gwarancji scope separation między requestami w tym samym isolate. Nadal stosuj:
 
 | Zasada | Dlaczego |
 |--------|----------|
-| `defaultIntegrations: false` w `Sentry.init()` | Bezpieczny default, bo SDK i tak nie instrumentuje `Deno.serve` ani nie daje scope separation |
+| `defaultIntegrations: false` w `Sentry.init()` | Bezpieczny default dopóki nie zweryfikujesz scope separation na swoim runtime |
 | Ustawiaj kontekst przez `Sentry.withScope()` | Izolacja per operacja; unikasz wycieku tagów między requestami |
 | Nie ustawiaj globalnych tagów per-request | Globalny scope jest współdzielony w obrębie isolate'u |
 | `await Sentry.flush()` przed `Response` | Isolate może zostać zamrożony zaraz po odpowiedzi |
 | Maskuj PII w `beforeSend` | Jeden centralny punkt dla wszystkich zdarzeń |
 
-**Zawsze używaj tego wzorca:**
+**Wzorzec kontekstu per request:**
 ```typescript
 // ŹLE - kontekst wycieknie do innych requestów
 Sentry.setTag('user_id', userId);
@@ -83,40 +82,20 @@ Szczegóły: [edge-functions-sentry.md](resources/edge-functions-sentry.md)
 
 ## Quick Reference
 
-### Mobile (React Native / Expo)
+### Aplikacja (React Native)
 
-**Inicjalizacja w `app/_layout.tsx` (Expo Router root, `Sentry.wrap`):**
-```typescript
-import * as Sentry from '@sentry/react-native';
-import { isRunningInExpoGo } from 'expo';
-
-Sentry.init({
-  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-  tracesSampleRate: 0.1, // 10% — nie 1.0, patrz sekcja RN niżej
-  integrations: [
-    Sentry.expoRouterIntegration({
-      enableTimeToInitialDisplay: !isRunningInExpoGo(),
-    }),
-  ],
-});
-
-function RootLayout() {
-  // ...
-}
-
-export default Sentry.wrap(RootLayout);
-```
+**Inicjalizacja i instalacja:** `references/stack.md`, sekcje „Instalacja” i „Inicjalizacja”.
 
 **Użycie loggera (preferowane):**
 ```typescript
-import { logger } from '@/lib/logger';
 import { Alert } from 'react-native';
+import { logger } from '@/lib/logger';
 
 try {
   await riskyOperation();
 } catch (error) {
   logger.error('Operacja nie powiodła się', error);
-  Alert.alert('Błąd', 'Wystąpił błąd. Spróbuj ponownie.');
+  Alert.alert('Wystąpił błąd');
 }
 ```
 
@@ -131,43 +110,47 @@ Sentry.withScope((scope) => {
 });
 ```
 
-Pełny setup (plugin Expo, sourcemaps build+OTA, Session Replay, crash capture natywny vs Expo Go) —
-sekcja [React Native (Expo)](#react-native-expo) niżej i
-[react-native-sentry-patterns.md](resources/react-native-sentry-patterns.md).
-
 ### Edge Functions (Deno)
 
-**Każda funkcja MUSI mieć Sentry z `withScope`:**
+**Edge Function z Sentry i `withScope`:**
 ```typescript
+import { withSupabase } from 'npm:@supabase/server@^1';
 import { initSentry, captureError } from '../_shared/sentry.ts';
 
 const Sentry = initSentry('function-name');
 
-// WAŻNE: Deno.serve zamiast serve z deno.land/std
-Deno.serve(async (req) => {
-  try {
-    // logika
-  } catch (error) {
-    // ZAWSZE używaj captureError (używa withScope wewnętrznie)
-    captureError(error, {
-      operation: 'checkout',
-      user_id: userId  // NIE user_email (GDPR)
-    });
-    return new Response(JSON.stringify({ error: 'Error' }), { status: 500 });
-  }
-});
+// export default { fetch } + withSupabase zamiast Deno.serve.
+// Tryb auth per funkcja ('user' | 'publishable' | 'secret' | 'none');
+// dla trybu innego niż 'user' -> verify_jwt = false w supabase/config.toml.
+export default {
+  fetch: withSupabase({ auth: 'user' }, async (req, ctx) => {
+    try {
+      // logika — ctx.supabase (RLS), ctx.userClaims?.id = user_id
+    } catch (error) {
+      // await captureError: withScope + flush wewnętrznie
+      await captureError(error, {
+        operation: 'checkout',
+        user_id: ctx.userClaims?.id  // identyfikator, bez emaila (zasada 3)
+      });
+      // koperta błędu z reguł kodu; szczegóły tylko w Sentry
+      return Response.json(
+        { data: null, error: { code: 'INTERNAL', message: 'Operacja nie powiodła się' } },
+        { status: 500 },
+      );
+    }
+  }),
+};
 ```
 
 ---
 
 ## Context Enrichment
 
-**ZAWSZE dodawaj kontekst do błędów:**
+**Kontekst błędu (tagi, kontekst operacji, breadcrumbs):**
 
 ```typescript
-// DOBRZE - bogaty kontekst
+// DOBRZE - bogaty kontekst (użytkownika ustawia setSentryUser przy logowaniu)
 Sentry.withScope((scope) => {
-  scope.setUser({ id: userId, email: maskedEmail });
   scope.setTag('service', 'payments');
   scope.setTag('endpoint', '/checkout');
   scope.setContext('operation', {
@@ -191,10 +174,10 @@ Sentry.captureException(error); // Skąd? Co? Dla kogo?
 
 ## GDPR Compliance
 
-**Maskowanie emaili - OBOWIĄZKOWE:**
+**Użytkownik przez `id`, maskowanie emaila jako siatka (zasada 3):**
 
 ```typescript
-// W beforeSend
+// W beforeSend — email, który trafił do zdarzenia mimo zasady 3
 beforeSend(event) {
   if (event.user?.email) {
     event.user.email = event.user.email.replace(/^(.{2}).*(@.*)$/, '$1***$2');
@@ -203,12 +186,9 @@ beforeSend(event) {
 }
 
 // W setSentryUser
-export function setSentryUser(user: { id: string; email: string } | null) {
+export function setSentryUser(user: { id: string } | null) {
   if (user) {
-    Sentry.setUser({
-      id: user.id,
-      email: user.email.replace(/^(.{2}).*(@.*)$/, '$1***$2'),
-    });
+    Sentry.setUser({ id: user.id });
   } else {
     Sentry.setUser(null);
   }
@@ -222,18 +202,18 @@ export function setSentryUser(user: { id: string; email: string } | null) {
 Przed każdym PR sprawdź:
 
 - [ ] Zaimportowano Sentry lub odpowiedni helper
-- [ ] Wszystkie bloki try/catch wysyłają do Sentry
+- [ ] Każdy nieoczekiwany błąd trafia do Sentry; oczekiwane odmowy nie (zasada 1)
 - [ ] Dodano znaczący kontekst (tagi, breadcrumbs)
 - [ ] Użyto odpowiedniego poziomu błędu
 - [ ] Brak wrażliwych danych w event (hasła, tokeny)
-- [ ] Email użytkownika jest maskowany
+- [ ] Użytkownik w zdarzeniu tylko przez `id`; `beforeSend` maskuje email
 - [ ] Przetestowano ścieżki błędów
 
 ---
 
 ## Common Mistakes
 
-**NIE RÓB:**
+**Unikaj:**
 ```typescript
 // Połykanie błędów
 try {
@@ -248,17 +228,17 @@ try {
 }
 
 // Wrażliwe dane
-Sentry.setContext('auth', { token: userToken }); // NIE!
+Sentry.setContext('auth', { token: userToken }); // token w zewnętrznym serwisie
 ```
 
-**RÓB:**
+**Zamiast tego:**
 ```typescript
-// Zawsze capture + informacja dla użytkownika
+// Capture + informacja dla użytkownika
 try {
   await operation();
 } catch (error) {
   logger.error('Operacja nie powiodła się', error);
-  Alert.alert('Błąd', 'Wystąpił błąd. Spróbuj ponownie.');
+  Alert.alert('Wystąpił błąd. Spróbuj ponownie.');
 }
 
 // Bezpieczny kontekst
@@ -270,156 +250,10 @@ Sentry.setContext('auth', {
 
 ---
 
-## React Native (Expo)
-
-Sentry w aplikacji mobilnej ma inny SDK, inny sourcemaps flow i inną integrację z routingiem niż web.
-
-### Setup `@sentry/react-native` (NIE `@sentry/react`)
-
-```bash
-bunx expo install @sentry/react-native
-```
-
-W `app.json` dodaj plugin Sentry żeby sourcemaps były automatycznie uploadowane przy `eas build`:
-
-```json
-{
-  "expo": {
-    "plugins": [
-      [
-        "@sentry/react-native/expo",
-        {
-          "organization": "your-org",
-          "project": "your-project",
-          "url": "https://sentry.io/"
-        }
-      ]
-    ]
-  }
-}
-```
-
-### Inicjalizacja w `app/_layout.tsx` (Expo Router root)
-
-Kanoniczna integracja nawigacji dla Expo Router to `Sentry.expoRouterIntegration()` — czyta
-wewnętrzny navigation ref Expo Router sama, **bez** ręcznego `useNavigationContainerRef` +
-`registerNavigationContainer` (to był wzorzec dla `reactNavigationIntegration`, nieaktualny
-dla tego szablonu). Źródło: https://docs.sentry.io/platforms/react-native/tracing/instrumentation/expo-router/
-
-```typescript
-import * as Sentry from '@sentry/react-native';
-import { isRunningInExpoGo } from 'expo';
-
-Sentry.init({
-  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-  enableNative: !isRunningInExpoGo(),  // crashy native — tylko w dev clients/preview/release
-  tracesSampleRate: 0.1, // 10% transakcji — 1.0 tylko tymczasowo w dev do debugowania
-  integrations: [
-    Sentry.expoRouterIntegration({
-      enableTimeToInitialDisplay: !isRunningInExpoGo(), // niewspierane w Expo Go
-    }),
-  ],
-});
-
-function RootLayout() {
-  // ...
-}
-
-export default Sentry.wrap(RootLayout);
-```
-
-`enableAutoSessionTracking` nie jest tu potrzebne — sesje (release health) są włączone
-domyślnie w `@sentry/react-native` od dawna, jawne ustawienie na `true` jest redundantne.
-
-### Sourcemaps przez EAS Build
-
-Plugin Sentry (skonfigurowany powyżej) automatycznie uploaduje sourcemaps **i debug symbole**
-(dSYM na iOS, ProGuard/NDK mapping na Android) przy każdym `eas build` na podstawie
-`SENTRY_AUTH_TOKEN` w EAS env:
-
-```bash
-eas env:create --name SENTRY_AUTH_TOKEN --value "$TOKEN" --visibility secret --environment production
-```
-
-Powtórz z `--environment preview` jeśli chcesz auto-upload też dla buildów preview.
-`eas secret:create` jest nieaktualne — eas-cli ma dziś tylko rodzinę `eas env:*`.
-
-**Bez tokena:** stack traces w Sentry pokażą minified bundle (nieczytelny). Token jest wymagany dla każdego release/preview profilu.
-
-### Sourcemaps przy EAS Update (OTA)
-
-Auto-upload z pluginu działa tylko przy natywnym `eas build` — **OTA update (`eas update`) go nie
-wyzwala**. Po każdym OTA update wgraj sourcemapy ręcznie:
-
-```bash
-eas update --branch production
-npx sentry-expo-upload-sourcemaps dist
-```
-
-Bez tego kroku crashe zgłoszone po OTA update pokażą zminifikowany stack trace mimo poprawnie
-skonfigurowanego pluginu.
-
-### Session Replay (Mobile)
-
-Wymaga `@sentry/react-native >= 6.5.0`. Nagrywa sesje jako sekwencję klatek do diagnozy "co user
-widział przed crashem" — dodaj `Sentry.mobileReplayIntegration()`:
-
-```typescript
-Sentry.init({
-  dsn: process.env.EXPO_PUBLIC_SENTRY_DSN,
-  replaysSessionSampleRate: 0.1, // 10% normalnych sesji
-  replaysOnErrorSampleRate: 1.0, // 100% sesji z błędem
-  integrations: [
-    Sentry.expoRouterIntegration({ enableTimeToInitialDisplay: !isRunningInExpoGo() }),
-    Sentry.mobileReplayIntegration(),
-  ],
-});
-```
-
-**GDPR:** maskowanie tekstu, obrazów i webview jest **domyślnie włączone** (agresywne). Wyłączaj
-tylko selektywnie (`maskAllText: false` itp.) i tylko dla ekranów bez PII — spójnie z maskowaniem
-emaili z sekcji [GDPR Compliance](#gdpr-compliance).
-
-### Crash capture — JS errors + native crashes
-
-`@sentry/react-native` łapie:
-- **JS errors:** automatycznie (przez globalErrorHandler)
-- **Native crashes (iOS Swift / Android Kotlin):** automatycznie pod warunkiem `enableNative: true` i build z dev-client / preview / release. Expo Go **nie raportuje** native crashy (sandbox).
-- **ANR (Application Not Responding) Android:** wbudowane od `@sentry/react-native@5+`
-- **Promise rejections:** automatycznie
-
-### Navigation breadcrumbs
-
-`expoRouterIntegration` automatycznie loguje każdą zmianę route jako breadcrumb. W panelu Sentry zobaczysz: `Login → Dashboard → Settings → [crash]`. Krytyczne dla diagnozy "co user robił przed crashem".
-
-### Mobile-specific context
-
-```typescript
-import * as Device from 'expo-device';
-import * as Application from 'expo-application';
-
-Sentry.setContext('device', {
-  model: Device.modelName,                          // np. "iPhone 15 Pro"
-  osName: Device.osName,                            // "iOS" / "Android"
-  osVersion: Device.osVersion,                      // "18.0"
-  appVersion: Application.nativeApplicationVersion, // "1.2.3"
-  buildNumber: Application.nativeBuildVersion,      // "42"
-});
-```
-
-To pomaga filtrować w Sentry per-platform / per-version.
-
----
-
 ## Resources
 
 Szczegółowe wzorce znajdują się w:
 
-- **[react-native-sentry-patterns.md](resources/react-native-sentry-patterns.md)** - Pełna konfiguracja `@sentry/react-native` dla tego szablonu: init, `Sentry.wrap`, expoRouterIntegration, mobileReplayIntegration, error boundary RN, native crashe vs Expo Go, sourcemaps (build + OTA), debug symbole, GDPR
-- **[react-sentry-patterns.md](resources/react-sentry-patterns.md)** - ⚠️ TYLKO web (React + Vite) — zostaje jako referencja, nie dla tego szablonu mobile
+- **[references/stack.md](references/stack.md)** - Klient natywny: instalacja, wersja, PII, sourcemapy
+- **[resources/react-native-sentry-patterns.md](resources/react-native-sentry-patterns.md)** - Plugin, Metro, Expo Router, Session Replay
 - **[edge-functions-sentry.md](resources/edge-functions-sentry.md)** - Wzorce dla Supabase Edge Functions (Deno), shared helpers, Stripe tracking
-
----
-
-**Skill Status**: COMPLETE + sekcja React Native (Expo) zaktualizowana lipiec 2026 (expoRouterIntegration, mobileReplayIntegration, eas env:*, OTA sourcemaps)
-**Progressive Disclosure**: Szczegółowe wzorce w plikach `resources/`
