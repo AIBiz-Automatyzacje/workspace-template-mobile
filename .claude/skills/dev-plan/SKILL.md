@@ -53,7 +53,7 @@ Koszt: w etapie 3 vibersi `/dev-plan` ruszył po `/dev-prep` z 215k kontekstu, c
 #### 0.1 Wznowienie
 
 - Użytkownik wskazuje istniejący plan albo w `docs/plans/` jest świeży plan na ten temat → przeczytaj go i zapytaj, czy aktualizować w miejscu, czy pisać nowy. Przy aktualizacji zachowaj odhaczone checkboxy.
-- Istnieje `docs/active/<zadanie>/` → to wznowienie zadania. Pokaż stan (`.autopilot-state.json`, `review-faza-N.md`, odhaczone pozycje) i zapytaj, czy tylko poprawić plan techniczny, czy przerwać. Pliki zadania z postępem zostają — `plan.mjs generuj --zapisz --nadpisz` odmawia, gdy zadanie ma przebieg.
+- Istnieje `docs/active/<zadanie>/` → to wznowienie zadania. Pokaż stan (`.autopilot-state.json`, `review-faza-N.md`, odhaczone pozycje) i zapytaj, czy tylko poprawić plan techniczny, czy przerwać. Pliki zadania z postępem zostają — `plan.mjs generuj --zapisz --nadpisz` odmawia, gdy zadanie ma przebieg. Zmianę planu technicznego po starcie (decyzja operatora po zatrzymaniu, pozycja przeniesiona do innej jednostki, nowa jednostka w fazie, która jeszcze nie ruszyła) przenosisz do pliku zadań przez `node .claude/scripts/plan/plan.mjs odswiez docs/active/<zadanie>`: najpierw bez `--zapisz` (lista zmian), potem z `--zapisz`. Skrypt nakłada różnicę między planem z `HEAD` (albo `--od <commit sprzed zmiany>`, gdy zmiana planu jest już w commicie) a planem na dysku; odhaczenia i linie dopisane przez przebieg zostają, a pozycja przeniesiona między jednostkami zabiera odhaczenie. Odmowę (nowa pozycja w zbudowanej fazie albo jednostce, zmiana faz, konflikt z linią zmienioną przez przebieg) pokazujesz operatorowi. `.autopilot-state.json` nie edytujesz ani ty, ani skrypt.
 
 #### 0.2 Dokument źródłowy
 
@@ -76,6 +76,7 @@ Zrób glob `docs/operator/*.md` (bez `*-smoke.md`) i sprawdź **frontmattery**: 
 - sekcja „Makiety” zasila 1.6, „Decyzje” — 0.5, „Konta, konsole, sekrety” i „Assety” — 3.7;
 - ogłoś: „Znalazłem checklistę operatora etapu: `<ścieżka>` (N pozycji, M nieodhaczonych) — uzupełnię ją po zbudowaniu IU.”;
 - nieodhaczone pozycje `[blokuje: planowanie]` wymień i zapytaj, czy planować mimo nich (plan powstanie z lukami), czy przerwać.
+- decyzję z wypełnionym „Ustalono”, która jest sprzeczna z dokumentem źródłowym (linia `Zmienia wymaganie:` przy decyzji albo rozjazd widoczny przy czytaniu obu dokumentów), pokaż przez `AskUserQuestion`: wymaganie, decyzja z datą i proponowane nowe brzmienie wymagania. Po zgodzie popraw wymaganie w dokumencie źródłowym z dopiskiem `(zmienione decyzją <nr> z <data>, <ścieżka checklisty>)` i planuj z poprawionego źródła. Odmowa to bloker z 0.5: z dwóch sprzecznych źródeł planu nie piszesz, bo builder dostaje oba (aa-exam E3: decyzja D1 w checkliście nowsza niż R48 w wymaganiach).
 
 Brak checklisty jest poprawny — 5.2b utworzy krótką listę, jeśli będzie co wpisać.
 
@@ -146,6 +147,8 @@ Klasyfikacja jest wstępna: IU delegowany do `feature-builder-ui` lub `feature-b
 
 Zbierz pytania z odroczonych pytań źródła, luk z researchu i decyzji technicznych potrzebnych do planu. Każde jest **rozwiązane w planowaniu** (odpowiedź poznawalna z repo, dokumentacji albo wyboru użytkownika) albo **odroczone do implementacji** (zależy od kodu, zachowania runtime'u, odkryć w wykonaniu). Użytkownika pytasz tylko o to, co zmienia architekturę, zakres, kolejność albo ryzyko i nie da się wywnioskować. Nie uruchamiasz testów, nie budujesz aplikacji i nie badasz runtime'u.
 
+Przy przebudowie istniejącego ekranu albo maila bez zasady „znika czy zostaje” w źródle i w checkliście pytasz o nią tutaj: „Gdy makieta nie pokaże czegoś, co obecna wersja ma: znika czy zostaje?”, z opcjami `Znika — makieta jest kompletna`, `Zostają treść i dane, zmienia się wygląd`, `Decyzja przy każdym elemencie` (wtedy pytasz o elementy z pól „Znika z obecnej wersji”). Odpowiedź zapisujesz w „Kluczowych decyzjach” planu.
+
 ### Faza 3: Struktura planu
 
 #### 3.1 Tytuł i plik
@@ -172,11 +175,12 @@ Numeracja IU jest ciągła przez cały plan (IU-1, IU-2, …).
 
 #### 3.4 Pola IU
 
-Format jednostki i całego planu jest w `references/szablon-planu.md` — przeczytaj go przed pisaniem (Faza 4). Pola: Cel, Wymagania, Zależności, Pliki (tabela, 3.6), Delegate to (3.5), Makiety (IU ui/fullstack w planie z `figma_screens`), Skills in play, Podejście, Notatka wykonawcza (opcjonalna), Teksty (verbatim) (obowiązkowe, gdy IU renderuje zatwierdzone treści), Wzorce do naśladowania, Scenariusze testowe, Weryfikacja, Operator checklist (opcjonalna).
+Format jednostki i całego planu jest w `references/szablon-planu.md` — przeczytaj go przed pisaniem (Faza 4). Pola: Cel, Wymagania, Zależności, Pliki (tabela, 3.6), Delegate to (3.5), Makiety (IU ui/fullstack w planie z `figma_screens`), Skills in play, Podejście, Notatka wykonawcza (opcjonalna), Teksty (verbatim) (obowiązkowe, gdy IU renderuje zatwierdzone treści), Znika z obecnej wersji (IU z makietami, która modyfikuje istniejący plik), Wzorce do naśladowania, Scenariusze testowe, Weryfikacja, Operator checklist (opcjonalna).
 
 - **Makiety** — w planie z `figma_screens` każda IU ui/fullstack wymienia ekrany, które buduje (`**Makiety:** \`logowanie-komputer\`, \`logowanie-telefon\``), albo `—`. Planner wkleja builderowi SPEC i PNG tylko tych ekranów (`plan.mjs designerski`); IU bez pola dostaje wszystkie ekrany i cały SPEC, a `sprawdz` daje uwagę, bo pełny SPEC czytany przez każdego buildera w każdej turze to ok. 0,6 M na etap z 8 builderami UI.
 - **Odwołanie do decyzji niesie jej treść.** IU trafia do buildera jako osobny prompt — builder nie widzi reszty planu. Przy każdym odwołaniu dopisz zdanie treści w nawiasie: `strażnik regresji R2 (przy zmianie CTA istniejący tracking zostaje — nowy event, nie modyfikacja)`.
 - **Teksty widoczne dla użytkownika** (etykiety, nagłówki, komunikaty błędów) wklejasz dosłownie w `**Teksty (verbatim):**`, nie przez odwołanie do punktu checklisty — inaczej builder wpisze własną wersję, a review zgłosi rozjazd z zamówieniem.
+- **Znika z obecnej wersji** — IU, która modyfikuje istniejący ekran albo mail według makiety, wypisuje elementy obecnej wersji, których makieta nie ma (tekst, dana jak imię albo kwota, stan, zachowanie), z decyzją przy każdym: `- powitanie z imieniem (email.service.ts:58) — znika (R25: czego makieta nie ma, znika)` albo `— zostaje (D3), pod nagłówkiem`. Elementy bierzesz z pola „Dziś pokazuje” checklisty (0.3), a bez niego z plików `Modyfikuj` tej IU; decyzję z zasady w wymaganiach albo w checkliście. Bez zasady pytasz w Fazie 2: decyzji nie wymyślasz i nie zostawiasz builderowi. Element, który zostaje, ma tekst w „Teksty (verbatim)” i scenariusz; element, który znika, nie wraca w Podejściu ani w scenariuszach, także gdy ma go plik z „Wzorców do naśladowania”. `—`, gdy nic nie znika. `sprawdz` daje uwagę przy IU z makietami i wierszem `Modyfikuj` bez tego pola, a planner fazy przekazuje pole builderowi z zakazem przenoszenia tych elementów z obecnego pliku i ze wzorca (aa-exam E3: podejście i test z obecnego maila z imieniem, makieta bez powitania, run zatrzymany pytaniem buildera).
 - **Scenariusze testowe** — każda pozycja zaczyna się typem: `[Unit]` (test kodu), `[E2E]` (flow w przeglądarce, 3.4b), `[Manual]` (krok człowieka, np. fizyczne urządzenie). Feature-bearing IU ma plik testu w tabeli plików.
 - **Weryfikacja** — tylko kryteria, które scribe review domknie sam: każda pozycja ma komendę w backtickach (`pnpm typecheck`, test jednego pliku wg `.claude/stack/walidacja.md`, sekcja „Runner testów i build”, `grep …`), opisaną oczekiwanym wynikiem. Runner z `e2e/` idzie wyłącznie jako `[E2E]` (3.4b) — bez znacznika scribe uruchomiłby go bez środowiska e2e. Krok człowieka idzie do `Operator checklist` albo `[Manual]`.
 - **Operator checklist** — kroki człowieka po implementacji (akceptacja designera, test na urządzeniu, `supabase db push --linked` na dev/prod po merge'u — w CLI 3 bez flagi celu idzie na lokalny stack). Trafiają do sekcji operatora fazy i do smoke'u operatora przy archiwizacji.
@@ -196,7 +200,7 @@ Autonomiczne E2E działa na dedykowanym projekcie testowym z `.env.e2e`, nigdy n
 - Realtime: jeden klient (render, wysłanie, optimistic + echo) jest `[E2E]`; dwóch klientów na żywo → `[Manual]`.
 - Wysyłka maili albo SMS w scenariuszach fazy (rejestracja, reset hasła, ponowna wysyłka, link logowania): policz wysyłki wszystkich scenariuszy `[E2E]` fazy razy dwa, bo re-review po fixie i ponowienie scenariusza wysyłają w tej samej godzinie jeszcze raz. Porównaj tę liczbę z limitem godzinowym usługi na projekcie e2e, odczytanym z jego konfiguracji, nie z dokumentacji ani z researchu. Supabase Auth bez własnego SMTP ma domyślnie 2 maile na godzinę, a Send Email hook tego limitu nie omija; odczyt robisz poleceniem `curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" https://api.supabase.com/v1/projects/<ref e2e>/config/auth | jq '{rate_limit_email_sent, rate_limit_sms_sent}'`. Całej odpowiedzi nie wypisujesz, bo zawiera sekrety (hasło SMTP, sekrety dostawców logowania). Limit mniejszy od policzonej liczby → pozycja w checkliście przygotowania (3.7) z podniesieniem limitu na projekcie e2e i markerem `[blokuje: faza N]`, bo kolejna wysyłka w godzinie kończy scenariusz błędem limitu zamiast wynikiem.
 - Projekt bez `.env.e2e`: scenariusz zostaje `[E2E]` tylko z pozycją setupu środowiska w checkliście (3.7). Opt-out do `[Manual]` to decyzja operatora: pytasz o nią, podając liczbę pozycji ręcznych, i proponujesz `/weryfikacja-setup` (aa-exam: opt-out zamienił 29 pozycji w klikanie na produkcji, choć stos lokalny działał).
-- `[Manual]` dzielisz: wymagające człowieka albo produkcji zostają `[Manual]`; wykonalne przez agenta lokalnie (przeglądarka, curl, baza testowa) zapisujesz jako `[Manual agent]`, które sesja smoke'u wykonuje przed pytaniem operatora.
+- `[Manual]` dzielisz: wymagające człowieka albo produkcji zostają `[Manual]`; wykonalne przez agenta lokalnie (przeglądarka, curl, baza testowa) zapisujesz jako `[Manual] agent:` (typ zostaje `[Manual]`, bo `plan.mjs sprawdz` zna tylko `[Unit]`, `[E2E]` i `[Manual]`), które sesja smoke'u wykonuje przed pytaniem operatora.
 - Scenariusz, który zapisuje albo czyta przez serwer aplikacji, albo sprawdza status HTTP lub meta trasy renderowanej przez serwer: start serwera, sonda i adres w linii scenariusza wg `.claude/stack/plan-e2e.md`, sekcja „Serwer aplikacji w scenariuszu”.
 
 #### 3.5 Builder IU
@@ -227,7 +231,7 @@ Sekcja planu `## Rejestr stałych` — tabela `| Stała | Wartość | Plik | IU-
 
 #### 3.6c Części PR
 
-Bot recenzji PR obejmuje do 150 plików. `plan.mjs sprawdz` (6.2) liczy szacunek plików do recenzji: ścieżki z tabel plików IU po filtrach `.coderabbit.yaml` plus test obok każdego pliku kodu bez testu w planie — pole `rozmiarPr` (per faza, per część i `propozycja`). Szacunek powyżej 150 wymaga sekcji `## Części PR` z tabelą `| Część | Fazy |` (np. `| 1 | 1–3 |`, `| 2 | 4–6 |`): cięcie tylko na granicy faz, części pokrywają fazy po kolei, każda poniżej 150 — punkt wyjścia to `propozycja` ze `sprawdz`. Faza, która sama ma ponad 150, to błąd — dzielisz fazę, bo cięcie przechodzi tylko między fazami. Archiwizacja zmierzy części na commitach końca faz, a `/dev-pr --czesc N` wyśle je kolejno.
+Bot recenzji PR obejmuje do 150 plików. `plan.mjs sprawdz` (6.2) liczy szacunek plików do recenzji: ścieżki z tabel plików IU po filtrach `.coderabbit.yaml` plus test obok każdego pliku kodu bez testu w planie — pole `rozmiarPr` (per faza, per część i `propozycja`). Szacunek powyżej 150 wymaga sekcji `## Części PR` z tabelą `| Część | Fazy |` (np. `| 1 | 1–3 |`, `| 2 | 4–6 |`): cięcie tylko na granicy faz, części pokrywają fazy po kolei, każda poniżej 150 — punkt wyjścia to `propozycja` ze `sprawdz`. Faza, która sama ma ponad 150, to błąd — dzielisz fazę, bo cięcie przechodzi tylko między fazami. Archiwizacja zmierzy części na commitach końca faz, a `/dev-pr --czesc N` wyśle je kolejno. Projekt bez bota recenzji (`.claude/projekt.json`: `recenzjaPr: "bez-bota"`, zapisuje go `/dev-pr` albo `tryb-recenzji.mjs --ustaw bez-bota`) nie ma tego progu: `sprawdz` daje przy szacunku powyżej 150 uwagę zamiast błędu, liczy pliki z wykluczeniami domyślnymi (`docs/`, `.claude/`, lockfile), a sekcję `## Części PR` piszesz tylko wtedy, gdy operator chce wysłać zmianę w kilku PR-ach z innego powodu, np. wdrożenia etapami.
 
 #### 3.7 Wymagania wstępne operatora
 
@@ -253,6 +257,7 @@ Plan nie zawiera kodu implementacji (chyba że kształt kodu jest artefaktem des
 - Każda IU: konkretna, w kolejności zależności, z `Delegate to:` wg 3.5 i `Skills in play:` zgodnym z builderem, z tabelą plików wg 3.6, z odwołaniami do decyzji niosącymi treść.
 - Frontmatter ma `design_md`, `figma_spec`, `figma_screens`, `operator_prep` — ścieżki albo jawne `null` / `{}`; `figma_spec` i ekrany `figma_screens` istnieją na dysku. Plan z IU ui/fullstack przeszedł kroki B–C z 1.6 (`figma_spec: null` tylko jako świadoma odpowiedź „projektujemy z głowy”).
 - Scenariusze są konkretne, ale nie są kodem testu; Weryfikacja wg 3.4; `[E2E]` wg 3.4b.
+- Każda IU z makietami i wierszem `Modyfikuj` ma pole „Znika z obecnej wersji”; element z decyzją „znika” nie występuje w Podejściu, Tekstach ani scenariuszach tej IU.
 - Twierdzenia o stanie repo w Ryzykach i Kluczowych decyzjach sprawdzone w kodzie, nie z pamięci: ryzyko budżetu paczki opierasz na routerze (które trasy ładują się przez `lazy(`) i wypisujesz, co faktycznie trafia do pliku startowego (vibersi etap 5: plan liczył widoki strony projektu do pliku startowego, a strona była już leniwa).
 - „Wymagania wstępne operatora” zgadzają się z `operator_prep`; plan z `[E2E]` bez `.env.e2e` ma pozycję setupu albo opt-out do `[Manual]`.
 
@@ -299,7 +304,7 @@ Wynik JSON: `bledy` i `uwagi` z numerami linii i identyfikatorami IU. Każdy bł
 node .claude/scripts/plan/plan.mjs generuj <docs/plans/plik-planu.md> --zapisz [--nazwa <zadanie>]
 ```
 
-Skrypt zapisuje `docs/active/<zadanie>/<zadanie>-plan.md`, `-kontekst.md` i `-zadania.md` i zwraca liczniki (fazy, IU, checkboxy implementacyjne, `Test:`, `Weryfikacja:`, `[E2E]`, pozycje operatora). Plików zadania nie piszesz ani nie poprawiasz ręcznie — zmiana idzie przez plan i ponowne `generuj`. Odmowa „katalog zadania już istnieje” przy wznowieniu bez przebiegu autopilota → `--nadpisz`; odmowa z powodu przebiegu (stan autopilota, raport review, odhaczone pozycje, wpisy dziennika) → pokaż ją i zapytaj, jak dalej.
+Skrypt zapisuje `docs/active/<zadanie>/<zadanie>-plan.md`, `-kontekst.md` i `-zadania.md` i zwraca liczniki (fazy, IU, checkboxy implementacyjne, `Test:`, `Weryfikacja:`, `[E2E]`, pozycje operatora). Plików zadania nie piszesz ani nie poprawiasz ręcznie — zmiana idzie przez plan i ponowne `generuj`. Odmowa „katalog zadania już istnieje” przy wznowieniu bez przebiegu autopilota → `--nadpisz`; odmowa z powodu przebiegu (stan autopilota, raport review, odhaczone pozycje, wpisy dziennika) → zmiana planu idzie przez `plan.mjs odswiez` (0.1); pokaż odmowę i zapytaj, jak dalej, tylko gdy operator chce zadanie wygenerować od nowa.
 
 #### 6.5 Commit inicjalny
 
@@ -311,13 +316,14 @@ Skrypt zapisuje `docs/active/<zadanie>/<zadanie>-plan.md`, `-kontekst.md` i `-za
 node .claude/scripts/plan/plan.mjs gotowosc docs/active/<zadanie>
 ```
 
-Wynik ma sześć pozycji, każdą wypisujesz w handoffie:
+Wynik ma siedem pozycji, każdą wypisujesz w handoffie:
 
 - `plan` — błędy strukturalne planu technicznego (po 6.2 zwykle puste);
 - `e2e` — scenariusze `[E2E]` i makiety `figma_screens` vs środowisko: to samo sprawdzenie co bootstrap autopilota (`.env.e2e` w `.gitignore`, klucze bazy e2e, baza inna niż dev, `migrations.sum`, kontrola narzędzia jazdy z adaptera E2E), bez startu serwera. Brak `.env.e2e` przy scenariuszach albo pozycja w `bledy` zatrzyma autopilota przed fazą 1 → setup albo poprawka wg `.claude/templates/e2e-env/README.md` (jednorazowo, ~30 min); przy scenariuszach druga droga to opt-out `[E2E]` → `[Manual]` w planie i ponowne `generuj --nadpisz`. Zadanie z samymi makietami bez `.env.e2e` przechodzi (porównanie z makietą idzie bez przeglądarki do operatora), a przy błędnym `.env.e2e` naprawiasz plik. `uwagi` (brak skilla weryfikacji projektu) nie blokują startu — wypisz je z komendą `/weryfikacja-setup`;
 - `przygotowanie` — `blokujace` (`[blokuje: planowanie]`, `[blokuje: faza 1]`, marker bez numeru) zatrzymują start: wypisz je z liniami i podaj drogi (odhaczyć albo świadomie usunąć marker); `odroczone` (fazy ≥ 2) generator wpisał do `## Blokery operatora per faza` w planie zadania, a autopilot zatrzyma się przed fazą N, dopóki pozycja jest nieodhaczona w checkliście — operator robi ją po fazie, która ją umożliwia, odhacza, commituje checklistę i odpala świeży run;
 - `git` — branch `feature/<zadanie>` i czyste drzewo; autopilot nie przełącza brancha i zatrzymuje się na brudnym drzewie;
 - `testy` — runner testów projektu (vitest, jest) nie zbiera testów maszynerii z `.claude/**`; `ok: false` = autopilot zatrzyma się na `npm test` na starcie → wpisz do configu `poprawka` i zacommituj;
+- `claudeMd` — pliki decyzji na gałęzi głównej bez `claude_md: do-uzgodnienia`; `ok: false` = autopilot zatrzyma się na starcie → wypisz `naprawa` (uzgodnienie na gałęzi głównej przez `/dev-pr --claude-md <zadanie>`, potem wciągnięcie głównej do gałęzi zadania);
 - `higiena` — nie blokuje, ale każdą `uwagi` wypisz z komendą przed startem: stara baza wiedzy (`learned-patterns.md` w `.claude/rules/`, przed konwersją: `/dev-compound-refresh --konwersja`) albo kontekst startowy agenta ponad próg (CLAUDE.md + reguły bez `paths:`) kosztują każdego agenta każdej fazy. Operator decyduje, czy porządkuje przed autopilotem; pełna lista kontroli jest w doctorze (`bash .claude/scripts/doctor/doctor.sh`).
 
 Czerwona pozycja usuwana w tej sesji (odhaczenie checklisty, opt-out, `.gitignore` po setupie e2e) zmienia śledzone pliki: zacommituj je jawnymi ścieżkami (`git add <ścieżki> && git commit -m "docs(<zadanie>): przygotowanie operatora"`) i uruchom `gotowosc` ponownie. Autopilota nie uruchamiasz przy czerwonej bramce.
@@ -352,6 +358,7 @@ Start to osobna wiadomość z samym poleceniem startu. Wiadomość, która uruch
    - Przygotowanie: <brak / ścieżka: blokujące start B → STOP albo OK; odroczone do faz ≥ 2: K (w planie zadania)>
    - Git: <OK / brudne pozycje>
    - Testy: <OK / nie dotyczy / szczegół + poprawka configu>
+   - CLAUDE.md: <OK / zadania do uzgodnienia + naprawa → STOP>
    - Higiena: <OK / uwagi z komendą — nie blokują>
 
 ➡️ Następny krok: autopilot w tej sesji <albo: w nowej sesji — ta sesja zmieniła .claude/>:
