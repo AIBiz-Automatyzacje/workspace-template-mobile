@@ -7,11 +7,13 @@ import { join } from 'node:path'
 
 import { akcja, sprawdzBudzet } from './budzet-pliku.mjs'
 import { sprawdzCzesci } from './czesci-pr.mjs'
+import { uwagiImporterow } from './importerzy.mjs'
 import { ekranyFigmy, poleTekstowe, sciezkaOrigin } from './plan-techniczny.mjs'
 import { sprawdzMakiety } from './makiety.mjs'
 import { sciezkaWzgledna } from './przygotowanie.mjs'
 import { uwagiRejestru } from './rejestr-stalych.mjs'
 import { doWzorca, PROFIL } from '../stack/profil.mjs'
+import { uzywaSupabase as projektUzywaSupabase } from '../stack/projekt.mjs'
 
 export { PROG_ESLINT, PROG_PYTANIA } from './budzet-pliku.mjs'
 
@@ -109,6 +111,16 @@ function numeryMigracji(jednostki, projekt) {
 }
 
 /**
+ * Projekt uzywa Supabase: sygnal projektu (katalog supabase/ albo zaleznosc @supabase/supabase-js, stack/projekt.mjs) albo migracja
+ * w supabase/migrations/ w planie (pierwsza migracja projektu). Bez zadnego z sygnalow uwaga o migracji jest
+ * falszywa (znaleziska 2026-11-02 pkt 31: dashboard z klientem w frontend/ i migracjami Pythona w backend/).
+ * @param {Jednostka[]} jednostki @param {string} projekt @returns {boolean}
+ */
+function uzywaSupabase(jednostki, projekt) {
+  return projektUzywaSupabase(projekt) || jednostki.some((iu) => iu.pliki.some((p) => p.sciezka.startsWith('supabase/migrations/')))
+}
+
+/**
  * Opis wspomina migracje bez pliku w polu Pliki. Linia z numerem migracji z planu albo z repo to odwolanie (vibersi etap 6a IU-3:
  * „test pilnuje zgodnosci kodow z migracja” przy CHECK-ach migracji IU-1), nie nowa migracja.
  * @param {Jednostka} iu @param {Set<string>} migracje @returns {boolean}
@@ -119,7 +131,7 @@ function migracjaBezPliku(iu, migracje) {
   return iu.opis.split('\n').some((l) => /migracj/i.test(l) && !odwolanie(l))
 }
 
-/** @param {Jednostka} iu @param {Set<string>} migracje @param {Wynik} w */
+/** @param {Jednostka} iu @param {Set<string> | null} migracje numery migracji; null = projekt bez Supabase @param {Wynik} w */
 function pliki(iu, migracje, w) {
   w.bledy.push(...iu.problemy.map((p) => `${iu.id}: ${p}`))
   if (!iu.pliki.length) {
@@ -136,7 +148,7 @@ function pliki(iu, migracje, w) {
   if (iu.scenariusze.some((s) => s.typ === 'Unit') && !iu.pliki.some((p) => akcja(p).startsWith('test') || PLIK_TESTU.test(p.sciezka))) {
     w.bledy.push(`${iu.id}: scenariusze [Unit] bez pliku testu w polu Pliki`)
   }
-  if (migracjaBezPliku(iu, migracje)) {
+  if (migracje && migracjaBezPliku(iu, migracje)) {
     w.uwagi.push(`${iu.id}: opis wspomina migrację, a pole Pliki nie ma pliku w supabase/migrations/`)
   }
 }
@@ -218,7 +230,7 @@ export function uwagiRozmiaruIu(jednostki) {
 /**
  * @param {Plan} plan sparsowany plan techniczny
  * @param {string} projekt katalog projektu (sciezki planu sa wzgledne wobec niego)
- * @param {{ wzgledemRepo?: boolean }} [opcje] wzgledemRepo=false: bez regul budzetu wobec stanu repo (bramka po fazie 1)
+ * @param {{ wzgledemRepo?: boolean }} [opcje] wzgledemRepo=false: bez regul budzetu i importerow wobec stanu repo (bramka po fazie 1)
  * @returns {Wynik}
  */
 export function sprawdzPlan(plan, projekt, opcje = {}) {
@@ -231,7 +243,7 @@ export function sprawdzPlan(plan, projekt, opcje = {}) {
   const planu = { seedy: plikiAkcji('e2e seed'), pliki: plikiAkcji('e2e flow') }
   /** @type {Map<string, string>} */
   const flowy = new Map()
-  const migracje = numeryMigracji(jednostki, projekt)
+  const migracje = uzywaSupabase(jednostki, projekt) ? numeryMigracji(jednostki, projekt) : null
   for (const iu of jednostki) {
     if (!DELEGACI.includes(iu.delegate)) {
       w.bledy.push(`${iu.id}: Delegate to „${iu.delegate}” — dozwolone ${BUILDERZY.join(' | ')}`)
@@ -245,6 +257,7 @@ export function sprawdzPlan(plan, projekt, opcje = {}) {
     w.uwagi.push(`${id}: wymaganie ze „Śledzenia wymagań” bez IU (pole Wymagania żadnej jednostki go nie wymienia)`)
   }
   sprawdzBudzet(jednostki, projekt, w, opcje.wzgledemRepo !== false)
+  if (opcje.wzgledemRepo !== false) w.uwagi.push(...uwagiImporterow(jednostki, projekt))
   w.uwagi.push(...uwagiRozmiaruFaz(plan.fazy))
   w.uwagi.push(...uwagiRozmiaruIu(jednostki))
   w.uwagi.push(...uwagiRejestru(plan, jednostki))

@@ -137,6 +137,13 @@ test('planner: pliki innych IU tej fazy w prompcie i serial — builder UI nie w
   assert.match(p, /Jesli IU korzysta z pliku, ktory tworzy inny IU tej fazy \(hook, serwis, schemat, typy\) — strategia serial/)
 })
 
+// Znaleziska 2026-11-02 pkt 33 (dashboard E2, faza 6): builder nie usunal pliku, ktory importowal plik zmieniany przez inna IU,
+// i execute zwrocil partial.
+test('planner: IU usuwajacy plik idzie po IU tej fazy, ktory zmienia jego importera', () => {
+  assert.match(plannerPrompt('docs/active/x', 2),
+    /Jesli IU usuwa plik, ktorego importera zmienia albo usuwa inny IU tej fazy — strategia serial i IU usuwajacy plik\s+po IU, ktory zmienia importera/)
+})
+
 test('planner: kontekst designerski dla UI i fullstack, warianty -figma przy makietach', () => {
   const p = plannerPrompt('docs/active/x', 2)
   // P21 B2: blok liczy skrypt z pola Makiety jednostki (naglowek „Mandatory designerski kontekst” sprawdza makiety.test.mjs)
@@ -157,6 +164,21 @@ for (const builder of BUILDERY_ZE_SZKIELETEM) {
     assert.deepEqual(naruszeniaSzkieletu(tekst, polaWyniku()), [])
   })
 }
+
+// Znaleziska 2026-11-02 pkt 26 (dashboard, plan E2: 29 IU dla buildera danych przy backendzie w Pythonie): skill Supabase laduje
+// sie z frontmattera w kazdym projekcie, a polecenia roli mowia o `supabase migration new`. Builder z tym skillem ma zdanie,
+// co robi w projekcie bez Supabase, i stoi ono przed pierwsza komenda supabase w poleceniach.
+test('builder ze skillem supabase-dev-guidelines: zdanie o projekcie bez Supabase przed pierwsza komenda supabase', () => {
+  const zeSkillem = [...agenci(REPO)].filter(([n, fm]) => n.startsWith('feature-builder-') && (fm.get('skills') ?? '').includes('supabase-dev-guidelines')).map(([n]) => n)
+  assert.deepEqual(zeSkillem.sort(), ['feature-builder-data', 'feature-builder-fullstack', 'feature-builder-fullstack-figma'])
+  for (const builder of zeSkillem) {
+    const blok = blokPolecen(readFileSync(join(REPO, AGENCI, `${builder}.md`), 'utf8'))
+    const zdanie = blok.split('\n').find((l) => l.startsWith('- Gdy projekt nie używa Supabase')) ?? ''
+    assert.match(zdanie, /pomijasz komendy i wzorce Supabase ze skilla supabase-dev-guidelines i z poleceń niżej/, builder)
+    assert.match(zdanie, /migracje i dostęp do danych robisz narzędziami projektu z planu i `CLAUDE\.md`/, builder)
+    assert.ok(blok.indexOf(zdanie) < blok.indexOf('`supabase migration new'), `${builder}: zdanie po komendzie supabase`)
+  }
+})
 
 const skilleBuilderow = [...new Set([...agenci(REPO)].filter(([n]) => n.startsWith('feature-builder-'))
   .flatMap(([, fm]) => (fm.get('skills') ?? '').replace(/[[\]]/g, '').split(',').map((s) => s.trim()))

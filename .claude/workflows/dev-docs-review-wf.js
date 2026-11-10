@@ -613,7 +613,7 @@ ${JSON.stringify(obalone || [], null, 2)}
    P1/P2/P3/OPERATOR, sciezka raportu i najwazniejszy wniosek.
 3. Bookkeeping checkboxow fazy ${faza}.
    a) Linie z markerem [E2E] (Test: i Weryfikacja:) ksieguje sam skrypt — nie edytuj ich recznie i nie kopiuj ich
-      do Operator checklist. ${przebieg.e2eTryb === 'pominiety' ? 'Tester E2E nie byl w tej fazie uruchomiony — linii [E2E] nie ruszasz.' : bezKsiegowaniaE2e ? 'Srodowisko E2E wymaga przebudowy (STOP runu po review) — linii [E2E] nie ruszasz; powtorka review po przebudowie odegra je od nowa.' : `Uruchom w korzeniu repo dokladnie:
+      do Operator checklist. ${przebieg.e2eTryb === 'pominiety' ? 'Tester E2E nie byl w tej fazie uruchomiony — linii [E2E] nie ruszasz.' : bezKsiegowaniaE2e ? 'Srodowisko E2E wymaga przebudowy albo naprawy (STOP runu po review) — linii [E2E] nie ruszasz; powtorka review po naprawie odegra je od nowa.' : `Uruchom w korzeniu repo dokladnie:
 ${komendaKsiegowania(sciezka, faza, przebieg.e2ePrzebiegi || [], przebieg.e2eTesterFail)}
       Skrypt odznacza flow z samymi PASS, zostawia FAIL, scenariusze niewykonalne przez srodowisko, limit zewnetrzny,
       harness albo pad testera przenosi na [Manual] z powodem (trafia do smoke'u operatora, run idzie dalej), a pozostale
@@ -883,13 +883,26 @@ const e2ePrzebiegi = (e2eWynik && Array.isArray(e2eWynik.przebiegi)) ? e2eWynik.
 // fazy, a gdyby sie mylil, scribe zostawi [E2E] jako [ ] i completion-gate to zlapie (nie ma tu cichej zieleni).
 const e2eWykonany = !!e2eWynik && !(e2eMozeMiecCheckboxy && e2ePrzebiegi.length === 0 && e2eCheckboxy > 0)
 const e2eTesterFail = e2eAktywny && e2eMozeMiecCheckboxy && !e2eWykonany
-const e2eStatus = !e2eAktywny
-  ? 'pominiety przez routing'
-  : e2eTesterFail
-    ? (e2eWynik ? 'padl (2x wynik bez zadnego przebiegu) — zadnego dowodu' : 'padl (agent null 2x) — zadnego przebiegu')
-    : e2eWynik
-      ? (e2ePrzebiegi.length === 0 ? `wykonany — brak checkboxow [E2E] w fazie${e2eRetry ? ' (po retry; liczba z dossier nieznana)' : ''}` : `wykonany (tryb ${e2eTryb})${e2eRetry ? ' (po retry)' : ''}`)
-      : 'bez checkboxow [E2E] (dossier: 0, tester nic nie zwrocil — OK)'
+// Punkt 35 (dashboard E2, run wf_a495d97e-47b, fazy 7–11): tester w trybie interaktywnym oddal same SKIP, a faza miala E2E
+// „wykonany”, gate CZYSTE i wynik runu OK. „Nie odegrano” = sa przebiegi, tryb interaktywny, zero PASS i zero FAIL. W trybie
+// bez-interakcji same SKIP sa stanem oczekiwanym (srodowisko E2E niedostepne w trakcie runu), wiec zostaje „wykonany”.
+function e2eNieOdegrano(przebiegi, tryb) {
+  return tryb === 'interaktywny' && przebiegi.length > 0 && !przebiegi.some((p) => p && (p.wynik === 'PASS' || p.wynik === 'FAIL'))
+}
+
+// Status nie zmienia gate'u. Autopilot rozpoznaje faze po poczatku „nie odegrano” (fazyNieOdegrane w dev-autopilot-wf.js)
+// i pokazuje ja w raporcie koncowym; zmiana brzmienia wymaga zmiany po obu stronach (e2e-nie-odegrano.test.mjs).
+function statusTesteraE2e({ aktywny, testerFail, jestWynik, przebiegi, tryb, retry }) {
+  if (!aktywny) return 'pominiety przez routing'
+  if (testerFail) return jestWynik ? 'padl (2x wynik bez zadnego przebiegu) — zadnego dowodu' : 'padl (agent null 2x) — zadnego przebiegu'
+  if (!jestWynik) return 'bez checkboxow [E2E] (dossier: 0, tester nic nie zwrocil — OK)'
+  if (przebiegi.length === 0) return `wykonany — brak checkboxow [E2E] w fazie${retry ? ' (po retry; liczba z dossier nieznana)' : ''}`
+  if (e2eNieOdegrano(przebiegi, tryb)) return `nie odegrano (tryb ${tryb}) — zaden z ${przebiegi.length} scenariuszy nie ma PASS ani FAIL${retry ? ' (po retry)' : ''}`
+  return `wykonany (tryb ${tryb})${retry ? ' (po retry)' : ''}`
+}
+
+const e2eStatus = statusTesteraE2e({ aktywny: e2eAktywny, testerFail: e2eTesterFail, jestWynik: !!e2eWynik, przebiegi: e2ePrzebiegi, tryb: e2eTryb, retry: e2eRetry })
+if (!e2eTesterFail && e2eNieOdegrano(e2ePrzebiegi, e2eTryb)) log(`Tester E2E fazy ${faza}: ${e2eStatus} — scenariusze do odegrania recznie albo ponownie, gate bez zmian`)
 if (e2eTesterFail) log(`Tester E2E fazy ${faza} ${e2eStatus} przy ${e2eLiczbaZnana ? e2eCheckboxy : 'nieznanej liczbie'} checkboxow [E2E] — scenariusze fazy na [Manual] (tester-padl), run idzie dalej`)
 
 // Dedup przebieg 1 — JS (po pliku + poczatku opisu): lapie identyczne sformulowania za darmo.
@@ -923,8 +936,13 @@ if (e2eTesterFail) log(`Tester E2E fazy ${faza} ${e2eStatus} przy ${e2eLiczbaZna
 const SYGNATURY_BLOKERA = [
   { re: /err_connection_refused|econnrefused|net::err_connection|connection refused|couldn't connect to server|(localhost|127\.0\.0\.1):\d+[^\n]{0,60}\b(refused|unreachable|timed out|nie odpowiada)/i, klasa: 'dev-server-nieosiagalny', polityka: 'manual-restart', naprawa: '' },
   { re: /err_name_not_resolved|\benotfound\b|\beai_again\b|getaddrinfo\s+(enotfound|eai_again|eai_fail)|could not resolve host/i, klasa: 'host-nierozwiazywalny', polityka: 'manual-restart', naprawa: '' },
+  // Seed, ktory nie wszedl na baze e2e, to niesprawne srodowisko, nie test do odegrania recznie (pilot Nawykometr, run 1: oba
+  // scenariusze zeszly po cichu na [Manual], zadanie zarchiwizowane przy 0 PASS). Tester zaczyna dowod od stalego zwrotu.
+  { re: /^\s*seed nie wsz(?:edł|edl)/i, klasa: 'seed-nie-wszedl', polityka: 'stop-srodowisko', naprawa: 'Zaaplikuj seed recznie ze zmiennymi z .env.e2e (`psql "$SUPABASE_E2E_DB_URL" -v ON_ERROR_STOP=1 -f <seed>`) i usun przyczyne z komunikatu: polaczenie z baza e2e, marker bazy, uprawnienia albo brakujaca migracja (.claude/templates/e2e-env/README.md).' },
 ]
-const POLITYKI_BLOKERA = ['manual-restart', 'stop-rebuild']
+const POLITYKI_BLOKERA = ['manual-restart', 'stop-rebuild', 'stop-srodowisko']
+// Polityki zatrzymujace run przed zamknieciem review: linie [E2E] bez zmian, swiezy run po naprawie powtarza review z testerem.
+const POLITYKI_STOP = ['stop-rebuild', 'stop-srodowisko']
 // Sygnatura stacku z JSON-u restartu: wpis z nieznana polityka albo wzorcem, ktory sie nie kompiluje, pomijamy (zostaje rdzen).
 function sygnaturaStacku(s) {
   if (!s || typeof s !== 'object' || typeof s.wzorzec !== 'string' || !POLITYKI_BLOKERA.includes(s.polityka)) return null
@@ -936,10 +954,17 @@ function sygnaturaStacku(s) {
   }
 }
 function wykryjBlokerSrodowiska(przebiegiTestera, sygnaturyStacku = []) {
-  const awaria = (przebiegiTestera || []).find((p) => p && p.wynik === 'SKIP' && p.przyczyna === 'srodowisko')
-  if (!awaria) return null
+  const awarie = (przebiegiTestera || []).filter((p) => p && p.wynik === 'SKIP' && p.przyczyna === 'srodowisko')
+  if (!awarie.length) return null
   const sygnatury = [...(Array.isArray(sygnaturyStacku) ? sygnaturyStacku : []).map(sygnaturaStacku).filter(Boolean), ...SYGNATURY_BLOKERA]
-  const sygnatura = sygnatury.find((s) => s.re.test(awaria.dowod || ''))
+  // Sygnatura z polityka STOP wygrywa z klasa sieciowa w tym samym dowodzie („seed nie wszedl: … connection refused”).
+  const dopasuj = (p) => {
+    const pasujace = sygnatury.filter((s) => s.re.test(p.dowod || ''))
+    return pasujace.find((s) => POLITYKI_STOP.includes(s.polityka)) || pasujace[0]
+  }
+  // Awaria z polityka STOP wygrywa z wczesniejszym SKIP-em bez niej: jeden scenariusz z padnietym seedem zatrzymuje faze.
+  const awaria = awarie.find((p) => POLITYKI_STOP.includes(dopasuj(p)?.polityka)) || awarie[0]
+  const sygnatura = dopasuj(awaria)
   return {
     wykryty: true, klasa: sygnatura ? sygnatura.klasa : 'srodowisko', dowod: String(awaria.dowod || '').slice(0, 500),
     polityka: sygnatura ? sygnatura.polityka : 'manual-restart', naprawa: sygnatura ? sygnatura.naprawa : '',
@@ -1000,10 +1025,10 @@ const wszystkie = wyniki.flatMap((w, i) => (w ? w.findings.map((f) => ({ ...f, _
 const blokerSrodowiska = e2eTryb === 'interaktywny'
   ? wykryjBlokerSrodowiska(e2ePrzebiegi, sygnaturyStacku)
   : null
-// Polityka stop-rebuild: orkiestrator zatrzymuje run przed zamknieciem review, wiec scribe linii [E2E] nie ksieguje.
-const bezKsiegowaniaE2e = Boolean(blokerSrodowiska && blokerSrodowiska.polityka === 'stop-rebuild')
+// Polityki STOP (stop-rebuild, stop-srodowisko): orkiestrator zatrzymuje run przed zamknieciem review, wiec scribe linii [E2E] nie ksieguje.
+const bezKsiegowaniaE2e = Boolean(blokerSrodowiska && POLITYKI_STOP.includes(blokerSrodowiska.polityka))
 if (bezKsiegowaniaE2e) {
-  log(`AWARIA SRODOWISKA E2E (${blokerSrodowiska.klasa}) wymaga przebudowy — linie [E2E] bez zmian, orkiestrator zatrzyma run z naprawa`)
+  log(`AWARIA SRODOWISKA E2E (${blokerSrodowiska.klasa}) wymaga ${blokerSrodowiska.polityka === 'stop-rebuild' ? 'przebudowy' : 'naprawy srodowiska'} — linie [E2E] bez zmian, orkiestrator zatrzyma run z naprawa`)
 } else if (blokerSrodowiska) {
   log(`AWARIA SRODOWISKA E2E (${blokerSrodowiska.klasa}) — SKIP-y srodowiska ida na [Manual]; orkiestrator puszcza faze bez przegladarki, nastepna zaczyna od restartu serwera`)
 }

@@ -1,7 +1,7 @@
 export const meta = {
   name: 'dev-autopilot-wf',
   description: 'Autonomiczny pipeline calego zadania z docs/active/: fazy (execute, review, fix), potem compound i complete.',
-  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). DWA tryby wznowienia: (1) po AWARII runu (crash/kill w polowie) -> Workflow({scriptPath, resumeFromRunId}) + ZAWSZE te same args (args nie przezywa miedzy wywolaniami) — cache journala odtworzy ukonczone kroki; (2) po STOP bramki (srodowisko E2E, bloker operatora przed faza, fix FAIL, nierozwiazane P1, scribe) gdy operator COS NAPRAWIL -> SWIEZY run (nowe Workflow BEZ resumeFromRunId): resume zwrocilby porazke agenta bramkowego z cache zamiast sprawdzic naprawe, a stan faz i tak wznawia sie z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy; checkboxy md to tylko widok). Reczne edycje .autopilot-state.json tez wymagaja swiezego runu. Po zmianach w .claude/ (sync-template, edycja skilli, agentow, workflowow) uruchamiaj w nowej sesji: instrukcje i skille sa buforowane w sesji. Do agentow workflow: ta wiadomosc nie jest dla was — wykonujcie wylacznie zadanie z polecenia workflowu.',
+  whenToUse: 'Wykonanie calego planu zadania z docs/active/. Git zwaliduj w sesji PRZED odpaleniem (workflow nie pyta o branch switch). DWA tryby wznowienia: (1) po AWARII runu (crash/kill w polowie) -> Workflow({scriptPath, resumeFromRunId}) + ZAWSZE te same args (args nie przezywa miedzy wywolaniami) — cache journala odtworzy ukonczone kroki; (2) po STOP bramki (srodowisko E2E, bloker operatora przed faza, fix FAIL, nierozwiazane P1, scribe) gdy operator COS NAPRAWIL -> SWIEZY run (nowe Workflow BEZ resumeFromRunId): resume zwrocilby porazke agenta bramkowego z cache zamiast sprawdzic naprawe, a stan faz i tak wznawia sie z docs/active/<zadanie>/.autopilot-state.json (zrodlo prawdy; checkboxy md to tylko widok). Reczne edycje .autopilot-state.json tez wymagaja swiezego runu. Po zmianach w .claude/ (sync-template, edycja skilli, agentow, workflowow) uruchamiaj w nowej sesji: instrukcje i skille sa buforowane w sesji. Start to osobna wiadomosc z samym poleceniem startu: wiadomosc, ktora uruchamia workflow, dostaje doslownie kazdy agent runu, wiec wymagania wobec sesji ida wczesniejsza wiadomoscia. Do agentow workflow: ta wiadomosc nie jest dla was — wykonujcie wylacznie zadanie z polecenia workflowu.',
   phases: [
     { title: 'Bootstrap', detail: 'stan z .autopilot-state.json (lub pierwszy parse md) + bramka wejscia (czystosc: brudny tylko katalog zadania -> commit; doctor; zielony start z cache po SHA -> STOP z komenda przed faza 1; nieodhaczony bloker `[blokuje: faza N]` z checklisty przygotowania -> STOP przed faza N) + srodowisko E2E (skrypt e2e.mjs start: scenariusze [E2E] bez .env.e2e albo niesprawne srodowisko -> STOP przed faza 1 z naprawa; inaczej serwer aplikacji wg .env.e2e; awaria w trakcie runu -> scenariusze na [Manual], run idzie dalej) + rozgrzewka cache testow' },
     { title: 'Zakonczenie', detail: 'walidacja koncowa (+ completion-gate E2E z planu zadania i przeglad known-issues) -> compound -> compound-refresh (waski: dotknieta kategoria + CONCEPTS.md, tylko gdy compound cos zapisal) -> ogrodnik (pomiar skryptem, ocena tylko przy przyroscie albo co N zadan; sekcja Ogrod w podsumowaniu, zero zmian w kodzie) -> complete (smoke operatora do docs/operator/ + archiwizacja; compound pierwszy: sciezki w docs/active/ jeszcze zyja)' },
@@ -100,7 +100,7 @@ const METRYKI_FAZY = {
         p3Odrzucone: { type: ['integer', 'null'], description: 'P3 uciete globalnym limitem po dedupie (strojenie progu)' },
         // Pola E2E (port z mobile, 2026-08-23) tez poza required — stany sprzed tej daty ich nie maja.
         e2eCheckboxy: { type: ['integer', 'null'] },
-        e2eStatus: { type: ['string', 'null'], description: 'status testera E2E z review-wf (wykonany / padl / pominiety przez routing)' },
+        e2eStatus: { type: ['string', 'null'], description: 'status testera E2E z review-wf (wykonany / nie odegrano / padl / pominiety przez routing)' },
         e2ePass: { type: ['integer', 'null'] },
         e2eFail: { type: ['integer', 'null'] },
         e2eSkip: { type: ['integer', 'null'] },
@@ -316,9 +316,10 @@ const E2E_START = {
     bledy: { type: 'array', items: { type: 'string' } },
     detal: { type: 'string' },
     naprawa: { type: 'string' },
+    stdout: { type: ['string', 'null'], description: 'ostatnia linia stdout `e2e.mjs start` 1:1 (JSON w jednej linii); null, gdy skrypt nie wypisal JSON-a' },
     stanZapisany: POLE_STANU,
   },
-  required: ['status', 'scenariusze', 'figmaScreens', 'envE2e', 'bazaE2e', 'serwer', 'url', 'log', 'bledy', 'detal', 'naprawa', 'stanZapisany'],
+  required: ['status', 'scenariusze', 'figmaScreens', 'envE2e', 'bazaE2e', 'serwer', 'url', 'log', 'bledy', 'detal', 'naprawa', 'stdout', 'stanZapisany'],
 }
 
 const E2E_DB_SYNC_RESULT = {
@@ -567,17 +568,22 @@ przeczytaj ja przed krokiem 1.
 Poza wyjatkiem z kroku 2 NIE modyfikuj zadnych plikow. Zwroc {status, detal, czasZimnySek, czasKontrolnySek}.`
 }
 
+// Naprawa, gdy skrypt startu nie zwrocil wyniku. Wskazuje `start`, nie `sprawdz`: tylko start przechodzi krok stacku przed
+// serwerem (Expo: urzadzenie i swiezosc dev-clienta), a `sprawdz` przy starym dev-cliencie odpowiada „gotowe” (pilot Nawykometr, run 2).
+const NAPRAWA_ZAPASOWA_STARTU = (sciezka) => `Uruchom recznie: node .claude/scripts/e2e/e2e.mjs start --zadanie ${sciezka} (pole naprawa w ostatniej linii stdout; po udanym starcie zatrzymaj serwer: node .claude/scripts/e2e/e2e.mjs stop)`
+
 // Repo bez aplikacji (projekt od zera, P17) skrypt rozpoznaje sam i zwraca status odroczone zamiast STOP-u.
 function e2eStartPrompt(sciezka) {
   return `Uruchom w korzeniu repo dokladnie jedno polecenie i przepisz jego wynik:
 \`node .claude/scripts/e2e/e2e.mjs start --zadanie ${sciezka}\`
 Narzedzie Bash wywolaj z timeout 600000 (start serwera czeka do 500 s) i uruchom polecenie jeden raz: powtorka postawilaby
 drugi serwer obok pierwszego. Skrypt sprawdza, czy zadanie potrzebuje przegladarki, sprawdza .env.e2e i uruchamia serwer aplikacji
-w tle. Kod wyjscia 0 albo 1 to wynik (STOP liczy orkiestrator): ostatnia linia stdout to JSON — zwroc jego pola 1:1. Kod 3
-(JSON z polem "wyjatek") albo brak JSON-a: status "niepowodzenie", bledy = [tresc wyjatku albo ostatnie linie wyjscia],
-detal = to samo, naprawa = "Uruchom recznie: node .claude/scripts/e2e/e2e.mjs sprawdz --zadanie ${sciezka}", scenariusze 0,
-figmaScreens false, envE2e i bazaE2e false, serwer "brak", url i log null. Plikow repo nie zmieniasz (poza zapisem stanu,
-jesli polecenie go zawiera).`
+w tle. Kod wyjscia 0 albo 1 to wynik (STOP liczy orkiestrator): ostatnia linia stdout to JSON — zwroc jego pola 1:1, a cala
+te linie bez zmian w polu stdout (orkiestrator czyta z niej pola skryptu, wiec pole naprawa przy kodzie 1 pochodzi ze skryptu,
+nie od ciebie). Kod 3 (JSON z polem "wyjatek") albo brak JSON-a: status "niepowodzenie", bledy = [tresc wyjatku albo ostatnie
+linie wyjscia], detal = to samo, naprawa = "${NAPRAWA_ZAPASOWA_STARTU(sciezka)}", scenariusze 0,
+figmaScreens false, envE2e i bazaE2e false, serwer "brak", url i log null, stdout = ostatnia linia stdout albo null. Plikow
+repo nie zmieniasz (poza zapisem stanu, jesli polecenie go zawiera).`
 }
 
 function e2eRestartPrompt(sciezka, numerFazy) {
@@ -1306,6 +1312,17 @@ function jsonZeStdout(tekst) {
   }
 }
 
+// Pola startu ze skryptu wygrywaja z przepisaniem agenta (pilot Nawykometr, run 2: agent podmienil `naprawa` skryptu na tekst
+// zapasowy i STOP bramki natywnej stracil komende przebudowy). Linia nieczytelna, z wyjatkiem albo z nieznanym statusem: pola agenta.
+const POLA_STARTU = ['status', 'scenariusze', 'figmaScreens', 'envE2e', 'bazaE2e', 'serwer', 'url', 'log', 'bledy', 'detal', 'naprawa']
+const STATUSY_STARTU = ['pominieto', 'brak-srodowiska', 'niepowodzenie', 'gotowe', 'odroczone']
+function startZeSkryptu(wynik) {
+  if (!wynik) return wynik
+  const s = jsonZeStdout(wynik.stdout)
+  if (!s || 'wyjatek' in s || !STATUSY_STARTU.includes(String(s.status))) return wynik
+  return { ...wynik, ...Object.fromEntries(POLA_STARTU.filter((p) => s[p] !== undefined).map((p) => [p, s[p]])) }
+}
+
 // Restart serwera przed testerem fazy (P17), wynik `e2e.mjs restart`: gotowe -> przegladarka w tej fazie; pominieto -> faza
 // bez scenariuszy i makiet; niepowodzenie -> 'martwe' w tej fazie, a ogon logu idzie do review (serwer polozony kodem fazy to
 // defekt do fixa, nie awaria srodowiska). Do konca runu tylko brak odpowiedzi w limicie startu: kazda nastepna proba to znowu
@@ -1360,7 +1377,7 @@ function sygnaturyZRestartu(stdout) {
   const w = jsonZeStdout(stdout)
   const lista = w && Array.isArray(w.sygnaturyBlokera) ? w.sygnaturyBlokera : []
   return lista.filter((s) => s && typeof s === 'object' && typeof s.wzorzec === 'string' && typeof s.klasa === 'string'
-    && ['manual-restart', 'stop-rebuild'].includes(s.polityka))
+    && ['manual-restart', 'stop-rebuild', 'stop-srodowisko'].includes(s.polityka))
 }
 
 // Bloker z polityka stop-rebuild (D12, mobile: brak modulu natywnego, entitlements): restart serwera go nie usunie, a faza
@@ -1368,10 +1385,19 @@ function sygnaturyZRestartu(stdout) {
 // (scribe ich nie ksiegowal) — swiezy run po przebudowie powtarza review fazy z testerem.
 function decyzjaBlokeraSrodowiska(review, numerFazy, sciezka) {
   const b = review && review.blokerSrodowiska
-  if (!b || !b.wykryty || b.polityka !== 'stop-rebuild') return null
+  if (!b || !b.wykryty) return null
+  if (b.polityka === 'stop-rebuild') {
+    return {
+      powod: `Faza ${numerFazy}: srodowisko E2E wymaga przebudowy (${b.klasa}): "${b.dowod}". Review pozostaje pending, linie [E2E] bez zmian.`,
+      naprawa: `${b.naprawa} Po przebudowie swiezy run (te same args, BEZ resumeFromRunId): ${komendaSwiezegoRunu(sciezka)}`,
+    }
+  }
+  // Polityka stop-srodowisko (seed nie wszedl na baze e2e): scenariusz bez danych nie idzie po cichu na [Manual] — operator
+  // naprawia srodowisko, a swiezy run powtarza review fazy z testerem (pilot Nawykometr, run 1: archiwum przy 0 PASS).
+  if (b.polityka !== 'stop-srodowisko') return null
   return {
-    powod: `Faza ${numerFazy}: srodowisko E2E wymaga przebudowy (${b.klasa}): "${b.dowod}". Review pozostaje pending, linie [E2E] bez zmian.`,
-    naprawa: `${b.naprawa} Po przebudowie swiezy run (te same args, BEZ resumeFromRunId): ${komendaSwiezegoRunu(sciezka)}`,
+    powod: `Faza ${numerFazy}: srodowisko E2E wymaga naprawy (${b.klasa}): "${b.dowod}". Review pozostaje pending, linie [E2E] bez zmian.`,
+    naprawa: `${b.naprawa} Po naprawie swiezy run (te same args, BEZ resumeFromRunId): ${komendaSwiezegoRunu(sciezka)}`,
   }
 }
 
@@ -1451,6 +1477,17 @@ function skrotPrzebiegu(p) {
   }
 }
 
+// Punkt 35 (dashboard E2, run wf_a495d97e-47b): fazy 7–11 mialy same SKIP testera w trybie interaktywnym, gate CZYSTE i wynik
+// runu OK, a raport koncowy tego nie pokazywal. Faze rozpoznajemy po poczatku statusu z review-wf (statusTesteraE2e), ktory
+// jest tez w stanie fazy (metryki.przebieg.e2eStatus). Liczba = scenariusze fazy: linia [E2E] bez wpisu testera tez nie
+// zostala odegrana, stad wieksza z liczb checkboxow i wpisow SKIP.
+const STATUS_E2E_NIE_ODEGRANO = 'nie odegrano'
+function fazyNieOdegrane(raporty) {
+  return raporty
+    .filter((r) => r && r.przebieg && typeof r.przebieg.e2eStatus === 'string' && r.przebieg.e2eStatus.startsWith(STATUS_E2E_NIE_ODEGRANO))
+    .map((r) => ({ faza: r.faza, scenariusze: Math.max(r.przebieg.e2eCheckboxy ?? 0, r.przebieg.e2eSkip ?? 0) }))
+}
+
 // Podsumowanie tury poprawkowej po kontroli diffu naprawczego (audyt 2026-09-06, N9).
 // Do tej pory do stanu i telemetrii szlo tylko {pozycje, naprawione, walidacja} — a agent poprawki
 // podaje w nienaprawione[] uzasadnienia pozycji, ktorych nie ruszyl, i orkiestrator je WYRZUCAL.
@@ -1462,6 +1499,8 @@ function nastepneKroki({ smoke, raporty, propozycjeBramek, czesci, zadanie }) {
   const kroki = []
   if (smoke) kroki.push(`Smoke w nowej sesji: wklej ramke „Jak kontynuować w nowej sesji” z ${smoke}.`)
   const akcje = []
+  const nieOdegrane = fazyNieOdegrane(raporty)
+  if (nieOdegrane.length) akcje.push(`E2E nie odegrano — do odegrania recznie albo ponownie: ${nieOdegrane.map((f) => `faza ${f.faza} (scenariuszy: ${f.scenariusze})`).join(', ')}`)
   const operator = raporty.reduce((s, r) => s + (r?.liczniki?.operator || 0), 0)
   if (operator) akcje.push(`${operator} findingow OPERATOR w sekcjach „Operator checklist”`)
   const decyzje = raporty.flatMap((r) => r?.doDecyzjiOperatora || [])
@@ -1470,7 +1509,9 @@ function nastepneKroki({ smoke, raporty, propozycjeBramek, czesci, zadanie }) {
   if (p2) akcje.push(`${p2} nierozwiazanych P2 w known-issues`)
   if (propozycjeBramek.length) akcje.push(`${propozycjeBramek.length} propozycji bramek z compoundu`)
   if (akcje.length) kroki.push(`Akcje operatora: ${akcje.join(', ')}.`)
-  kroki.push(`Po smoke'u: \`/clear\`, potem \`/dev-pr${czesci ? ' --czesc 1' : ''}\` (zadanie ${zadanie}).`)
+  // Tryb autonomiczny bez merge'a: samo `/dev-pr` to pytanie po kazdej turze (piszemy_wirale 08.11: 5 pytan w jednej czesci),
+  // a liczba tur bez --bez-merge to merge, czesto deploy, bez pytania.
+  kroki.push(`Po smoke'u: \`/clear\`, potem \`/dev-pr 3 --bez-merge${czesci ? ' --czesc 1' : ''}\` (zadanie ${zadanie}).`)
   return kroki
 }
 
@@ -1740,6 +1781,7 @@ if (!e2eStart) {
   log('E2E start: agent zwrocil null — retry raz')
   e2eStart = await agent(e2eStartPrompt(sciezka), { schema: E2E_START, agentType: 'klasa-mechaniczny', label: 'e2e:start:retry', phase: 'Bootstrap' })
 }
+e2eStart = startZeSkryptu(e2eStart)
 const srodowiskoStartu = decyzjaSrodowiskaE2e(e2eStart, sciezka)
 log(`E2E start: ${e2eStart ? `${e2eStart.status} (serwer: ${e2eStart.serwer}, scenariusze: ${e2eStart.scenariusze}) — ${e2eStart.detal}` : 'agent zwrocil null 2x'}`)
 if (srodowiskoStartu.stop) {
@@ -1808,14 +1850,20 @@ for (const numerFazy of kolejka) {
   let dossierZExecute = null
   if (faza.execute === 'pending') {
     await zapiszZaleglyStan()
-    const exec = await workflow('dev-docs-execute-wf', { sciezka, faza: numerFazy, stanPoExecute: trescStanu(stanPoExecute(stan, numerFazy)) })
+    // Baza ze stanu (execute przerwany po czesci pracy) idzie do execute-wf: wznowienie nie liczy bramek i dossier od HEAD-u po zmianach fazy.
+    const exec = await workflow('dev-docs-execute-wf', { sciezka, faza: numerFazy, baza: faza.baza || null, stanPoExecute: trescStanu(stanPoExecute(stan, numerFazy)) })
     if (!exec || exec.status !== 'completed') {
+      // Baza fazy zostaje w stanie takze przy execute bez „completed”: domkniecie moglo juz zacommitowac faze (porazka bramki po
+      // commicie), a swiezy run bez bazy dalby review diff od galezi glownej (pilot Nawykometr, run 2: 585 plikow zamiast 8).
+      const bazaZExecute = Boolean(exec && exec.baza && !faza.baza)
+      if (bazaZExecute) faza.baza = exec.baza
       // Domkniecie mialo zapisac stan tylko przy completed; gdy mimo to potwierdzilo zapis, STOP nadpisuje go stanem z pamieci.
-      if (exec && exec.stanZapisany) oznaczStan()
+      if (bazaZExecute || (exec && exec.stanZapisany)) oznaczStan()
       return await stopRun({ powod: `execute fazy ${numerFazy} zwrocil "${exec ? exec.status : 'null'}"${exec && exec.problem ? `: ${exec.problem}` : ''}`, faza: numerFazy, exec, raporty })
     }
     faza.execute = 'done'
-    faza.baza = exec.baza || null
+    // Planner bez pracy (`poza`, faza zrobiona przed STOP-em) nie zna bazy: zostaje ta ze stanu.
+    faza.baza = exec.baza || faza.baza || null
     dossierZExecute = exec.dossier || null
     if (!zapisPotwierdzony(exec)) {
       log(`Faza ${numerFazy}: domkniecie nie potwierdzilo zapisu stanu — zapis zapasowy`)
@@ -2403,6 +2451,9 @@ if (stan.zakonczenie.complete === 'pending') {
 
 if (uwagaIndeksu(compound, refresh)) log(uwagaIndeksu(compound, refresh))
 log(`Autopilot koniec: ${kolejka.length} faz w tym runie, ${fazyUkonczone(stan.fazy)}/${stan.fazy.length} domknietych w zadaniu (koszt runu: raport telemetrii — .claude/scripts/telemetria/raport.mjs)`)
+// Log bierze fazy ze stanu, nie z `raporty`: faza z review w poprzednim runie (STOP, potem swiezy run) nie ma raportu w tym runie.
+const e2eNieOdegrane = fazyNieOdegrane(stan.fazy.map((f) => ({ faza: f.numer, przebieg: f.metryki && f.metryki.przebieg })))
+if (e2eNieOdegrane.length) log(`UWAGA: E2E nie odegrano w ${e2eNieOdegrane.length} fazach zadania (tester interaktywny bez PASS i FAIL): ${e2eNieOdegrane.map((f) => `faza ${f.faza} — scenariuszy: ${f.scenariusze}`).join('; ')}. Gate i status runu bez zmian; scenariusze do odegrania recznie albo ponownie.`)
 
 return {
   status: 'OK',
@@ -2426,6 +2477,8 @@ return {
   indeks: compound && compound.indeks,
   // Szczebel kod/lint z compoundu (P10): propozycje bramek do decyzji operatora — do wdrozenia bramki ida do indeksu jak regula.
   propozycjeBramek: (compound && compound.propozycjeBramek) || [],
+  // Punkt 43: mechanizm, ktory poprawka juz wprowadzila (plik:linia) — raport podaje go jako wdrozony, bez pytania do operatora.
+  bramkiWdrozone: (compound && compound.bramkiWdrozone) || [],
   uwagaIndeksu: uwagaIndeksu(compound, refresh),
   refresh: refresh ? refresh.slownik : 'pominieto',
   // Pomiar ogrodnika (P15) — telemetria run.ogrod; null, gdy archiwizacja byla w poprzednim runie.

@@ -243,6 +243,8 @@ Faza do wykonania: ${faza}
    na jednej lokalnej bazie i nadpisuja ten sam plik typow.
    Jesli IU korzysta z pliku, ktory tworzy inny IU tej fazy (hook, serwis, schemat, typy) — strategia serial i IU tworzacy
    plik przed IU, ktory go uzywa: przy parallel import jeszcze nie istnieje i typecheck buildera pada.
+   Jesli IU usuwa plik, ktorego importera zmienia albo usuwa inny IU tej fazy — strategia serial i IU usuwajacy plik
+   po IU, ktory zmienia importera: builder nie usunie pliku z zywym importem i faza skonczy sie jako partial.
 5. Dla kazdego IU zbuduj KOMPLETNY prompt builderowi:
    - caly blok IU doslownie (Cel, Wymagania, Pliki, Podejscie, Teksty (verbatim), Wzorce, Scenariusze testowe, Weryfikacja)
    - DOMKNIJ ODWOLANIA DO DECYZJI. Builder pracuje w OSOBNYM kontekscie i nie widzi planu: odwolanie
@@ -355,6 +357,8 @@ ${podsumowanieIU}
      status z drugiego przebiegu (null, gdy drugiego nie bylo).
    - ostrzezenia bramki eslint i trafienia bramki stryker zostawiasz bez naprawy — review fazy dostaje
      je w dossier (punkt 6).
+   - ostrzezenia bramki stack to stan sprzed fazy (np. paczki z rozjazdem wersji, ktorych faza nie zmienila): nie naprawiasz
+     ich i nie zmieniasz przez nie zaleznosci — przepisz je do odchylen z komenda naprawy dla operatora.
    - Kazde trafienie bramki testyUsuniete przepisz do pola testyUsuniete z uzasadnieniem (funkcja usunieta w tej fazie
      albo nowa nazwa testu). Test usuniety bez usuniecia testowanej funkcji przywroc.
    - Na koniec \`node .claude/scripts/bramki/bramki.mjs --dopisz-sume\` — dopisuje nowe migracje do supabase/migrations.sum
@@ -401,8 +405,13 @@ if (!plan) {
   return { fazaNumer: faza, status: 'blocked', iu: [], commity: [], testy: 'n/a', odchylenia: [], problem: 'planner zwrocil null (agent padl lub zostal pominiety)' }
 }
 
+// Baza ze stanu zadania (args.baza) wygrywa z HEAD-em plannera: execute przerwany po commicie fazy (porazka bramki domkniecia)
+// wznawia sie z HEAD-em juz PO zmianach fazy, wiec bramki i dossier liczone od niego nie widzialyby jej diffu (pilot Nawykometr, run 2).
+const bazaZeStanu = /^[0-9a-f]{7,40}$/.test((args && args.baza) || '') ? args.baza : null
+if (bazaZeStanu) plan.baza = bazaZeStanu
+
 if (plan.poza || plan.iu.length === 0) {
-  return { fazaNumer: faza, status: 'completed', iu: [], commity: [], testy: 'brak', odchylenia: [], problem: null }
+  return { fazaNumer: faza, status: 'completed', iu: [], commity: [], testy: 'brak', odchylenia: [], problem: null, baza: bazaZeStanu }
 }
 
 phase('Build')
