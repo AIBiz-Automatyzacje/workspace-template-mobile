@@ -78,6 +78,7 @@ const BUILD_RESULT = {
     odchylenia: { type: 'array', items: { type: 'string' } },
     nastepneKroki: { type: ['string', 'null'] },
     pytanie: { type: ['string', 'null'], description: 'wypelnione gdy status=blocked; po polsku, prostym jezykiem: co blokuje i gdzie, opcje ze skutkiem, rekomendacja (blok PYTANIE BLOKERA)' },
+    decyzje: { type: 'array', items: { type: 'string' }, description: 'sprzecznosci zrodel rozstrzygniete wg blok HIERARCHIA ZRODEL, po polsku: "<plik:linia> — <zrodlo A> mowi …, <zrodlo B> mowi … → wybrano …; cofniecie: …"' },
   },
   required: ['id', 'status'],
 }
@@ -210,6 +211,25 @@ const EXECUTE_RESULT = {
   required: ['fazaNumer', 'status', 'iu', 'stanZapisany'],
 }
 
+// Punkt 41, krok 6 (aa-exam E3, wf_1c69a604-076): scenariusz wymagal imienia w mailu, makieta i teksty go nie mialy — builder
+// stanal, a faza z nim. Cel operatora: autopilot przechodzi calosc. Builder rozstrzyga sprzecznosc zrodel sam, gdy wybor jest
+// zgodny z wyzszym zrodlem, niczego nie dodaje i da sie go cofnac; wybor idzie jako decyzja autopilota do known-issues
+// (sekcja „Decyzje operatora”), a stamtad do „Decyzji przed PR” w smoke'u (punkt 40). STOP zostaje dla nieodwracalnego i pracy
+// spoza Granic (decyzja operatora 2026-11-11). Blok doklejany w JS kazdemu builderowi, jak PYTANIE BLOKERA.
+const BLOK_HIERARCHIA_ZRODEL = `
+HIERARCHIA ZRODEL (gdy zrodla jednostki mowia co innego): Granice zakresu > makieta i Teksty (verbatim) > Kluczowe decyzje
+i pole „Znika z obecnej wersji” > Podejscie > Scenariusze testowe > obecny kod i wzorce. Przy sprzecznosci wybierasz opcje zgodna
+z wyzszym zrodlem, gdy (a) niczego nie dodaje ponad zrodla (nowego tekstu, pola danych, zaleznosci, zachowania) i (b) da sie ja
+cofnac zwykla zmiana kodu. Scenariusz testowy dopasowujesz do wybranej opcji (test sprawdza zachowanie, ktore zostawiasz).
+Kazdy taki wybor wpisujesz do pola decyzje, po polsku: "<plik:linia> — <zrodlo A> mowi …, <zrodlo B> mowi … → wybrano …;
+cofniecie: …". Operator potwierdzi go albo zmieni w smoke'u, a review nie traktuje go jako bledu.
+Status blocked zostaje tylko, gdy: zadna opcja nie spelnia (a) i (b); wybor jest nieodwracalny albo dotyka danych (migracja
+zmieniajaca lub usuwajaca dane), bezpieczenstwa (uwierzytelnienie, uprawnienia, polityki dostepu) albo pieniedzy (platnosci,
+kwoty); bez pracy wykluczonej w Granicach jednostki nie da sie ukonczyc. Gdy elementu wykluczonego w Granicach zada tylko nizsze
+zrodlo (Podejscie, scenariusz, obecny kod albo wzorzec), a reszte jednostki da sie zrobic bez niego: pomijasz element, dopasowujesz
+scenariusz i wpisujesz wybor do pola decyzje (np. scenariusz chce imienia w mailu, a Granice zabraniaja tekstow spoza makiet →
+mail bez imienia jako decyzja, nie blocked).`
+
 // Pytanie blokera idzie 1:1 do powodu STOP-u, ktory operator czyta bez kontekstu buildera (punkt 41, aa-exam E3: pytanie po
 // angielsku, bez opcji). Blok doklejany w JS, wiec obowiazuje kazdego buildera kazdego stacku niezaleznie od plannera i pliku roli.
 const BLOK_PYTANIE_BLOKERA = `
@@ -300,9 +320,12 @@ Jednostki nieukonczone: ${czesc.nieukonczone.join(', ')}
 
 1. \`git status --porcelain --untracked-files=all\`. Zmienione pliki dzielisz na trzy grupy: (a) pliki jednostek ukonczonych
    z listy wyzej, (b) pliki w ${sciezka}/, (c) reszta — praca jednostki nieukonczonej. Plik z listy, ktorego nie ma w wyniku
-   git status, pomijasz.
-2. Pliki (c) odkladasz do schowka jedna komenda, z nazwami plikow po \`--\`:
-   \`git stash push --include-untracked -m "${schowek}" -- <pliki (c)>\`. Bez plikow (c) krok pomijasz (schowek = null).
+   git status, pomijasz. Lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock, bun.lock, bun.lockb) idzie do grupy
+   manifestu package.json z tego samego katalogu: manifest w (a) → lockfile w (a); bez manifestu w (a) lockfile zostaje w (c).
+2. Pliki (c) odkladasz do schowka jedna komenda, z nazwami plikow po \`--\`. Nazwa: "${schowek}"; gdy \`git stash list\` ma juz
+   wpis o tej nazwie (drugi STOP tej samej fazy), uzyj kolejnego numeru: "${schowek}#2", "${schowek}#3" itd.
+   \`git stash push --include-untracked -m "<nazwa>" -- <pliki (c)>\`. Bez plikow (c) krok pomijasz (schowek = null).
+   W polu schowek zwracasz nazwe, ktorej faktycznie uzyles.
 3. Walidacja na drzewie bez plikow (c): typecheck i testy projektu (komendy z package.json, szczegoly stacku w
    .claude/stack/walidacja.md). Niczego nie naprawiasz i nie zmieniasz kodu: czerwona walidacja znaczy, ze jednostki ukonczone
    nie stoja bez przerwanej. Wtedy przywroc pliki (c) (\`git stash pop\`, gdy schowek powstal), sprawdz w git status, ze
@@ -313,10 +336,44 @@ ${BLOK_DLUGIE_KOMENDY}
    jedna linie: faza ${faza} przerwana, jednostki ukonczone i zapisane, jednostki nieukonczone, nazwa schowka (gdy powstal).
 5. Commit: \`git add\` wylacznie pliki (a) i dwa pliki z punktu 4 (nie git add .), potem
    \`git commit -m "feat(<nazwa zadania>): faza ${faza}, jednostki <lista ukonczonych> (execute przerwany)"\`.
+5a. Commit odrzucony mimo zielonej walidacji (np. hook): niczego nie poprawiasz; \`git stash pop\` (gdy schowek powstal) i
+   zakoncz: zacommitowano=false, schowek=null, w powod tresc bledu commita.
+   Nieudany \`git stash pop\` (tu albo w punkcie 3): nie probuj dalej (bez reset, checkout ani drop); zakoncz z zacommitowano=false,
+   schowek = nazwa (wpis zostaje w git stash list), w powod "schowek <nazwa> nie wrocil do drzewa: git stash list" i blad gita.
 6. Bramek mechanicznych i dossier nie uruchamiasz: zrobi je domkniecie calej fazy, liczone od bazy ${baza}.
 
-Zwroc obiekt zgodny ze schematem: zacommitowano, commit (SHA), schowek ("${schowek}" albo null), plikiOdlozone (pliki (c)),
+Zwroc obiekt zgodny ze schematem: zacommitowano, commit (SHA), schowek (faktyczna nazwa schowka albo null), plikiOdlozone (pliki (c)),
 walidacja, powod (null przy zacommitowano=true).`
+}
+
+// Decyzje builderow (HIERARCHIA ZRODEL) z prefiksem jednostki. Builder zablokowany nie daje decyzji (jego pliki ida do schowka
+// gita). `tylkoUkonczone` (weryfikacja partii, punkt 48): przy przerwaniu pliki buildera `partial` ida do schowka razem z jednostka
+// przerwana, wiec jego decyzje opisywalyby kod spoza repo — do zapisu po przerwaniu ida tylko decyzje jednostek ukonczonych.
+// Funkcje czyste (walidacja 51–55, punkt 60): testy wykonuja je na danych, nie dopasowuja tekstu orkiestracji.
+function decyzjeBuilderow(buildResults, tylkoUkonczone) {
+  return buildResults.filter((b) => (tylkoUkonczone ? b.status === 'completed' : b.status !== 'blocked'))
+    .flatMap((b) => (Array.isArray(b.decyzje) ? b.decyzje : []).map((d) => String(d).trim()).filter(Boolean).map((d) => `${b.id}: ${d}`))
+}
+
+// Wynik execute po domknieciu. Weryfikacja partii 26–45, punkt 54: domkniecie bez wyniku (agent padl albo zostal przerwany)
+// zwracalo null — autopilot zostawial stan z baza: null (swiezy run liczylby review od galezi glownej), a decyzje autopilota
+// przepadaly. Bez wyniku: obiekt zgodny z EXECUTE_RESULT, status partial — autopilot zapisuje baze i robi STOP jak przy kazdym
+// execute bez „completed”.
+function wynikDomkniecia(wynik, faza, buildResults, baza, decyzjeAutopilota) {
+  if (!wynik) {
+    return {
+      fazaNumer: faza,
+      status: 'partial',
+      iu: buildResults.map((b) => ({ id: b.id, status: b.status })),
+      commity: [],
+      testy: 'n/a',
+      odchylenia: [],
+      problem: 'domkniecie fazy nie zwrocilo wyniku (agent padl albo zostal przerwany) — commit fazy mogl juz powstac: sprawdz git log i git status',
+      baza,
+      decyzjeAutopilota,
+    }
+  }
+  return { ...wynik, baza, decyzjeAutopilota }
 }
 
 // Wynik execute przerwanego przed domknieciem: baza fazy zawsze (bez niej commit resztek z drzewa gubi poczatek fazy),
@@ -395,10 +452,12 @@ ${ukonczone.length ? `   Jednostki zapisane commitem w poprzednim, przerwanym po
      pomin), bo regula wklejona do promptu delegacji jest przez buildera stosowana, a regula czekajaca w pliku bywa pomijana.
    - wykluczenia z sekcji \`## Granice\` planu technicznego jako blok "Czego zadanie nie obejmuje:" z dopiskiem:
      "Niczego z tej listy nie implementuj, nawet gdy wyglada na przydatne. Gdy jednostka wymaga takiej pracy,
-     zwroc status blocked i w polu pytanie nazwij te prace." Plan bez tej sekcji — blok pomin.
+     zwroc status blocked i w polu pytanie nazwij te prace (wyjatek: element zadany tylko przez nizsze zrodlo — HIERARCHIA ZRODEL)."
+     Plan bez tej sekcji — blok pomin.
    - gdy IU ma pole "Znika z obecnej wersji" z lista elementow (nie sama kreska): pod polem dopisz zdanie
      "Elementow z decyzja „znika” nie przenosisz z obecnego pliku ani ze wzorca, takze gdy obecny kod albo wzorzec je zawiera.
-     Gdy Podejscie albo scenariusz jednostki wymaga takiego elementu, zwroc status blocked i w polu pytanie nazwij te sprzecznosc."
+     Gdy Podejscie albo scenariusz jednostki wymaga takiego elementu, wygrywa decyzja „znika” (HIERARCHIA ZRODEL): nie przenosisz
+     elementu, dopasowujesz scenariusz i wpisujesz wybor do pola decyzje."
      Bez tego zdania builder bierze obecny plik za wzorzec i przenosi element, ktory operator kazal usunac.
    - dla feature-builder-ui|fullstack (takze wariantow -figma): gdy sekcja "Designerski kontekst" w ${sciezka}/*-kontekst.md istnieje
      i ma choc jedna niepusta sciezke, uruchom \`node .claude/scripts/plan/plan.mjs designerski <sciezka z linii "Plan techniczny:"> --iu <id IU>\`
@@ -459,7 +518,21 @@ function plikBramek(sciezka, faza) {
   return `/tmp/bramki-${String(sciezka).replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}-faza-${faza}.json`
 }
 
-function domknieciePrompt(sciezka, faza, buildResults, baza, plikBramek, wczesniej = []) {
+// Decyzje autopilota w domknieciu (weryfikacja partii 2026-11-11, punkt 48): builder dopasowal test do wybranej opcji, a domkniecie
+// znalo tylko status, odchylenia i nastepne kroki — przy checkboxie "Test:" z pierwotnym scenariuszem mialo polecenie dopisac
+// brakujacy test, czyli przywrocic zrodlo, ktore przegralo (sprzecznosc zapisana przy punkcie 41: „domkniecie dopisujace testy”).
+function decyzjeBlok(decyzje) {
+  if (!decyzje.length) return ''
+  return `DECYZJE AUTOPILOTA tej fazy (builder rozstrzygnal sprzecznosc zrodel planu wg hierarchii zrodel; operator potwierdzi wybor
+albo go zmieni w smoke'u):
+${decyzje.map((d) => `- ${d}`).join('\n')}
+Wybor obowiazuje takze Ciebie. Checkbox "Test:", ktorego scenariusz builder dopasowal do wybranej opcji, zalicza test tej opcji:
+nie dopisujesz testu pierwotnego scenariusza i nie przywracasz w kodzie tego, z czego builder zrezygnowal. Brak takiego testu
+albo zachowania nie jest powodem statusu partial. Tresci pozycji w pliku zadan i w planie nie zmieniasz.
+`
+}
+
+function domknieciePrompt(sciezka, faza, buildResults, baza, plikBramek, wczesniej = [], decyzje = []) {
   const podsumowanieIU = buildResults
     .map((b) => `- ${b.id}: ${b.status}${b.odchylenia && b.odchylenia.length ? ` (odchylenia: ${b.odchylenia.join('; ')})` : ''}${b.nastepneKroki ? ` (nastepne kroki: ${b.nastepneKroki})` : ''}`)
     .join('\n')
@@ -470,7 +543,7 @@ Faza: ${faza}
 
 Raporty builderow:
 ${podsumowanieIU || '(brak — w tym podejsciu zaden builder nie pracowal; walidujesz i domykasz stan repo od bazy fazy)'}
-${wczesniej.length ? `Jednostki zapisane commitem w poprzednim, przerwanym podejsciu (kod jest juz w repo, checkboxy odhaczone): ${wczesniej.join(', ')}.\nWalidacja, bramki i dossier obejmuja cala faze od bazy.\n` : ''}
+${wczesniej.length ? `Jednostki zapisane commitem w poprzednim, przerwanym podejsciu (kod jest juz w repo, checkboxy odhaczone): ${wczesniej.join(', ')}.\nWalidacja, bramki i dossier obejmuja cala faze od bazy.\n` : ''}${decyzjeBlok(decyzje)}
 1. System-Wide Test Check: typecheck bez nowych bledow,
    istniejace testy przechodza, nowe testy pokrywaja happy path + error case, checkboxy "Test:" napisane i przechodza,
    importy nie lamia modulow, build (krok build wg .claude/stack/walidacja.md) przechodzi. Komendy z package.json.
@@ -511,8 +584,11 @@ ${BLOK_DLUGIE_KOMENDY}
    (jedna sekcja, chronologicznie) plus "Ostatnia aktualizacja". Odchylenia i nastepne kroki builderow z listy raportow dopisz do \`## Dziennik\` (linia na IU), bo to jedyny zapis pracy, ktora builder zostawil poza jednostka. NIE zakladaj w tym pliku sekcji
    "Decyzje techniczne", "Kluczowe pliki", "Odroczone do implementacji" ani "Wzorce do nasladowania" —
    te tresci zyja w planie technicznym, a kopia w pliku kontekstu rozjezdza sie z nim. Decyzja korygujaca plan idzie
-   do planu technicznego w docs/plans/ (punkt 4), a w Dzienniku zostaje jedno zdanie i wskaznik.
-4. Aktualizuj plan techniczny w docs/plans/ (odznacz test scenarios / verification dla tej fazy).
+   do sekcji \`## Decyzje z realizacji\` planu technicznego w docs/plans/ (punkt 4), a w Dzienniku zostaje jedno zdanie i wskaznik.
+4. Aktualizuj plan techniczny w docs/plans/: odznacz test scenarios / verification dla tej fazy. Decyzja korygujaca plan
+   trafia WYLACZNIE do sekcji \`## Decyzje z realizacji\` na koncu planu (brak sekcji = utworz ja jako ostatnia), jedna linia
+   na decyzje: \`- faza ${faza}, IU-x: <decyzja>\`. Poza ta sekcja w planie zmieniasz tylko stan checkboxow: przeglad spojnosci
+   planu liczy odcisk tresci bez tej sekcji i bez checkboxow, wiec kazda inna zmiana zatrzyma kolejny run na bramce gotowosci.
 5. Commit inkrementalny: feat/fix/refactor([nazwa]): [co i dlaczego]. Staguj tylko zmienione pliki (nie git add .).
 6. DOSSIER FAZY (po commicie):
    \`node .claude/scripts/dossier/dossier.mjs --sciezka ${sciezka} --faza ${faza}${baza === 'HEAD' ? '' : ` --baza ${baza}`} --bramki ${plikBramek}\`
@@ -558,7 +634,7 @@ if (plan.iu.length === 0 && !bazaZeStanu) {
 
 phase('Build')
 // BLOK doklejany deterministycznie w JS — kazdy builder dostaje prawa srodowiska niezaleznie od plannera.
-const promptIU = (iu) => `${iu.prompt}\n${BLOK_DLUGIE_KOMENDY}${BLOK_PYTANIE_BLOKERA}`
+const promptIU = (iu) => `${iu.prompt}\n${BLOK_DLUGIE_KOMENDY}${BLOK_HIERARCHIA_ZRODEL}${BLOK_PYTANIE_BLOKERA}`
 let builds
 if (plan.iu.length === 0) {
   builds = []
@@ -591,10 +667,17 @@ async function zapiszUkonczone() {
   const czesciowe = await agent(domkniecieCzesciowePrompt(sciezka, faza, czesc, bazaFazy(plan)), { schema: CZESCIOWE_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `domkniecie-czesciowe:faza-${faza}` })
   return { czesc, czesciowe }
 }
+// Decyzje autopilota z builderow (HIERARCHIA ZRODEL) liczone w JS; autopilot zapisuje je w known-issues jak decyzje fixa. Takze
+// przy zatrzymaniu: jednostki ukonczone przed blokerem zapisuje domkniecie czesciowe. Builder zablokowany nie daje decyzji
+// (jego pliki ida do schowka gita).
+const decyzjeAutopilota = decyzjeBuilderow(buildResults, false)
+const decyzjeUkonczonych = decyzjeBuilderow(buildResults, true)
+
 if (zablokowany) {
   const { czesc, czesciowe } = await zapiszUkonczone()
   return wynikPrzerwanego({
     fazaNumer: faza,
+    decyzjeAutopilota: decyzjeUkonczonych,
     status: 'blocked',
     iu: buildResults.map((b) => ({ id: b.id, status: b.status })),
     problem: zablokowany.pytanie || `IU ${zablokowany.id} zablokowany`,
@@ -607,6 +690,7 @@ if (buildResults.length !== plan.iu.length) {
   const { czesc, czesciowe } = await zapiszUkonczone()
   return wynikPrzerwanego({
     fazaNumer: faza,
+    decyzjeAutopilota: decyzjeUkonczonych,
     status: 'partial',
     iu: plan.iu.map((iu) => ({ id: iu.id, nazwa: iu.nazwa, status: zwrocone.has(iu.id) ? 'completed' : 'brak wyniku (kill/blad)' })),
     problem: `builder(y) bez wyniku: ${brakujace.join(', ')} — IU niewykonane lub niezweryfikowane`,
@@ -614,6 +698,7 @@ if (buildResults.length !== plan.iu.length) {
 }
 
 phase('Domkniecie')
-const wynik = await agent(domknieciePrompt(sciezka, faza, buildResults, bazaFazy(plan), plikBramek(sciezka, faza), ukonczoneWczesniej) + punktZapisuStanu(sciezka, faza, bazaFazy(plan), args.stanPoExecute), { schema: EXECUTE_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `domkniecie:faza-${faza}` })
+const wynik = await agent(domknieciePrompt(sciezka, faza, buildResults, bazaFazy(plan), plikBramek(sciezka, faza), ukonczoneWczesniej, decyzjeAutopilota) + punktZapisuStanu(sciezka, faza, bazaFazy(plan), args.stanPoExecute), { schema: EXECUTE_RESULT, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `domkniecie:faza-${faza}` })
 // Baza fazy z JS (P7): autopilot utrwala ja w stanie i podaje review-wf jako args.baza.
-return wynik && { ...wynik, baza: bazaFazy(plan) === 'HEAD' ? null : bazaFazy(plan) }
+const bazaWyniku = bazaFazy(plan) === 'HEAD' ? null : bazaFazy(plan)
+return wynikDomkniecia(wynik, faza, buildResults, bazaWyniku, decyzjeAutopilota)

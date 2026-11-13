@@ -105,6 +105,10 @@ krok git -C "$KOPIA" commit --quiet -m "chore(smoke): sync szablonu z $SZABLON"
 
 echo "+ fixture zadania → docs/active/smoke-autopilot, docs/plans"
 [[ "$DRY_RUN" -eq 1 ]] || wstaw_fixture_zadania
+# Zapis przeglądu spójności planu fixture'u (walidacja 51–55, punkt 56): autopilot zatrzymuje świeże zadanie bez ważnego
+# przeglądu, a fixture go nie miał — smoke stawał na starcie. Odcisk planu liczy się po podstawieniu placeholderów, więc
+# zapis powstaje tutaj, nie w szablonie; faza spoza planu albo czerwony stan kończy skrypt (kod wyjścia plan.mjs).
+krok node "$KOPIA/.claude/scripts/plan/plan.mjs" spojnosc docs/plans/plan-techniczny-smoke-autopilot.md --zapisz --fazy 1,2 --otwarte 0 --projekt "$KOPIA"
 # Instalacja przed commitem: może poprawić lockfile, a git kopii ma zostać czysty.
 echo "+ (cd $KOPIA && $PM install)"
 [[ "$DRY_RUN" -eq 1 ]] || (cd "$KOPIA" && "$PM" install --silent)
@@ -136,4 +140,4 @@ if ! (cd "$KOPIA" && "$PM" run typecheck && CI=1 "$PM" test) > "$LOG_BRAMEK" 2>&
   exit 7
 fi
 echo "GOTOWE. Git kopii: $(git -C "$KOPIA" status --porcelain | wc -l | tr -d ' ') zmian (oczekiwane 0), gałąź $GALAZ, bramki zielone."
-echo "Otwórz $KOPIA w osobnej sesji desktop (efort medium) i uruchom: /dev-autopilot-wf docs/active/smoke-autopilot"
+echo "Otwórz $KOPIA w osobnej sesji desktop (efort medium) i uruchom osobną wiadomością z samym tym poleceniem: /dev-autopilot-wf docs/active/smoke-autopilot"

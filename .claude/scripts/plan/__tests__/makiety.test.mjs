@@ -209,6 +209,26 @@ test('sprawdzMakiety: Modyfikuj + Makiety bez pola „Znika z obecnej wersji” 
   assert.deepEqual(oZnikaniu(plan(iuPrzebudowy({ makiety: '—' }))), [], 'jednostka bez ekranu z makiety')
 })
 
+// Weryfikacja partii 26–45, punkt 53: pole przechodzilo bez decyzji przy elemencie.
+test('pole „Znika z obecnej wersji”: element bez „znika” albo „zostaje” = uwaga z linia (nie blad); „—” i komplet decyzji = bez uwagi', () => {
+  const lista = '\n- powitanie z imieniem (`email.service.ts:58`) — znika (R25)\n- stopka z adresem (`email.service.ts:90`)\n1. logo w naglowku — Zostaje (D3)\n* link wypisu'
+  const p = plan(iuPrzebudowy({ znika: lista }))
+  assert.deepEqual(oZnikaniu(p), [
+    'IU-1: pole „Znika z obecnej wersji” ma element bez decyzji „znika” albo „zostaje”: - stopka z adresem (`email.service.ts:90`)',
+    'IU-1: pole „Znika z obecnej wersji” ma element bez decyzji „znika” albo „zostaje”: * link wypisu',
+  ])
+  assert.deepEqual(sprawdzMakiety(p, p.fazy.flatMap((f) => f.iu), tmpdir()).bledy, [], 'uwaga, nie blad')
+  assert.deepEqual(oZnikaniu(plan(iuPrzebudowy({ znika: ' imię w powitaniu' }))), ['IU-1: pole „Znika z obecnej wersji” ma element bez decyzji „znika” albo „zostaje”: imię w powitaniu'], 'pole bez listy = jeden element')
+  assert.deepEqual(oZnikaniu(plan(iuPrzebudowy({ znika: ' imię w powitaniu — znika' }))), [])
+  assert.deepEqual(oZnikaniu(plan(iuPrzebudowy({ znika: ' —' }))), [])
+  // Walidacja 51–55, punkt 61: liczba mnoga i decyzja w linii kontynuacji pod elementem to tez decyzja; podobne slowa nie.
+  assert.deepEqual(oZnikaniu(plan(iuPrzebudowy({ znika: '\n- filtry i sortowanie (`Lista.tsx:40`) — znikają (R3)\n- linki w stopce — zostają\n- powitanie z imieniem (`email.service.ts:58`)\n  — znika (R25)\n2) baner\n   zostaje do etapu 5' }))), [])
+  assert.deepEqual(oZnikaniu(plan(iuPrzebudowy({ znika: '\n- baner — pozostaje\n3. filtr — zanika\n- stopka — znikanie animowane' }))).map((u) => u.split(': ').pop()), ['- baner — pozostaje', '3. filtr — zanika', '- stopka — znikanie animowane'])
+  // Uwaga dotyczy kazdej jednostki z polem, takze z plikiem Stwórz (decyzja bez elementu i tak jest luka).
+  assert.equal(oZnikaniu(plan(iuPrzebudowy({ akcja: 'Stwórz', znika: '\n- baner' }))).length, 1)
+  assert.ok(sprawdzPlan(p, tmpdir()).uwagi.some((u) => u.endsWith(': * link wypisu')), 'sprawdzPlan niesie uwage')
+})
+
 test('sprawdzPlan niesie uwage o polu „Znika z obecnej wersji”, a szablony planu (rdzen i Expo) opisuja pole', () => {
   const p = plan(iuPrzebudowy())
   assert.ok(sprawdzPlan(p, tmpdir()).uwagi.includes(UWAGA_ZNIKA))

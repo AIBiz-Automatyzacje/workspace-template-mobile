@@ -39,13 +39,13 @@ const complete = readFileSync(resolve(KATALOG, '../dev-docs-complete-wf.js'), 'u
 // eslint-disable-next-line no-new-func -- ekstrakcja funkcji z pliku workflowu tego repo, nie z inputu
 const A = new Function(
   `${wytnij(autopilot, '// ── Bramka wejscia (P4)', '// ── Koniec bramki wejscia')}
-   return { decyzjaWejscia, decyzjaTestowStartu, decyzjaClaudeMd, decyzjaBlokeraFazy, fazyUkonczone, instrukcjaCommita }`,
+   return { decyzjaWejscia, decyzjaTestowStartu, decyzjaClaudeMd, decyzjaBlokeraFazy, decyzjaSpojnosci, fazyUkonczone, instrukcjaCommita }`,
 )()
 
 // eslint-disable-next-line no-new-func -- jw.
 const C = new Function(
   `${wytnij(complete, '// ── Archiwum (P4)', '// ── Koniec archiwum')}
-   return { pathspecArchiwum, krokOgrodu, komunikatArchiwum, szkieletDecyzji, sprawdzDecyzje, czesciPr, czesciZWyniku, uwagaZmiennych, PROG_PLIKOW_PR }`,
+   return { pathspecArchiwum, krokOgrodu, komunikatArchiwum, szkieletDecyzji, sprawdzDecyzje, czesciPr, czesciZWyniku, uwagaZmiennych, zdanieOtwartych, PROG_PLIKOW_PR }`,
 )()
 
 const ZADANIE = 'docs/active/zadanie-x'
@@ -224,6 +224,45 @@ test('bloker fazy: autopilot sprawdza pierwsza faze przed testami startu, a kazd
   assert.match(petla, /const bloker = decyzjaBlokeraFazy\(numerFazy, stan\.wejscie\.blokery, sciezka\)\s*\n\s*if \(bloker\) \{\s*\n\s*return await stopRun\(\{ \.\.\.bloker, faza: numerFazy/)
 })
 
+// Weryfikacja partii 26–45, punkt 53: autopilot nie sprawdzal przegladu spojnosci planu — plan bez przegladu szedl do runu.
+// Swieze zadanie = STOP na starcie; zadanie w toku (aa-exam E3, planowane przed bramka) = uwaga; brak pola = brak kontroli.
+const CZERWONA = { ok: false, powod: 'plan zmieniony po przeglądzie spójności (odcisk inny niż w docs/plans/p.spojnosc.json) → /dev-plan krok 6.2b' }
+const SWIEZE = [{ numer: 1, execute: 'pending', review: 'pending', fix: 'none' }, { numer: 2, execute: 'pending', review: 'pending', fix: 'none' }]
+
+test('punkt 53: swieze zadanie bez waznego przegladu spojnosci = STOP z powodem ze skryptu i naprawa 6.2b + swiezy run', () => {
+  const d = A.decyzjaSpojnosci(SWIEZE, CZERWONA, ZADANIE)
+  assert.equal(d.uwaga, null)
+  assert.ok(d.stop)
+  assert.equal(d.stop.powod, `start: przeglad spojnosci planu — ${CZERWONA.powod}`)
+  assert.equal(d.stop.naprawa, '/dev-plan krok 6.2b (przeglad spojnosci), potem swiezy run: w osobnej wiadomosci z samym poleceniem (bez warunkow i prosb): /dev-autopilot-wf docs/active/zadanie-x')
+})
+
+test('punkt 53: zadanie w toku (faza zbudowana albo jednostki zapisane) = tylko uwaga; przeglad ok albo brak pola = nic', () => {
+  const zbudowana = [{ ...SWIEZE[0], execute: 'done' }, SWIEZE[1]]
+  const przerwana = [{ ...SWIEZE[0], iuUkonczone: ['IU-1'] }, SWIEZE[1]]
+  for (const fazy of [zbudowana, przerwana]) {
+    const d = A.decyzjaSpojnosci(fazy, CZERWONA, ZADANIE)
+    assert.equal(d.stop, null)
+    assert.equal(d.uwaga, `przeglad spojnosci planu nieaktualny, zadanie w toku — run idzie dalej: ${CZERWONA.powod}`)
+  }
+  assert.deepEqual(A.decyzjaSpojnosci([{ ...SWIEZE[0], iuUkonczone: [] }], CZERWONA, ZADANIE).stop?.naprawa.startsWith('/dev-plan'), true, 'pusta lista iuUkonczone to swieze zadanie')
+  assert.deepEqual(A.decyzjaSpojnosci(SWIEZE, { ok: true, powod: '' }, ZADANIE), { stop: null, uwaga: null })
+  assert.deepEqual(A.decyzjaSpojnosci(SWIEZE, undefined, ZADANIE), { stop: null, uwaga: null }, 'starszy plan.mjs bez pola')
+})
+
+test('punkt 53: bootstrap przepisuje spojnosc z plan.mjs blokery; schemat ja dopuszcza; decyzja przed blokerem i testami startu', () => {
+  const schemat = wytnij(autopilot, '        blokery: {\n', "      required: ['zmiany', 'doctorKod'")
+  assert.match(schemat, /spojnosc: \{\n\s+type: 'object',\n\s+additionalProperties: false,\n\s+properties: \{ ok: \{ type: 'boolean' \}, powod: \{ type: 'string' \} \},\n\s+required: \['ok', 'powod'\],/)
+  // Pole w `properties` obiektu blokery (additionalProperties: false), opcjonalne: starszy skrypt go nie zwraca.
+  assert.match(schemat, /required: \['ok', 'powod'\],\n {12}\},\n {10}\},\n {10}required: \['checklista', 'blokery'\],/)
+  assert.match(schemat, /required: \['faza', 'linia', 'tresc'\],\n {14}\},\n {12}\},\n {12}\/\/ Punkt 53: stan przegladu/, 'spojnosc obok checklista i blokery, nie za properties')
+  assert.match(autopilot, /przepisz pola\n {3}checklista, blokery i spojnosc \(gdy wynik je ma\) 1:1 do wejscie\.blokery/)
+  const decyzja = autopilot.indexOf('const bramkaSpojnosci = decyzjaSpojnosci(stan.fazy, stan.wejscie.blokery && stan.wejscie.blokery.spojnosc, sciezka)')
+  assert.ok(decyzja > 0 && decyzja < autopilot.indexOf('const blokerStartu = ') && decyzja < autopilot.indexOf('if (wejscie.testyStartu) {'))
+  assert.match(autopilot, /if \(bramkaSpojnosci\.stop\) \{\n {2}return await stopRun\(\{ \.\.\.bramkaSpojnosci\.stop, stan \}\)/)
+  assert.match(autopilot, /uwagaSpojnosci: bramkaSpojnosci\.uwaga,/)
+})
+
 test('fazyUkonczone liczy fazy domkniete w zadaniu, nie tylko w tym runie', () => {
   const fazy = [
     { numer: 1, execute: 'done', review: 'done', fix: 'none' },
@@ -362,7 +401,8 @@ test('smoke: zmienne srodowiska galezi skryptem (krok 6) i kontrola po zapisie; 
   const p = smokePrompt('zadanie-x')
   assert.match(p, /6\. ZMIENNE SRODOWISKA dodane w galezi: `node \.claude\/scripts\/smoke\/zmienne\.mjs`/)
   assert.match(p, /KONTROLA ZMIENNYCH po zapisie pliku: `node \.claude\/scripts\/smoke\/zmienne\.mjs --smoke <plik>`\. Kod 1 = pole braki[\s\S]*Nie konczysz, dopoki kod nie jest 0/)
-  assert.match(p, /spoza zrodel \(1\)-\(6\)/)
+  // Punkt 40, krok 2: zrodlo 7 to wiersze sekcji decyzji z known-issues.
+  assert.match(p, /spoza zrodel \(1\)-\(7\)/)
   assert.match(wytnij(complete, 'const SMOKE_RESULT = {', '\n}\n'), /required: \['plik', 'pozycje', 'e2eNieuruchomione', 'zmienne'\]/)
   const z = (/** @type {object} */ o) => `cos\n${JSON.stringify(o)}`
   const sekretny = { nazwa: 'SUPABASE_SECRET_KEY', zrodla: ['.env.example:17'] }
@@ -373,38 +413,52 @@ test('smoke: zmienne srodowiska galezi skryptem (krok 6) i kontrola po zapisie; 
   assert.match(C.uwagaZmiennych({ plik: '', zmienne: z({ baza: 'a', zmienne: [sekretny] }) }), /bez pozycji w smoke'u: SUPABASE_SECRET_KEY/)
   assert.match(C.uwagaZmiennych({ plik: 'docs/operator/s.md', zmienne: z({ baza: 'a', zmienne: [sekretny] }) }), /bez --smoke/)
   assert.match(C.uwagaZmiennych({ plik: 'docs/operator/s.md', zmienne: 'Error: cos' }), /^UWAGA: kontrola zmiennych srodowiska w smoke'u bez wyniku/)
-  assert.match(complete, /const uwagi = \[sprawdzDecyzje\(wynik\.decyzje, nazwaZadania\), pr\.uwaga, uwagaZmiennych\(smoke\)\]/)
+  assert.match(complete, /const uwagi = \[sprawdzDecyzje\(wynik\.decyzje, nazwaZadania\), pr\.uwaga, uwagaZmiennych\(smoke\),/)
 })
 
-// P22 B2: vibersi etap 4 — smoke i oba PR w jednej sesji: sesja glowna 4,49 M wobec 1,42 M wszystkich runow PR. Ramka smoke'u
-// konczy sie linia z /clear i /dev-pr; sama sesja smoke'u PR nie wysyla. Ta sama tresc w workflowie i w skillu.
-test('smoke: ramka „Jak kontynuowac” konczy smoke linia „Następny krok: /clear, potem /dev-pr 3 --bez-merge --czesc 1” bez /dev-pr w sesji', () => {
+// P22 B2: vibersi etap 4 — smoke i oba PR w jednej sesji: sesja glowna 4,49 M wobec 1,42 M wszystkich runow PR. Sesja smoke'u
+// konczy sie linia z /clear i /dev-pr, sama PR nie wysyla. Punkt 40, krok 4: dluga ramka do wklejania zniknela, smoke prowadzi
+// skill /dev-smoke; sekcja „Jak kontynuowac” w pliku smoke'u (workflow i skill archiwizacji) podaje komende skilla i linie konca.
+test('smoke: sekcja „Jak kontynuowac” odsyla do /dev-smoke, a /dev-smoke konczy linia „Następny krok” bez /dev-pr w sesji', () => {
   /** @type {(nazwaZadania: string) => string} */
   // eslint-disable-next-line no-new-func -- jw.
   const smokePrompt = new Function(`return (nazwaZadania) => {\n${wytnij(complete, 'const smokePrompt = `', 'Zwroc obiekt zgodny ze schematem.`')}\nreturn smokePrompt\n}`)()
-  const linia = 'Po ostatnim punkcie zakończ linią „Następny krok: /clear, potem /dev-pr 3 --bez-merge --czesc 1” (podsumowanie zadania'
-  assert.ok(smokePrompt('zadanie-x').includes(linia))
-  assert.match(smokePrompt('zadanie-x'), /„Następny krok: \/clear, potem \/dev-pr 3 --bez-merge”\)\. \/dev-pr w tej sesji nie uruchamiaj\./)
+  const plaski = (/** @type {string} */ t) => t.replace(/\n\s*/g, ' ')
+  const p = plaski(smokePrompt('zadanie-x'))
   const skill = readFileSync(resolve(KATALOG, '../../skills/dev-docs-complete/SKILL.md'), 'utf8')
-  assert.ok(skill.includes(linia))
-  assert.match(skill, /„Następny krok: \/clear, potem \/dev-pr 3 --bez-merge”\)\. \/dev-pr w tej sesji nie uruchamiaj\./)
-  assert.match(skill, /— po smoke'u: \/clear, potem \/dev-pr 3 --bez-merge --czesc 1\n/, 'raport archiwizacji: ta sama komenda')
-  // Punkt 37 (piszemy_wirale 08.11): ramka kazala „odhaczaj za mnie w pliku” bez commita, a etap start /dev-pr staje na brudnym
-  // drzewie. Sesja smoke'u commituje plik checklisty jawna sciezka; zdanie stoi w ramce przed linia „Następny krok”.
-  const commit = 'Po przejściu smoke\'u zacommituj plik checklisty jawną ścieżką (bez `git add -A`): /dev-pr wymaga czystego drzewa.'
-  const p = smokePrompt('zadanie-x')
-  const ramka = skill.slice(skill.indexOf('## Jak kontynuować w nowej sesji'))
-  for (const [nazwa, tekst] of /** @type {[string, string][]} */ ([['workflow', p], ['skill', ramka]])) {
-    const i = tekst.indexOf(commit)
-    assert.ok(i !== -1, `${nazwa}: zdanie o commicie pliku smoke'u w ramce`)
-    assert.ok(i < tekst.indexOf(linia), `${nazwa}: commit przed linia „Następny krok”`)
+  const ramka = plaski(skill.slice(skill.indexOf('## Jak kontynuować w nowej sesji'), skill.indexOf('Reguły: sekrety tylko nazwami')))
+  const zdania = [
+    'Sesja zaczyna od „Decyzji przed PR”, potem sama przechodzi listę i zatrzymuje się tylko przy pozycjach dla człowieka.',
+    'Kończy się linią „Następny krok: /clear, potem /dev-pr 3 --bez-merge --czesc 1” (zadanie bez części PR: „Następny krok: /clear, potem /dev-pr 3 --bez-merge”); /dev-pr w sesji smoke\'u nie rusza.',
+  ]
+  for (const z of zdania) {
+    assert.ok(p.includes(z), `workflow: ${z}`)
+    assert.ok(ramka.includes(z), `skill: ${z}`)
   }
-  assert.ok(ramka.indexOf('odhaczaj za mnie w pliku') < ramka.indexOf(commit))
+  assert.ok(p.includes('`/clear`, potem `/dev-smoke zadanie-x`'), 'workflow: komenda skilla z nazwa zadania')
+  assert.ok(ramka.includes('`/clear`, potem `/dev-smoke <zadanie>`'), 'skill: komenda skilla')
+  // Ramki do wklejania juz nie ma: starsze smoke'i nie moga jej przeniesc przez regule ukladu sekcji.
+  assert.doesNotMatch(ramka, /Skopiuj jako pierwszą wiadomość|odhaczaj za mnie w pliku/)
+  assert.doesNotMatch(p, /ramka do wklejenia jako pierwsza wiadomosc|odhaczaj za mnie w pliku/)
+  assert.match(p, /Wyjatek ukladu: sekcja "Jak kontynuowac w nowej sesji" zawsze wg zdan wyzej/)
+  assert.match(skill, /Wyjątek: sekcja „Jak kontynuować w nowej sesji” zawsze według układu niżej/)
+  assert.match(skill, /— po smoke'u: \/clear, potem \/dev-pr 3 --bez-merge --czesc 1\n/, 'raport archiwizacji: ta sama komenda')
+  assert.match(skill, /→ w nowej sesji: \/clear, potem \/dev-smoke \$ARGUMENTS/, 'raport archiwizacji odsyla do skilla')
+  // Punkt 37 (piszemy_wirale 08.11): odhaczony plik bez commita zatrzymywal etap start /dev-pr na brudnym drzewie. Commit pliku
+  // smoke'u jawna sciezka robi teraz skill /dev-smoke, przed linia „Następny krok”.
+  const smokeSkill = plaski(readFileSync(resolve(KATALOG, '../../skills/dev-smoke/SKILL.md'), 'utf8'))
+  const koniec = smokeSkill.slice(smokeSkill.indexOf('## 5. Koniec'))
+  const commit = 'Zacommituj plik smoke\'u i dokumenty zmienione w sesji jawnymi ścieżkami, bez `git add -A` (`/dev-pr` wymaga czystego drzewa)'
+  const linia = 'Ostatnia linia: „Następny krok: /clear, potem /dev-pr 3 --bez-merge --czesc 1”'
+  assert.ok(koniec.includes(commit), 'dev-smoke: commit pliku smoke\'u')
+  assert.ok(koniec.includes(linia) && koniec.indexOf(commit) < koniec.indexOf(linia), 'dev-smoke: commit przed linia „Następny krok”')
+  assert.ok(koniec.includes('bez niej „Następny krok: /clear, potem /dev-pr 3 --bez-merge”'))
+  assert.ok(koniec.includes('`/dev-pr` w tej sesji nie uruchamiasz'))
 })
 
 // P24 IU-8: punkty wizualne smoke'u mają format czytany przez przegląd stacku; narzędzie i zdania do smoke'u leżą w slocie
 // dev-docs-complete/references/stack.md, sekcja „Punkty wizualne” (IU-2.7, D2). Treść web: stacks/web/__tests__/makieta.test.mjs.
-test('smoke: format punktu wizualnego w workflowie i w skillu, zdania i kontrola ze slotu, zdanie do ramki przed zdaniami końcowymi', () => {
+test('smoke: format punktu wizualnego w workflowie i w skillu, zdania i kontrola ze slotu, bez zdania do ramki', () => {
   /** @type {(nazwaZadania: string) => string} */
   // eslint-disable-next-line no-new-func -- jw.
   const smokePrompt = new Function(`return (nazwaZadania) => {\n${wytnij(complete, 'const smokePrompt = `', 'Zwroc obiekt zgodny ze schematem.`')}\nreturn smokePrompt\n}`)()
@@ -424,14 +478,31 @@ test('smoke: format punktu wizualnego w workflowie i w skillu, zdania i kontrola
   assert.match(p, /Kontrola makiet po zapisie pliku: wg \.claude\/skills\/dev-docs-complete\/references\/stack\.md, sekcja „Punkty wizualne”/)
   assert.match(splaszczony, /Przed pierwszym punktem wizualnym smoke'u stoi zdanie z `references\/stack\.md`, sekcja „Punkty wizualne”/)
   assert.match(splaszczony, /Kontrola makiet po zapisie pliku: wg `references\/stack\.md`, sekcja „Punkty wizualne”/)
-  // Ramka nadal kończy się zdaniami o „Następny krok” (P22 B2) — zdanie do ramki stoi przed nimi.
-  const ramka = skill.slice(skill.indexOf('## Jak kontynuować w nowej sesji'))
-  const zdanieRamki = '<zdanie do ramki z sekcji „Punkty wizualne”>'
-  assert.ok(ramka.indexOf(zdanieRamki) !== -1 && ramka.indexOf(zdanieRamki) < ramka.indexOf('Po ostatnim punkcie zakończ linią'))
-  assert.match(ramka, /\/dev-pr w tej sesji nie uruchamiaj\.\n {3}```/)
-  assert.ok(p.indexOf('ramka ma zdanie do ramki z tej samej sekcji') < p.indexOf('Po ostatnim punkcie zakończ linią'))
+  // Punkt 40, krok 4: ramki nie ma, więc zdania do ramki też nie; przegląd punktów wizualnych w sesji opisuje slot /dev-smoke.
+  assert.doesNotMatch(slot, /Zdanie do ramki/)
+  assert.doesNotMatch(skill, /zdanie do ramki/)
+  assert.doesNotMatch(p, /zdanie do ramki/)
+  assert.match(readFileSync(resolve(KATALOG, '../../skills/dev-smoke/references/stack.md'), 'utf8'), /^## Punkty wizualne$/m)
   const linie = skill.split('\n')
   const i = linie.findIndex((l) => /^ {3}- \[ \] .*obok `visual-diff\/<ekran>-figma\.png`/.test(l))
   assert.ok(i > 0, 'szablon ma punkt wizualny')
   assert.match(linie[i - 1], /^ {3}<zdanie przed punktami z sekcji „Punkty wizualne”>/)
+})
+
+// Punkt 40, krok 6 (punkt 45): zdanie o otwartych sprawach z otwarte.mjs przez archiwizacje do raportu autopilota, nie ze slow modelu.
+test('archiwizacja: zdanie o otwartych sprawach 1:1 z otwarte.mjs; brak wyniku = uwaga, nie zgadywanie', () => {
+  const z = (/** @type {unknown} */ o) => `cos na stdout\n${JSON.stringify(o)}`
+  assert.equal(C.zdanieOtwartych(z({ ok: true, zdanie: 'Otwarte: 2 pozycji smoke\'u, 1 odłożonych (docs/operator/odlozone.md).' })), 'Otwarte: 2 pozycji smoke\'u, 1 odłożonych (docs/operator/odlozone.md).')
+  assert.equal(C.zdanieOtwartych(z({ ok: false, wyjatek: 'x' })), null)
+  assert.equal(C.zdanieOtwartych(z({ ok: true, zdanie: 'Wszystko zamknięte w całości.' })), null, 'zdanie spoza skryptu odrzucone')
+  assert.equal(C.zdanieOtwartych(''), null)
+  // Weryfikacja partii, punkt 49: po padzie autora smoke'u skrypt widzi brak pliku i mowi „brak” — zdanie mowi wtedy, ze lista nie powstala.
+  const poPadzie = C.zdanieOtwartych(z({ ok: true, zdanie: 'Otwarte: brak (bez smoke\'u, nic odłożonego).' }), 'zadanie-x')
+  assert.match(poPadzie, /^Otwarte: nieznane — lista smoke'u nie powstala \(autor smoke'u padl\).*\/dev-docs-complete zadanie-x\.$/)
+  assert.doesNotMatch(poPadzie, /brak \(bez smoke/)
+  assert.match(complete, /const otwarte = zdanieOtwartych\(wynik\.otwarte, smokeStatus === 'agent-null' \? nazwaZadania : null\)/)
+  assert.match(complete, /10\. Otwarte sprawy: \\`node \.claude\/scripts\/smoke\/otwarte\.mjs --zadanie \$\{nazwaZadania\}\\` -> otwarte = ostatnia linia stdout 1:1/)
+  assert.match(complete, /otwarte \? null : `UWAGA: liczba otwartych spraw nieznana/)
+  assert.match(complete, /return \{ \.\.\.wynik, otwarte, uwagi,/)
+  assert.match(autopilot, /otwarte: \(complete && complete\.otwarte\) \|\| null, smokeStatus: /)
 })

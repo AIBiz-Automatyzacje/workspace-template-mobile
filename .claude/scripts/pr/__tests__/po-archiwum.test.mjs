@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { plikKodu, poArchiwum } from '../po-archiwum.mjs'
+import { plikKodu, poArchiwum, shaSprawdzone, tematZnacznika } from '../po-archiwum.mjs'
 
 const CLI = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'po-archiwum.mjs')
 const Z = 'etap-4'
@@ -72,7 +72,7 @@ test('commity po archiwum bez tematow pipeline\'u; pliki kodu poza docs/ i .clau
 test('zadanie bez commitu archiwum → archiwum null i pusta lista; jeden PR (bez tabeli czesci) → czesci null', () => {
   const bez = repo({ archiwum: false })
   try {
-    assert.deepEqual(poArchiwum(bez.k, { zadanie: Z }), { ok: true, archiwum: null, galaz: `feature/${Z}`, zakres: null, czesci: 2, wTejCzesci: true, commity: [], plikiKodu: [] })
+    assert.deepEqual(poArchiwum(bez.k, { zadanie: Z }), { ok: true, archiwum: null, galaz: `feature/${Z}`, zakres: null, czesci: 2, wTejCzesci: true, commity: [], plikiKodu: [], sprawdzone: [] })
   } finally {
     rmSync(bez.k, { recursive: true, force: true })
   }
@@ -123,4 +123,50 @@ test('CLI z katalogu ze spacja w sciezce (URL modulu zakodowany) — wynik zamia
     rmSync(k, { recursive: true, force: true })
     rmSync(zSpacja, { recursive: true, force: true })
   }
+})
+
+// Punkt 40, krok 4: sesja /dev-smoke pokazuje poprawki po decyzjach operatora dwom reviewerom i oznacza je pustym commitem
+// z liniami „Sprawdzone: <sha>”. /dev-pr nie bierze ich do krotkiego review drugi raz; poprawka po findingu z tego review
+// (bez znacznika) i usterki z listy smoke'u ida do review jak dotad.
+test('znacznik /dev-smoke: commity z linii „Sprawdzone:” i sam znacznik poza review, reszta zostaje', () => {
+  const { k, sha } = repo()
+  try {
+    const decyzja = commit(k, `fix(${Z}): decyzja D1 — limit`, { 'src/limit.ts': 'x\n' })
+    const obca = git(k, ['rev-parse', 'main'])
+    git(k, ['commit', '-q', '--allow-empty', '-m', tematZnacznika(Z), '-m', `Sprawdzone: ${decyzja}\nSprawdzone: ${obca}\nSprawdzone: abc`])
+    const poReview = commit(k, `fix(${Z}): poprawka po review D1`, { 'src/limit.ts': 'y\n' })
+    const w = poArchiwum(k, { zadanie: Z })
+    assert.deepEqual(w.sprawdzone, [decyzja], 'tylko pelny sha z zakresu po archiwum')
+    assert.deepEqual(w.commity.map((c) => c.sha), [sha.smoke, sha.serwer, sha.naklejka, poReview])
+    assert.ok(/** @type {string[]} */ (w.plikiKodu).includes('src/limit.ts'), 'plik poprawki po review zostaje przez commit bez znacznika')
+    // Znacznik innego zadania niczego nie wyklucza.
+    const inny = repo()
+    try {
+      const d = commit(inny.k, `fix(${Z}): decyzja D1`, { 'src/d.ts': 'x\n' })
+      git(inny.k, ['commit', '-q', '--allow-empty', '-m', tematZnacznika('inne-zadanie'), '-m', `Sprawdzone: ${d}`])
+      const wi = poArchiwum(inny.k, { zadanie: Z })
+      assert.deepEqual(wi.sprawdzone, [])
+      assert.ok(wi.commity.some((c) => c.sha === d))
+    } finally {
+      rmSync(inny.k, { recursive: true, force: true })
+    }
+  } finally {
+    rmSync(k, { recursive: true, force: true })
+  }
+})
+
+test('znacznik: temat zgodny ze skillem /dev-smoke', () => {
+  const skill = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../skills/dev-smoke/SKILL.md'), 'utf8')
+  assert.ok(skill.includes(`git commit --allow-empty -m "${tematZnacznika('<zadanie>')}" -m "Sprawdzone: <pełny sha 1>`))
+  // Punkt 52: blok komendy bez wciecia — druga linia kopiowana z wcieciem gubila sie w parserze.
+  assert.ok(skill.includes(`\n\`\`\`\ngit commit --allow-empty -m "${tematZnacznika('<zadanie>')}" -m "Sprawdzone: <pełny sha 1>\nSprawdzone: <pełny sha 2>"\n\`\`\`\n`))
+})
+
+// Weryfikacja partii 26–45, punkt 52: linia `Sprawdzone:` z wcieciem (skopiowana z wcietego bloku skilla) przepadala.
+test('shaSprawdzone: linie z wcieciem spacja albo tabulatorem i spacja na koncu daja wszystkie SHA; krotki sha nie', () => {
+  const a = 'a'.repeat(40), b = 'b'.repeat(40), c = 'c'.repeat(40)
+  assert.deepEqual(shaSprawdzone(`Sprawdzone: ${a}\n  Sprawdzone: ${b}\n\tSprawdzone: ${c} \n  Sprawdzone: abc`), [a, b, c])
+  assert.deepEqual(shaSprawdzone(`tekst Sprawdzone: ${a}`), [], 'tylko na poczatku linii')
+  // Walidacja 51–55, punkt 60: po SHA linia sie konczy — dluzszy ciag szesnastkowy i dopisek to nie znacznik.
+  assert.deepEqual(shaSprawdzone(`Sprawdzone: ${a}ff\nSprawdzone: ${b} (po rebase)\nSprawdzone: ${c}`), [c])
 })

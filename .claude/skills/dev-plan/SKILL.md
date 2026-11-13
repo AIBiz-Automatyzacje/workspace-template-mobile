@@ -53,7 +53,7 @@ Koszt: w etapie 3 vibersi `/dev-plan` ruszył po `/dev-prep` z 215k kontekstu, c
 #### 0.1 Wznowienie
 
 - Użytkownik wskazuje istniejący plan albo w `docs/plans/` jest świeży plan na ten temat → przeczytaj go i zapytaj, czy aktualizować w miejscu, czy pisać nowy. Przy aktualizacji zachowaj odhaczone checkboxy.
-- Istnieje `docs/active/<zadanie>/` → to wznowienie zadania. Pokaż stan (`.autopilot-state.json`, `review-faza-N.md`, odhaczone pozycje) i zapytaj, czy tylko poprawić plan techniczny, czy przerwać. Pliki zadania z postępem zostają — `plan.mjs generuj --zapisz --nadpisz` odmawia, gdy zadanie ma przebieg. Zmianę planu technicznego po starcie (decyzja operatora po zatrzymaniu, pozycja przeniesiona do innej jednostki, nowa jednostka w fazie, która jeszcze nie ruszyła) przenosisz do pliku zadań przez `node .claude/scripts/plan/plan.mjs odswiez docs/active/<zadanie>`: najpierw bez `--zapisz` (lista zmian), potem z `--zapisz`. Skrypt nakłada różnicę między planem z `HEAD` (albo `--od <commit sprzed zmiany>`, gdy zmiana planu jest już w commicie) a planem na dysku; odhaczenia i linie dopisane przez przebieg zostają, a pozycja przeniesiona między jednostkami zabiera odhaczenie. Odmowę (nowa pozycja w zbudowanej fazie albo jednostce, zmiana faz, konflikt z linią zmienioną przez przebieg) pokazujesz operatorowi. `.autopilot-state.json` nie edytujesz ani ty, ani skrypt.
+- Istnieje `docs/active/<zadanie>/` → to wznowienie zadania. Pokaż stan (`.autopilot-state.json`, `review-faza-N.md`, odhaczone pozycje) i zapytaj, czy tylko poprawić plan techniczny, czy przerwać. Pliki zadania z postępem zostają — `plan.mjs generuj --zapisz --nadpisz` odmawia, gdy zadanie ma przebieg. Zmianę planu technicznego po starcie (decyzja operatora po zatrzymaniu, pozycja przeniesiona do innej jednostki, nowa jednostka w fazie, która jeszcze nie ruszyła) przenosisz do pliku zadań przez `node .claude/scripts/plan/plan.mjs odswiez docs/active/<zadanie>`: najpierw bez `--zapisz` (lista zmian), potem z `--zapisz`. Skrypt nakłada różnicę między planem z `HEAD` (albo `--od <commit sprzed zmiany>`, gdy zmiana planu jest już w commicie) a planem na dysku; odhaczenia i linie dopisane przez przebieg zostają, a pozycja przeniesiona między jednostkami zabiera odhaczenie. Odmowę (nowa pozycja w zbudowanej fazie albo jednostce, zmiana faz, konflikt z linią zmienioną przez przebieg) pokazujesz operatorowi. Konflikt wymienia linie sekcji spoza planu: tę, która jest zmienioną wersją usuwanej pozycji (np. `[E2E]` przestawione przez testera na `[Manual]`), usuwasz za zgodą operatora i uruchamiasz skrypt ponownie; gdy żadna nią nie jest, dodajesz `--pomin-brakujace`. Skrypt można uruchamiać wielokrotnie: zmiany, którą plik zadań już ma, nie dopisuje drugi raz. `.autopilot-state.json` nie edytujesz ani ty, ani skrypt. Przerwany execute odkłada pracę jednostki nieukończonej do schowka gita `autopilot/<zadanie>/faza-N` (drugi STOP tej samej fazy: `#2`, `#3`): to szkic jednostki, która po decyzji operatora powstanie od nowa, więc przed świeżym runem go nie przywracasz. Po zamknięciu fazy (`execute: done` w stanie) usuwasz wpis `git stash drop stash@{<n>}` (numer z `git stash list`) za zgodą operatora. Zmieniona treść planu wymaga ponownego przeglądu spójności (6.2b) zmienionych faz i nowego zapisu, bo bramka gotowości porównuje odcisk planu z zapisem.
 
 #### 0.2 Dokument źródłowy
 
@@ -77,6 +77,11 @@ Zrób glob `docs/operator/*.md` (bez `*-smoke.md`) i sprawdź **frontmattery**: 
 - ogłoś: „Znalazłem checklistę operatora etapu: `<ścieżka>` (N pozycji, M nieodhaczonych) — uzupełnię ją po zbudowaniu IU.”;
 - nieodhaczone pozycje `[blokuje: planowanie]` wymień i zapytaj, czy planować mimo nich (plan powstanie z lukami), czy przerwać.
 - decyzję z wypełnionym „Ustalono”, która jest sprzeczna z dokumentem źródłowym (linia `Zmienia wymaganie:` przy decyzji albo rozjazd widoczny przy czytaniu obu dokumentów), pokaż przez `AskUserQuestion`: wymaganie, decyzja z datą i proponowane nowe brzmienie wymagania. Po zgodzie popraw wymaganie w dokumencie źródłowym z dopiskiem `(zmienione decyzją <nr> z <data>, <ścieżka checklisty>)` i planuj z poprawionego źródła. Odmowa to bloker z 0.5: z dwóch sprzecznych źródeł planu nie piszesz, bo builder dostaje oba (aa-exam E3: decyzja D1 w checkliście nowsza niż R48 w wymaganiach).
+- decyzje „Sprawy odłożone w smoke'u” z wypełnionym „Ustalono” zamykasz w `docs/operator/odlozone.md` (po smoke'u tylko `/dev-plan` zmienia ten plik; operator go nie edytuje), linię tej sprawy zamieniasz na:
+  - wchodzi → po zapisaniu planu (5.2) `- [x] [etap: <etykieta>] <treść> → w planie <ścieżka planu> (<YYYY-MM-DD>)`;
+  - czeka → `- [ ] [etap: <nowa etykieta>] <treść>` (linia zostaje otwarta, zmienia się tylko etykieta);
+  - rezygnacja → `- [x] [etap: <etykieta>] <treść> → rezygnacja (<YYYY-MM-DD>)`.
+  Plik idzie do commitu inicjalnego (6.5) jawną ścieżką.
 
 Brak checklisty jest poprawny — 5.2b utworzy krótką listę, jeśli będzie co wpisać.
 
@@ -200,7 +205,7 @@ Autonomiczne E2E działa na dedykowanym projekcie testowym z `.env.e2e`, nigdy n
 - Realtime: jeden klient (render, wysłanie, optimistic + echo) jest `[E2E]`; dwóch klientów na żywo → `[Manual]`.
 - Wysyłka maili albo SMS w scenariuszach fazy (rejestracja, reset hasła, ponowna wysyłka, link logowania): policz wysyłki wszystkich scenariuszy `[E2E]` fazy razy dwa, bo re-review po fixie i ponowienie scenariusza wysyłają w tej samej godzinie jeszcze raz. Porównaj tę liczbę z limitem godzinowym usługi na projekcie e2e, odczytanym z jego konfiguracji, nie z dokumentacji ani z researchu. Supabase Auth bez własnego SMTP ma domyślnie 2 maile na godzinę, a Send Email hook tego limitu nie omija; odczyt robisz poleceniem `curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" https://api.supabase.com/v1/projects/<ref e2e>/config/auth | jq '{rate_limit_email_sent, rate_limit_sms_sent}'`. Całej odpowiedzi nie wypisujesz, bo zawiera sekrety (hasło SMTP, sekrety dostawców logowania). Limit mniejszy od policzonej liczby → pozycja w checkliście przygotowania (3.7) z podniesieniem limitu na projekcie e2e i markerem `[blokuje: faza N]`, bo kolejna wysyłka w godzinie kończy scenariusz błędem limitu zamiast wynikiem.
 - Projekt bez `.env.e2e`: scenariusz zostaje `[E2E]` tylko z pozycją setupu środowiska w checkliście (3.7). Opt-out do `[Manual]` to decyzja operatora: pytasz o nią, podając liczbę pozycji ręcznych, i proponujesz `/weryfikacja-setup` (aa-exam: opt-out zamienił 29 pozycji w klikanie na produkcji, choć stos lokalny działał).
-- `[Manual]` dzielisz: wymagające człowieka albo produkcji zostają `[Manual]`; wykonalne przez agenta lokalnie (przeglądarka, curl, baza testowa) zapisujesz jako `[Manual] agent:` (typ zostaje `[Manual]`, bo `plan.mjs sprawdz` zna tylko `[Unit]`, `[E2E]` i `[Manual]`), które sesja smoke'u wykonuje przed pytaniem operatora.
+- `[Manual]` zapisujesz bez podziału na kroki człowieka i agenta: sesja smoke'u (`/dev-smoke`) wykonuje każdą pozycję sama, a człowiekowi oddaje tylko wyjątki (produkcja i deploy, zewnętrzne konsole, fizyczne urządzenie, prawdziwa skrzynka pocztowa, płatność prawdziwą kartą, wpisanie hasła, ocena punktów wizualnych).
 - Scenariusz, który zapisuje albo czyta przez serwer aplikacji, albo sprawdza status HTTP lub meta trasy renderowanej przez serwer: start serwera, sonda i adres w linii scenariusza wg `.claude/stack/plan-e2e.md`, sekcja „Serwer aplikacji w scenariuszu”.
 
 #### 3.5 Builder IU
@@ -291,6 +296,16 @@ node .claude/scripts/plan/plan.mjs sprawdz <docs/plans/plik-planu.md>
 
 Wynik JSON: `bledy` i `uwagi` z numerami linii i identyfikatorami IU. Każdy błąd poprawiasz w planie technicznym (Edit) i uruchamiasz `sprawdz` ponownie, aż `ok: true`. Skrypt opisuje kontrakt konsumentów zadania — poprawiasz plan, nie skrypt. Uwagi (origin bez pliku, migracja w opisie bez pliku w `supabase/migrations/`, luka w numeracji IU) pokazujesz użytkownikowi w handoffie.
 
+#### 6.2b Przegląd spójności planu
+
+Każdy plan, także Lekki, przechodzi przegląd spójności przed zadaniem dla autopilota (punkt 41: w aa-exam E3 test wymagał imienia w mailu logowania, makieta i teksty go nie miały, a granice zabraniały tekstów spoza makiet — faza 3 stanęła w runie, bo nikt nie zestawił źródeł przed startem).
+
+1. Po zielonym `sprawdz` uruchom naraz, narzędziem `Agent` z typem `spojnosc-planu`, po jednym agencie na fazę planu, z poleceniem: „Przegląd spójności fazy <N> planu `docs/plans/<plik>.md`.” Agent czyta plan, wymagania, checklistę przygotowania, SPEC makiet i obecne pliki sam, ze świeżym kontekstem; planu nie zmienia.
+2. Każdą pozycję wyniku pokazujesz operatorowi po jednej narzędziem `AskUserQuestion`: kontekst prostym językiem (co użytkownik aplikacji zobaczy), opcje ze skutkiem, rekomendacja jako pierwsza opcja z uzasadnieniem. Pozycji nie rozstrzygasz sam.
+3. Po odpowiedzi poprawiasz plan (pole jednostki wskazane w „Poprawce planu po wyborze”: Podejście, Teksty, scenariusz, „Znika z obecnej wersji”, Kluczowe decyzje) albo dokument wskazany w pozycji. Decyzja sprzeczna z wymaganiami idzie wg 0.3 (operator zgadza się na poprawkę wymagania).
+4. Po poprawkach: `sprawdz` jeszcze raz i ponowny przegląd faz, które zmieniłeś, aż każda faza ma wynik „brak otwartych pozycji”.
+5. Zapis: `node .claude/scripts/plan/plan.mjs spojnosc docs/plans/<plik>.md --zapisz --fazy <wszystkie fazy po przecinku> --otwarte 0`. Plik `docs/plans/<plik>.spojnosc.json` (odcisk planu bez stanu checkboxów i bez sekcji `## Decyzje z realizacji`, do której domknięcie fazy dopisuje decyzje korygujące plan) idzie do commitu inicjalnego. Operator świadomie zostawia pozycję otwartą → zapis z `--otwarte <N>`; bramka gotowości zostaje wtedy czerwona.
+
 #### 6.3 Git i branch
 
 1. `git status --short --untracked-files=all` i podział pozycji:
@@ -308,7 +323,7 @@ Skrypt zapisuje `docs/active/<zadanie>/<zadanie>-plan.md`, `-kontekst.md` i `-za
 
 #### 6.5 Commit inicjalny
 
-`git add docs/active/<zadanie>/` plus dokładnie ścieżki z 6.3 (a): plan techniczny, `docs/plans/<feature-slug>-figma/`, checklista z `operator_prep:` (dokładna ścieżka z frontmattera), zmieniony dokument źródłowy. Bez `git add -A` i bez całego `docs/plans/`. Commit: `docs: inicjalizacja planu dla <zadanie>`.
+`git add docs/active/<zadanie>/` plus dokładnie ścieżki z 6.3 (a): plan techniczny, zapis przeglądu spójności `docs/plans/<plik>.spojnosc.json`, `docs/plans/<feature-slug>-figma/`, checklista z `operator_prep:` (dokładna ścieżka z frontmattera), zmieniony dokument źródłowy, `docs/operator/odlozone.md` (gdy 0.3 go zmienił). Bez `git add -A` i bez całego `docs/plans/`. Commit: `docs: inicjalizacja planu dla <zadanie>`.
 
 #### 6.6 Bramka gotowości
 
@@ -316,7 +331,7 @@ Skrypt zapisuje `docs/active/<zadanie>/<zadanie>-plan.md`, `-kontekst.md` i `-za
 node .claude/scripts/plan/plan.mjs gotowosc docs/active/<zadanie>
 ```
 
-Wynik ma siedem pozycji, każdą wypisujesz w handoffie:
+Wynik ma dziewięć pozycji, każdą wypisujesz w handoffie:
 
 - `plan` — błędy strukturalne planu technicznego (po 6.2 zwykle puste);
 - `e2e` — scenariusze `[E2E]` i makiety `figma_screens` vs środowisko: to samo sprawdzenie co bootstrap autopilota (`.env.e2e` w `.gitignore`, klucze bazy e2e, baza inna niż dev, `migrations.sum`, kontrola narzędzia jazdy z adaptera E2E), bez startu serwera. Brak `.env.e2e` przy scenariuszach albo pozycja w `bledy` zatrzyma autopilota przed fazą 1 → setup albo poprawka wg `.claude/templates/e2e-env/README.md` (jednorazowo, ~30 min); przy scenariuszach druga droga to opt-out `[E2E]` → `[Manual]` w planie i ponowne `generuj --nadpisz`. Zadanie z samymi makietami bez `.env.e2e` przechodzi (porównanie z makietą idzie bez przeglądarki do operatora), a przy błędnym `.env.e2e` naprawiasz plik. `uwagi` (brak skilla weryfikacji projektu) nie blokują startu — wypisz je z komendą `/weryfikacja-setup`;
@@ -324,7 +339,9 @@ Wynik ma siedem pozycji, każdą wypisujesz w handoffie:
 - `git` — branch `feature/<zadanie>` i czyste drzewo; autopilot nie przełącza brancha i zatrzymuje się na brudnym drzewie;
 - `testy` — runner testów projektu (vitest, jest) nie zbiera testów maszynerii z `.claude/**`; `ok: false` = autopilot zatrzyma się na `npm test` na starcie → wpisz do configu `poprawka` i zacommituj;
 - `claudeMd` — pliki decyzji na gałęzi głównej bez `claude_md: do-uzgodnienia`; `ok: false` = autopilot zatrzyma się na starcie → wypisz `naprawa` (uzgodnienie na gałęzi głównej przez `/dev-pr --claude-md <zadanie>`, potem wciągnięcie głównej do gałęzi zadania);
+- `spojnosc` — przegląd spójności planu (6.2b): zapis istnieje, odcisk planu się zgadza (odhaczenia i sekcja `## Decyzje z realizacji` go nie zmieniają, zmiana treści tak), zero otwartych pozycji, każda faza przejrzana. `ok: false` zatrzymuje start → wypisz `powod` i wróć do 6.2b dla wskazanych faz. Autopilot sprawdza to samo na starcie (`plan.mjs blokery`): świeże zadanie bez ważnego przeglądu kończy STOP-em, zadanie w toku dostaje uwagę;
 - `higiena` — nie blokuje, ale każdą `uwagi` wypisz z komendą przed startem: stara baza wiedzy (`learned-patterns.md` w `.claude/rules/`, przed konwersją: `/dev-compound-refresh --konwersja`) albo kontekst startowy agenta ponad próg (CLAUDE.md + reguły bez `paths:`) kosztują każdego agenta każdej fazy. Operator decyduje, czy porządkuje przed autopilotem; pełna lista kontroli jest w doctorze (`bash .claude/scripts/doctor/doctor.sh`).
+- `odlozone` — nie blokuje: otwarte sprawy odłożone w smoke'u poprzednich zadań (`docs/operator/odlozone.md`, `otwarte`: etap, treść, linia). Wypisz każdą z etapem; sprawa z etykietą tego etapu, której nie ma w planie, to pytanie do operatora, czy wchodzi teraz (dopisanie IU), czy czeka dalej, czy rezygnujemy. Odpowiedź zapisujesz w pliku wzorem z 0.3 (wchodzi / czeka / rezygnacja) i commitujesz jawną ścieżką. Pole `decyzje` (zadanie, wiersz) to decyzje poprzednich zadań, których nikt nie rozstrzygnął (smoke pominięty albo przerwany): wypisz każdą z odsyłaczem do `/dev-smoke <zadanie>`; nie blokują.
 
 Czerwona pozycja usuwana w tej sesji (odhaczenie checklisty, opt-out, `.gitignore` po setupie e2e) zmienia śledzone pliki: zacommituj je jawnymi ścieżkami (`git add <ścieżki> && git commit -m "docs(<zadanie>): przygotowanie operatora"`) i uruchom `gotowosc` ponownie. Autopilota nie uruchamiasz przy czerwonej bramce.
 
@@ -359,7 +376,9 @@ Start to osobna wiadomość z samym poleceniem startu. Wiadomość, która uruch
    - Git: <OK / brudne pozycje>
    - Testy: <OK / nie dotyczy / szczegół + poprawka configu>
    - CLAUDE.md: <OK / zadania do uzgodnienia + naprawa → STOP>
+   - Spójność: <OK (fazy: …) / powod → STOP>
    - Higiena: <OK / uwagi z komendą — nie blokują>
+   - Odłożone: <brak / M otwartych: etap — treść (linia) — nie blokują>
 
 ➡️ Następny krok: autopilot w tej sesji <albo: w nowej sesji — ta sesja zmieniła .claude/>:
    Workflow({ scriptPath: ".claude/workflows/dev-autopilot-wf.js", args: "docs/active/<zadanie>" })

@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import { liczE2e as liczScenariuszeE2e } from '../../dossier/dokumenty.mjs'
 import { NARZEDZIE_JAZDY } from '../../e2e/adapter.mjs'
 import { gotowosc } from '../gotowosc.mjs'
+import { odciskPlanu, SEKCJA_REALIZACJI } from '../spojnosc.mjs'
 import { PROFIL } from '../../stack/profil.mjs'
 
 const KATALOG = dirname(fileURLToPath(import.meta.url))
@@ -66,9 +67,17 @@ function cli(korzen, argumenty) {
   return { kod: w.status, json: w.stdout ? JSON.parse(w.stdout) : null }
 }
 
-/** @param {string} korzen gotowe zadanie na galezi feature/ z commitem */
-function zadanieNaGalezi(korzen) {
+/** @param {string} korzen @returns {string} oznaczenia faz planu po przecinku (stan przegladu wymienia fazy bez przegladu) */
+const fazyPlanu = (korzen) => cli(korzen, ['spojnosc', PLAN]).json.fazyBez.join(',')
+
+/**
+ * Gotowe zadanie na galezi feature/ z commitem. Punkt 41: /dev-plan zapisuje przeglad spojnosci (6.2b) przed commitem
+ * inicjalnym, wiec zadanie bez przegladu to osobny przypadek (`{ przeglad: false }`).
+ * @param {string} korzen @param {{ przeglad?: boolean }} [o]
+ */
+function zadanieNaGalezi(korzen, o = {}) {
   git(korzen, ['checkout', '-qb', 'feature/publikacja-ofert'])
+  if (o.przeglad !== false) assert.equal(cli(korzen, ['spojnosc', PLAN, '--zapisz', '--fazy', fazyPlanu(korzen), '--otwarte', '0', '--data', '2026-10-07']).kod, 0)
   assert.equal(cli(korzen, ['generuj', PLAN, '--data', '2026-10-07', '--zapisz']).kod, 0)
   git(korzen, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A'])
   git(korzen, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'docs: inicjalizacja planu'])
@@ -198,6 +207,30 @@ test('gotowosc: stara baza wiedzy i przerosniety kontekst startowy = uwagi higie
   assert.deepEqual([w.higiena.ok, w.git.brudne.length > 0], [true, true], 'higiena nie zmienia ok — tu blokuje juz brudne drzewo')
 }))
 
+// Punkt 40, krok 6: sprawy odlozone w smoke'u (docs/operator/odlozone.md) nie trafialy nigdzie dalej. Bramka je pokazuje, ale nie
+// blokuje startu (decyzja operatora 2026-11-11: sprawa innego etapu nie zatrzymuje pracy; o wejsciu do etapu decyduje /dev-prep).
+test('gotowosc: otwarte sprawy odlozone z etapem i linia, bez wplywu na ok', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const narzedzia = { czyIgnorowany: () => true, narzedzieJazdy: () => ({ ok: true, detal: '' }) }
+  const przed = gotowosc(k, ZADANIE, { narzedzia })
+  assert.deepEqual(przed.odlozone, { ok: true, plik: 'docs/operator/odlozone.md', otwarte: [], decyzje: [] })
+  mkdirSync(join(k, 'docs/operator'), { recursive: true })
+  writeFileSync(join(k, 'docs/operator/odlozone.md'), '# Sprawy odłożone\n\n- [ ] [etap: etap 5] sklep D2: limit — `src/k.ts:9` (smoke 2026-11-11)\n- [x] [etap: etap 4] zrobione\n')
+  git(k, ['add', 'docs/operator/odlozone.md'])
+  git(k, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'docs: odlozone'])
+  const w = gotowosc(k, ZADANIE, { narzedzia })
+  assert.deepEqual(w.odlozone.otwarte, [{ linia: 3, etap: 'etap 5', tresc: 'sklep D2: limit — `src/k.ts:9` (smoke 2026-11-11)' }])
+  assert.equal(w.ok, przed.ok, 'odlozone nie zmieniaja ok bramki')
+  // Punkt 52: decyzje poprzednich zadan bez rozstrzygniecia (smoke pominiety) — widoczne w bramce, bez wplywu na ok.
+  mkdirSync(join(k, 'docs/completed/sklep'), { recursive: true })
+  writeFileSync(join(k, 'docs/completed/sklep/known-issues.md'), '# K\n\n## Decyzje operatora\n\n- [DECYZJA · faza 1 · fix] src/a.ts:5 — limit\n')
+  git(k, ['add', 'docs/completed'])
+  git(k, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'docs: archiwum'])
+  const zDecyzja = gotowosc(k, ZADANIE, { narzedzia })
+  assert.deepEqual(zDecyzja.odlozone.decyzje, [{ zadanie: 'sklep', wiersz: '[DECYZJA · faza 1 · fix] src/a.ts:5 — limit' }])
+  assert.equal(zDecyzja.ok, przed.ok, 'decyzje nie zmieniaja ok bramki')
+}))
+
 // P22 A1: runner testow projektu zbierajacy .claude/** (live-10-demo: vitest run bez configu) wychodzi w bramce, nie w bootstrapie.
 // Sync nie wozi testow maszynerii do projektow: bez pliku testu pod .claude/ brak configu nie blokuje (testy.ok true).
 test('gotowosc: vitest bez configu i test pod .claude/ → testy.ok false z poprawka i STOP; config z include tests/ → ok', () => wRepo((k) => {
@@ -291,13 +324,28 @@ test('blokery: nieodhaczone pozycje checklisty z numerem fazy (start = faza 1), 
   zadanieNaGalezi(k)
   const w = cli(k, ['blokery', ZADANIE])
   assert.equal(w.kod, 0, JSON.stringify(w.json))
-  assert.deepEqual(w.json, { ok: true, checklista: PREP, blokery: [{ faza: 2, linia: 3, tresc: 'Klucz mapy — **[blokuje: faza 2]** (IU-2)' }] })
+  assert.deepEqual(w.json, { ok: true, checklista: PREP, blokery: [{ faza: 2, linia: 3, tresc: 'Klucz mapy — **[blokuje: faza 2]** (IU-2)' }], spojnosc: { ok: true, powod: '' } })
   writeFileSync(join(k, PREP), '# P\n\n- [ ] Konto — **[blokuje: planowanie]**\n- [ ] Dostęp — **[blokuje: faza 1]**\n- [x] Klucz — **[blokuje: faza 2]**\n')
   assert.deepEqual(cli(k, ['blokery', ZADANIE]).json.blokery.map((/** @type {{ faza: number }} */ b) => b.faza), [1, 1])
   writeFileSync(join(k, PREP), '# P\n\n- [ ] Klucz — **[blokuje: faza 2]**\n- [ ] Konto — **[blokuje: faza 1]**\n')
   assert.deepEqual(cli(k, ['blokery', ZADANIE]).json.blokery.map((/** @type {{ linia: number }} */ b) => b.linia), [3, 4], 'kolejnosc linii checklisty')
   rmSync(join(k, PREP))
-  assert.deepEqual(cli(k, ['blokery', ZADANIE]).json, { ok: true, checklista: PREP, blokery: [] })
+  assert.deepEqual(cli(k, ['blokery', ZADANIE]).json, { ok: true, checklista: PREP, blokery: [], spojnosc: { ok: true, powod: '' } })
+}))
+
+// Punkt 53, krok B4: autopilot czyta stan przegladu spojnosci z `plan.mjs blokery` (bootstrap przepisuje wynik 1:1).
+test('blokery: pole spojnosc liczone jak w bramce gotowosci — brak przegladu i zmiana tresci planu daja ok false z powodem', () => wRepo((k) => {
+  zadanieNaGalezi(k, { przeglad: false })
+  const bez = cli(k, ['blokery', ZADANIE]).json
+  assert.equal(bez.spojnosc.ok, false)
+  assert.match(bez.spojnosc.powod, /^brak zapisu przeglądu spójności planu → \/dev-plan krok 6\.2b/)
+  assert.equal(cli(k, ['spojnosc', PLAN, '--zapisz', '--fazy', fazyPlanu(k), '--otwarte', '0']).kod, 0)
+  assert.deepEqual(cli(k, ['blokery', ZADANIE]).json.spojnosc, { ok: true, powod: '' })
+  writeFileSync(join(k, PLAN), readFileSync(join(k, PLAN), 'utf8').replace('## Granice zakresu', '## Granice zakresu\n\n- nowe wykluczenie'))
+  assert.match(cli(k, ['blokery', ZADANIE]).json.spojnosc.powod, /^plan zmieniony po przeglądzie spójności/)
+  // Bez checklisty przygotowania pole tez jest (blokery puste).
+  rmSync(join(k, PREP))
+  assert.equal(cli(k, ['blokery', ZADANIE]).json.spojnosc.ok, false)
 }))
 
 test('liczScenariuszeE2e: grep precheck/completion-gate — kopie Operator: i findingi [P1-3] nie sa scenariuszami', () => {
@@ -311,4 +359,106 @@ test('zle argumenty: kod 2', () => wRepo((k) => {
   assert.equal(cli(k, ['nieznane', PLAN]).kod, 2)
   assert.equal(cli(k, ['generuj', PLAN, '--data', '7.10.2026']).kod, 2)
   assert.equal(cli(k, ['sprawdz', 'docs/plans/brak.md']).kod, 2)
+}))
+
+// Punkt 41, kroki 3 i 5 (aa-exam E3, wf_1c69a604-076): test wymagal imienia w mailu, makieta go nie miala — faza 3 stanela,
+// bo nikt nie zestawil planu z makieta przed runem. Bramka blokuje start bez aktualnego przegladu spojnosci z zerem otwartych.
+test('gotowosc: przeglad spojnosci — brak, otwarte, faza bez przegladu i zmiana tresci planu blokuja; odhaczenie w planie nie', () => wRepo((k) => {
+  const narzedzia = { czyIgnorowany: () => true, narzedzieJazdy: () => ({ ok: true, detal: '' }) }
+  zadanieNaGalezi(k, { przeglad: false })
+  const fazy = fazyPlanu(k).split(',')
+  assert.ok(fazy.length >= 2, 'fixture ma kilka faz')
+  const bez = gotowosc(k, ZADANIE, { narzedzia })
+  assert.deepEqual([bez.ok, bez.spojnosc.ok, bez.spojnosc.fazyBez], [false, false, fazy])
+  assert.match(bez.spojnosc.powod, /^brak zapisu przeglądu spójności planu → \/dev-plan krok 6\.2b/)
+
+  const zapisz = (/** @type {string} */ f, /** @type {string} */ otwarte) => cli(k, ['spojnosc', PLAN, '--zapisz', '--fazy', f, '--otwarte', otwarte])
+  assert.equal(zapisz(fazy.join(','), '2').kod, 1)
+  assert.match(gotowosc(k, ZADANIE, { narzedzia }).spojnosc.powod, /^przegląd spójności ma otwarte pozycje \(2\)/)
+  assert.equal(zapisz(fazy[0] ?? '', '0').kod, 1)
+  assert.match(gotowosc(k, ZADANIE, { narzedzia }).spojnosc.powod, new RegExp(`^fazy bez przeglądu spójności: ${fazy.slice(1).join(', ')}`))
+  assert.deepEqual(zapisz('1,99', '0').json.bledy, [`fazy spoza planu: 99 (plan ma: ${fazy.join(', ')})`])
+  assert.equal(cli(k, ['spojnosc', PLAN, '--zapisz', '--fazy', '1']).kod, 2, 'zapis bez --otwarte to zle argumenty')
+
+  const ok = zapisz(fazy.join(','), '0')
+  assert.deepEqual([ok.kod, ok.json.ok], [0, true])
+  const zapis = JSON.parse(readFileSync(join(k, PLAN.replace(/\.md$/, '.spojnosc.json')), 'utf8'))
+  assert.deepEqual([zapis.plan, zapis.fazy, zapis.otwarte], [PLAN, fazy, 0])
+  git(k, ['add', '-A'])
+  git(k, ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'docs: przeglad'])
+  assert.equal(gotowosc(k, ZADANIE, { narzedzia }).spojnosc.ok, true)
+
+  // Execute odhacza scenariusze w planie technicznym po fazie: odcisk bez stanu checkboxow zostaje ten sam.
+  const plan = readFileSync(join(k, PLAN), 'utf8')
+  assert.ok(/^\s*- \[ \]/m.test(plan), 'fixture ma checkboxy')
+  writeFileSync(join(k, PLAN), plan.replace(/^(\s*- )\[ \]/gm, '$1[x]').replace(/\n/g, '\r\n'))
+  assert.equal(gotowosc(k, ZADANIE, { narzedzia }).spojnosc.ok, true, 'odhaczenia i CRLF nie zmieniaja odcisku')
+  // Zmiana tresci planu po przegladzie wymaga przegladu od nowa.
+  writeFileSync(join(k, PLAN), plan.replace('## Granice zakresu', '## Granice zakresu\n\n- nowe wykluczenie'))
+  assert.match(gotowosc(k, ZADANIE, { narzedzia }).spojnosc.powod, /^plan zmieniony po przeglądzie spójności/)
+}))
+
+// Weryfikacja partii 26–45, punkt 53: domkniecie fazy dopisywalo decyzje do planu, a odcisk liczyl kazda zmiane poza `- [x]`/`* [x]`
+// — bramka po wznowieniu byla czerwona bez winy operatora. Mutacja odcisku wycinajaca cale linie z checkboxem przechodzila testy.
+test('odciskPlanu: odhaczenia w kazdej postaci listy, biale znaki, CRLF, BOM i sekcja realizacji nie zmieniaja odcisku; tresc tak', () => {
+  const plan = [
+    '# Plan', '', '## Podejście', '', 'Lista ofert z filtrem.', '', '## Faza 1', '',
+    '- [ ] Test: [E2E] `a` — lista', '* [ ] Weryfikacja: lint', '1. [ ] krok numerowany', '2) [ ] krok z nawiasem',
+    '+ [ ] krok z plusem', '> - [ ] w cytacie', '  - [ ] wciety', '', '## Granice zakresu', '', '- bez płatności', '',
+  ].join('\n')
+  const bazowy = odciskPlanu(plan)
+  const odhaczony = plan.replace(/\[ \]/g, '[x]')
+  assert.equal(odhaczony.split('[x]').length, 8, 'siedem postaci listy odhaczonych')
+  for (const [opis, wariant] of /** @type {[string, string][]} */ ([
+    ['odhaczenie - * 1. 2) + > i wciecie', odhaczony],
+    ['duze X', plan.replace(/\[ \]/g, '[X]')],
+    ['spacja i tabulator na koncu linii', plan.replace('Lista ofert z filtrem.', 'Lista ofert z filtrem. \t')],
+    ['dodatkowe \\n na koncu', `${plan}\n\n`],
+    ['brak \\n na koncu', plan.replace(/\n+$/, '')],
+    ['CRLF', plan.replace(/\n/g, '\r\n')],
+    ['BOM', `\uFEFF${plan}`],
+    ['sekcja realizacji na koncu', `${plan}\n${SEKCJA_REALIZACJI}\n\n- faza 1, IU-1: mail bez imienia (Granice)\n`],
+    ['sekcja realizacji z podsekcja', `${plan}\n${SEKCJA_REALIZACJI}\n\n### Faza 1\n\n- faza 1, IU-2: x\n`],
+    // Walidacja 51–55, punkt 61: naglowek sekcji w postaci, w jakiej napisze go agent domkniecia.
+    ['sekcja realizacji poziomu 3', `${plan}\n### Decyzje z realizacji\n\n- faza 1, IU-1: x\n`],
+    ['sekcja realizacji z dwukropkiem i mala litera', `${plan}\n##  decyzje z realizacji: \n\n- faza 1, IU-1: x\n`],
+    ['sekcja realizacji poziomu 3 w srodku, konczy ja naglowek poziomu 3', plan.replace('## Granice zakresu', '### Decyzje z realizacji\n- x\n#### szczegol\n- y\n\n## Granice zakresu')],
+  ])) assert.equal(odciskPlanu(wariant), bazowy, opis)
+  // Checkbox w komorce tabeli: odhaczenie nie zmienia odcisku, zmiana tresci wiersza tak.
+  const zTabela = `${plan}\n| Stan | Krok |\n|---|---|\n| [ ] | migracja |\n|[ ]| seed |\n`
+  assert.equal(odciskPlanu(zTabela.replace('| [ ] |', '| [x] |').replace('|[ ]|', '|[X]|')), odciskPlanu(zTabela), 'odhaczenie w tabeli')
+  assert.notEqual(odciskPlanu(zTabela.replace('migracja', 'migracja danych')), odciskPlanu(zTabela), 'tresc wiersza tabeli')
+  assert.notEqual(odciskPlanu(zTabela), bazowy, 'tabela jest trescia planu')
+
+  for (const [opis, wariant] of /** @type {[string, string][]} */ ([
+    ['zmiana tekstu pozycji z checkboxem', plan.replace('`a` — lista', '`a` — lista z filtrem')],
+    ['zmiana tekstu pozycji numerowanej', plan.replace('krok numerowany', 'krok inny')],
+    ['usuniecie pozycji z checkboxem', plan.replace('+ [ ] krok z plusem\n', '')],
+    ['nowa pozycja', plan.replace('  - [ ] wciety', '  - [ ] wciety\n- [ ] Test: nowy')],
+    ['zmiana w Podejsciu', plan.replace('Lista ofert z filtrem.', 'Lista ofert bez filtra.')],
+    ['linia w nowej sekcji po sekcji realizacji', `${plan}\n${SEKCJA_REALIZACJI}\n\n- faza 1: x\n\n## Inna\n\n- nowe\n`],
+    ['sekcja o innej nazwie', `${plan}\n## Decyzje z realizacji fazy 2\n\n- x\n`],
+    ['sekcja realizacji poziomu 3: naglowek tego samego poziomu ja konczy', `${plan}\n### Decyzje z realizacji\n\n- x\n\n### Inna\n\n- nowe\n`],
+    ['naglowek poziomu 1 o tej nazwie to nie sekcja', `${plan}\n# Decyzje z realizacji\n\n- x\n`],
+  ])) assert.notEqual(odciskPlanu(wariant), bazowy, opis)
+})
+
+// Punkt 53, krok B2: domkniecie fazy pisze decyzje korygujace plan tylko do sekcji realizacji na koncu planu. Parser zamyka
+// faze i jednostke na kazdym `## `, wiec sekcja nie zmienia ani walidacji planu, ani struktury pliku zadan (odswiez).
+test('sekcja „Decyzje z realizacji” na koncu planu: sprawdz bez zmian, odswiez nie widzi roznicy; prompt domkniecia ja nazywa', () => wRepo((k) => {
+  zadanieNaGalezi(k)
+  const przed = cli(k, ['sprawdz', PLAN])
+  writeFileSync(join(k, PLAN), `${readFileSync(join(k, PLAN), 'utf8').replace(/\n*$/, '\n')}\n${SEKCJA_REALIZACJI}\n\n- faza 1, IU-1: mail bez imienia (Granice wygrywaja ze scenariuszem)\n- faza 2, IU-3: [x] lista bez filtra\n`)
+  const po = cli(k, ['sprawdz', PLAN])
+  assert.deepEqual([po.kod, po.json], [przed.kod, przed.json])
+  const odsw = cli(k, ['odswiez', ZADANIE])
+  assert.match(String(odsw.json.odmowa), /^plan względem HEAD nie zmienia pliku zadań/)
+  const execute = readFileSync(resolve(KATALOG, '../../../workflows/dev-docs-execute-wf.js'), 'utf8')
+  const domkniecie = execute.slice(execute.indexOf('function domknieciePrompt('), execute.indexOf('\n}\n', execute.indexOf('function domknieciePrompt(')))
+  assert.ok(domkniecie.includes(`\\\`${SEKCJA_REALIZACJI}\\\``), 'prompt domkniecia nazywa sekcje stala ze spojnosc.mjs')
+  const skillPlanu = readFileSync(resolve(KATALOG, '../../../skills/dev-plan/SKILL.md'), 'utf8')
+  assert.ok(skillPlanu.includes(`odcisk planu bez stanu checkboxów i bez sekcji \`${SEKCJA_REALIZACJI}\``), 'skill /dev-plan 6.2b opisuje odcisk')
+  assert.ok(skillPlanu.includes(`(odhaczenia i sekcja \`${SEKCJA_REALIZACJI}\` go nie zmieniają, zmiana treści tak)`), 'skill /dev-plan 6.6')
+  assert.match(skillPlanu, /Autopilot sprawdza to samo na starcie \(`plan\.mjs blokery`\): świeże zadanie bez ważnego przeglądu kończy STOP-em, zadanie w toku dostaje uwagę;/)
+  assert.match(domkniecie, /trafia WYLACZNIE do sekcji \\`## Decyzje z realizacji\\` na koncu planu \(brak sekcji = utworz ja jako ostatnia\), jedna linia\n {3}na decyzje: \\`- faza \$\{faza\}, IU-x: <decyzja>\\`\. Poza ta sekcja w planie zmieniasz tylko stan checkboxow/)
 }))

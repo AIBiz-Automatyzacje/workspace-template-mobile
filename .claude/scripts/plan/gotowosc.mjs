@@ -1,7 +1,9 @@
 // Bramka gotowosci zadania przed autopilotem (PLAN-POPRAWY P13, krok 6.6 skilla dev-plan): plan techniczny bez bledow,
 // srodowisko dla scenariuszy [E2E] (sprawdzenie jak w bootstrapie), checklista przygotowania bez pozycji blokujacych start, galaz zadania i czyste drzewo,
 // runner testow projektu bez testow maszynerii z .claude/** (P22 A1: inaczej `npm test` w runie pada na starcie),
-// pliki decyzji na galezi glownej bez `claude_md: do-uzgodnienia` (bootstrap zatrzymuje na nich run).
+// pliki decyzji na galezi glownej bez `claude_md: do-uzgodnienia` (bootstrap zatrzymuje na nich run). Sprawy odlozone w smoke'u
+// (docs/operator/odlozone.md) bramka tylko pokazuje: start nie czeka na sprawe innego etapu (decyzja operatora, punkt 40 krok 6).
+// Aktualny przeglad spojnosci planu z zerem otwartych pozycji blokuje start (punkt 41: decyzja produktowa wychodzila w runie).
 // Autopilot nie przelacza galezi i zatrzymuje run na brudnym drzewie, wiec te warunki sprawdzamy przed jego startem.
 
 import { execFileSync, spawnSync } from 'node:child_process'
@@ -12,6 +14,7 @@ import { sciezkaPlanu } from '../dossier/dokumenty.mjs'
 import { plikZadania } from '../dossier/zadanie.mjs'
 import { kontekstStartowy, wiedzaProjektu } from '../doctor/higiena.mjs'
 import { sprawdzRunnerTestow } from '../doctor/runner-testow.mjs'
+import { otwarte } from '../smoke/otwarte.mjs'
 import { uwagiPlanowania } from '../e2e/adapter.mjs'
 import { gotowoscAdvisors } from '../e2e/advisors.mjs'
 import { bledySrodowiska, envE2e, NARZEDZIA } from '../e2e/srodowisko.mjs'
@@ -19,6 +22,7 @@ import { potrzebyZadania } from '../e2e/start.mjs'
 import { KOMENDA_GENERATORA, maSkillWeryfikacji, PLIK_SKILLA } from '../e2e/weryfikacja.mjs'
 import { parsujPlan, poleTekstowe } from './plan-techniczny.mjs'
 import { przygotowanie } from './przygotowanie.mjs'
+import { stanPrzegladu } from './spojnosc.mjs'
 import { sprawdzPlan } from './walidacja-planu.mjs'
 
 /**
@@ -30,7 +34,9 @@ import { sprawdzPlan } from './walidacja-planu.mjs'
  *   git: { ok: boolean, galaz: string, wymagana: string, brudne: string[] },
  *   testy: { ok: boolean, runner: string | null, szczegol: string, poprawka: string },
  *   claudeMd: { ok: boolean, glowna: string | null, zadania: string[], naprawa: string },
- *   higiena: { ok: true, uwagi: string[] } }} Gotowosc
+ *   spojnosc: import('./spojnosc.mjs').StanPrzegladu,
+ *   higiena: { ok: true, uwagi: string[] },
+ *   odlozone: { ok: true, plik: string, otwarte: { linia: number, etap: string, tresc: string }[], decyzje: { zadanie: string, wiersz: string }[] } }} Gotowosc
  */
 
 /**
@@ -110,17 +116,21 @@ function planTechnicznyZadania(projekt, katalogZadania) {
 /**
  * Nieodhaczone blokery checklisty zadania z faza, ktora wstrzymuja (P25 A1): bootstrap autopilota przepisuje je 1:1, a STOP
  * przed faza liczy orkiestrator. Pozycje startu (`planowanie`, `faza 1`, marker bez numeru) wstrzymuja faze 1.
+ * `spojnosc` (weryfikacja partii, punkt 53): autopilot nie wolal ani `spojnosc`, ani `gotowosc`, wiec plan bez aktualnego
+ * przegladu spojnosci szedl do runu; stan przegladu liczony jak w bramce gotowosci, decyzje (STOP albo uwaga) liczy orkiestrator.
  * @param {string} projekt @param {string} katalogZadania
- * @returns {{ checklista: string | null, blokery: { faza: number, linia: number, tresc: string }[] }}
+ * @returns {{ checklista: string | null, blokery: { faza: number, linia: number, tresc: string }[], spojnosc: { ok: boolean, powod: string } }}
  */
 export function blokeryZadania(projekt, katalogZadania) {
-  const { plan } = planTechnicznyZadania(projekt, katalogZadania)
+  const { wskaznik, plan } = planTechnicznyZadania(projekt, katalogZadania)
+  const przeglad = stanPrzegladu(projekt, wskaznik, plan ? plan.fazy.map((f) => f.oznaczenie) : [])
+  const spojnosc = { ok: przeglad.ok, powod: przeglad.powod }
   const prep = plan ? przygotowanie(projekt, poleTekstowe(plan, 'operator_prep')) : null
-  if (!prep) return { checklista: null, blokery: [] }
+  if (!prep) return { checklista: null, blokery: [], spojnosc }
   const blokery = [...prep.blokujace, ...prep.odroczone]
     .map(({ faza, linia, tresc }) => ({ faza: faza ?? 1, linia, tresc }))
     .sort((a, b) => a.linia - b.linia)
-  return { checklista: prep.sciezka, blokery }
+  return { checklista: prep.sciezka, blokery, spojnosc }
 }
 
 /** @param {string} projekt @returns {Gotowosc['testy']} */
@@ -155,6 +165,7 @@ export function gotowosc(projekt, katalogZadania, { narzedzia = NARZEDZIA, srodo
   // Zadanie z migracjami (P17): advisors bez tokenu albo bazy e2e nie pobiegnie — uwaga, nie bloker (security sprawdzi recznie).
   const advisors = zadania.includes('supabase/migrations/') ? gotowoscAdvisors(projekt, srodowisko) : null
   if (advisors && !advisors.gotowe) e2e.uwagi.push(advisors.uwaga)
+  const sprawy = otwarte(projekt)
   const wynik = {
     plan: { ok: !walidacja.bledy.length, bledy: walidacja.bledy, uwagi: walidacja.uwagi },
     e2e,
@@ -162,10 +173,13 @@ export function gotowosc(projekt, katalogZadania, { narzedzia = NARZEDZIA, srodo
     git: { ok: galaz === wymagana && !brudne.length, galaz, wymagana, brudne },
     testy: testyProjektu(projekt),
     claudeMd: decyzjeClaudeMd(projekt),
+    spojnosc: stanPrzegladu(projekt, wskaznik, plan ? plan.fazy.map((f) => f.oznaczenie) : []),
     higiena: higienaZadania(projekt),
+    // Punkt 52: decyzje poprzednich zadan bez rozstrzygniecia (smoke pominiety) — pokazane, nie blokuja.
+    odlozone: { ok: /** @type {const} */ (true), ...sprawy.odlozone, decyzje: sprawy.decyzje ?? [] },
   }
   return {
-    ok: wynik.plan.ok && wynik.e2e.ok && wynik.przygotowanie.ok && wynik.git.ok && wynik.testy.ok && wynik.claudeMd.ok,
+    ok: wynik.plan.ok && wynik.e2e.ok && wynik.przygotowanie.ok && wynik.git.ok && wynik.testy.ok && wynik.claudeMd.ok && wynik.spojnosc.ok,
     zadanie,
     planTechniczny: wskaznik,
     ...wynik,

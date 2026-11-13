@@ -19,6 +19,10 @@ export const meta = {
 
 // Kopia zasady z dev-autopilot-wf.js (workflowy sa self-contained — przy zmianie synchronizuj recznie; zakres testow
 // `test` + `test:*` bez e2e = finalValidationPrompt, rownosc pilnuje dev-pr.test.mjs).
+// Dopisek, ktorym /dev-smoke zamyka wiersz sekcji „## Decyzje operatora” w known-issues (punkt 40, krok 4). Ten sam napis
+// w skillu /dev-smoke — pilnuje dev-pr.test.mjs.
+const ZNACZNIK_ROZSTRZYGNIETEJ = '→ ROZSTRZYGNIĘTA'
+
 const BLOK_KOMEND_PROJEKTU = `
 === KOMENDY WALIDACYJNE (czytaj z projektu, nie zgaduj) ===
 Komendy typecheck / test / build bierz z pola "scripts" w package.json TEGO repo. Nie zakladaj \`npm\`:
@@ -446,7 +450,10 @@ const MECHANIZM_W_KODZIE = `MECHANIZM JUZ W KODZIE (pole mechanizm wpisu; tylko 
 // Wartosc o innym ksztalcie niz plik:linia (opis, sam hash, sciezka bezwzgledna) = brak mechanizmu: wpis idzie do operatora.
 function miejsceMechanizmu(w) {
   const m = typeof w.mechanizm === 'string' ? w.mechanizm.trim() : ''
-  return /^[^\s:/][^\s:]*:[1-9]\d*$/.test(m) ? m : null
+  if (!/^[^\s:/][^\s:]*:[1-9]\d*$/.test(m)) return null
+  // Weryfikacja partii, punkt 55 (43): dokument albo test to nie mechanizm w kodzie — wpis idzie do operatora (strona bezpieczna).
+  const sciezka = m.slice(0, m.lastIndexOf(':'))
+  return sciezka.startsWith('docs/') || sciezka.includes('__tests__/') || /\.(test|spec)\./.test(sciezka) ? null : m
 }
 function propozycjeBramek(wpisy) {
   return wpisy
@@ -692,6 +699,16 @@ function bramkaStartu(pomiar, opcje) {
       naprawa: "Wypchnij główną (push może oznaczać deploy, więc to decyzja operatora) albo potwierdź, że jadą w tym PR: etap start z zGlowna: true.",
     }
   }
+  // Weryfikacja partii, punkt 55 (stara dziura): nieczytelny wynik kontrakt-bota.mjs (pusty tekst, blad, JSON bez odstepstwa)
+  // dawal powod: null — start szedl bez sprawdzenia configu, jak przy nieczytelnym rozmiar.mjs nie idzie. Teraz STOP z ta sama
+  // droga decyzji co przy odstepstwach (pole konfigBota: /coderabbit-setup, bezKonfigu albo bezBota).
+  if (!Array.isArray(kontrakt?.odstepstwa) && !opcje.bezKonfigu && !opcje.bezBota) {
+    const powod = `nie udało się sprawdzić configu bota (kontrakt-bota.mjs: ${String(pomiar.kontraktBota ?? '').trim().slice(0, 200) || 'pusty wynik'})`
+    return {
+      ostrzezenia, pola: { konfigBota: { plik: null, odstepstwa: [powod], ostrzezenia: [] } }, powod,
+      naprawa: 'Uruchom `node .claude/scripts/pr/kontrakt-bota.mjs` i usuń przyczynę błędu, albo decyzja operatora: etap start z bezKonfigu: true albo z bezBota: true.',
+    }
+  }
   if (kontrakt?.odstepstwa?.length && !opcje.bezKonfigu && !opcje.bezBota) {
     return {
       ostrzezenia, pola: { konfigBota: kontrakt },
@@ -777,8 +794,42 @@ const turyWykonane = (args && Number.isInteger(args.turyWykonane)) ? args.turyWy
 const czesc = (args && Number.isInteger(args.czesc) && args.czesc >= 1) ? args.czesc : null
 const czesci = (args && Number.isInteger(args.czesci)) ? args.czesci : null
 const bezPusha = !!(args && args.bezPusha)
-const uwagaBezPusha = bezPusha ? `
-TRYB BEZ PUSHA (decyzja operatora, bo push na glowna to deploy): NIE czekaj na CI i NIE pushuj; ciGlownej "nie-dotyczy", push false, pushDetal "bez pushu: decyzja operatora".` : ''
+// W35 (pilot mobile, run 4, 12.11): zakaz doklejony za krokiem PUSH nie zatrzymal agenta — `/dev-pr --claude-md --bez-push`
+// wypchnal commit na glowna i zwrocil push true. W trybie bez pusha krokow CI glownej i PUSH nie ma w poleceniu, a JS
+// zglasza push mimo trybu (pushMimoBezPusha), zamiast ufac jednemu zdaniu w prompcie.
+const KROK_BEZ_PUSHA = `BEZ PUSHA (decyzja operatora, bo push na glowna to deploy): nie uruchamiaj \`git push\`, \`git fetch\` ani \`gh run\`;
+   ciGlownej "nie-dotyczy", push false, pushDetal "bez pushu: decyzja operatora".`
+/** Kroki po commicie etapow claude-md i compound: CI glownej i push, a w trybie bez pusha jeden krok bez nich. @param {number} nr */
+function krokiPoCommicie(nr) {
+  return bezPusha ? `${nr}. ${KROK_BEZ_PUSHA}` : `${nr}. ${KROK_CI_GLOWNEJ}\n${nr + 1}. ${KROK_PUSH}`
+}
+// Analiza runu 4 (13.11): samo pole push z wyniku to slowo agenta, ktory pushowal — agent, ktory wypchnie i zwroci push false,
+// przeszedlby bez sladu. Osobny agent pomiaru pyta gita, czy commit jest na zdalnej galezi (push aktualizuje `origin/<galaz>`
+// lokalnie, wiec bez `git fetch`).
+const POMIAR_PUSHA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: { zdalne: { type: 'array', items: { type: 'string' }, description: 'linie wyjscia git branch -r --contains; puste wyjscie = []' } },
+  required: ['zdalne'],
+}
+/** @param {string} nazwaEtapu @param {{ push?: boolean, commit?: string | null } | null} w @returns {Promise<boolean>} */
+async function pushMimoBezPusha(nazwaEtapu, w) {
+  if (!bezPusha || !w) return false
+  /** @type {string[]} */
+  let zdalne = []
+  if (w.commit && /^[0-9a-f]{7,40}$/.test(w.commit)) {
+    const pomiar = await agent(
+      `Uruchom w korzeniu repo dokladnie jedno polecenie: \`git branch -r --contains ${w.commit}\`. zdalne = linie wyjscia bez spacji
+na brzegach; puste wyjscie = []. Niczego nie zmieniaj i nie uruchamiaj \`git fetch\` ani \`git push\`. Zwroc obiekt zgodny ze schematem.`,
+      { schema: POMIAR_PUSHA, agentType: 'klasa-mechaniczny-pomiar', label: `pr:${nazwaEtapu}-pomiar-pusha:${zadanie}` }
+    )
+    if (pomiar) zdalne = pomiar.zdalne
+    else log(`/dev-pr ${nazwaEtapu}: UWAGA — pomiar pushu nie zwrocil wyniku; sprawdz recznie \`git branch -r --contains ${w.commit}\` (puste wyjscie = commit lokalny)`)
+  }
+  if (w.push !== true && !zdalne.length) return false
+  log(`/dev-pr ${nazwaEtapu}: UWAGA — commit ${w.commit} WYPCHNIETY mimo trybu bez pusha (--bez-push)${zdalne.length ? `: jest na ${zdalne.join(', ')}` : ''}; sprawdz origin i CI glownej`)
+  return true
+}
 // Etap start: operator swiadomie wiezie niewypchniete commity glownej w tym PR albo idzie bez poprawnego configu bota.
 const zGlowna = !!(args && args.zGlowna)
 const bezKonfigu = !!(args && args.bezKonfigu)
@@ -862,7 +913,7 @@ Zwroc obiekt zgodny ze schematem.`,
   if (cz) {
     cz.pliki = rozmiar.pliki
     const scalona = `\`gh pr list --state merged --head ${cz.poprzednia} --json number -q length\` > 0, inaczej STOP
-   „czesc ${cz.czesc - 1} niezmergowana — najpierw /dev-pr 3 --bez-merge --czesc ${cz.czesc - 1}”`
+   „czesc ${cz.czesc - 1} niezmergowana — najpierw /dev-pr 3 --bez-merge --czesc ${cz.czesc - 1} (dokonczy ture i zapyta o merge)”`
     // Rebase od ciecia tylko, gdy ciecie jest jeszcze w historii galezi; galaz juz na origin/main = rebase zrobiony; galaz po
     // rebase na starszy main (operator rozwiazal konflikt i wrocil pozniej) — zwykly rebase na nowy main.
     const rebase = `REBASE: (a) \`git merge-base --is-ancestor origin/main HEAD\` kod 0 — rebase=juz-wykonany, bez rebase'u;
@@ -957,11 +1008,14 @@ Rebase zakonczony = status OK. Nie zmieniasz innych plikow i nie pushujesz. Zwro
     log(`/dev-pr czesc ${cz.czesc} z ${cz.czesci} (fazy ${cz.fazy}, ${cz.pliki} plikow do recenzji): galaz ${cz.galaz}, rebase ${przyg.rebase}, walidacja ${przyg.walidacja}, push ${przyg.pushDetal}`)
   }
   const zrodloOpisu = `git show 'feature/${zadanie}:docs/completed/${zadanie}`
+  // Weryfikacja partii, punkt 52: decyzja rozstrzygnieta w /dev-smoke (dopisek ZNACZNIK_ROZSTRZYGNIETEJ na koncu wiersza sekcji
+  // „Decyzje operatora”) trafiala do „Swiadomie nienaprawione”, bo za otwarte uchodzilo wszystko poza „## Zamkniete”.
+  const otwartyWpis = `otwarte = poza sekcja "## Zamkniete" i bez dopisku "${ZNACZNIK_ROZSTRZYGNIETEJ}" (wiersz sekcji "## Decyzje operatora" rozstrzygniety w smoke'u)`
   const opisCzesci = cz
     ? `\nCZESC ${cz.czesc} Z ${cz.czesci} (fazy ${cz.fazy}) — zrodla opisu zastepuja punkt a) nizej (katalog zadania na tej galezi
 moze nie miec podsumowania): tytul PR "<tytul zadania> — cz. ${cz.czesc} z ${cz.czesci} (fazy ${cz.fazy})"; podsumowanie z
 \`${zrodloOpisu}/${zadanie}-podsumowanie.md'\`, otwarte P3 z \`${zrodloOpisu}/${zadanie}-zadania.md'\` (sekcje "Do poprawy po review
-fazy N" dla faz ${cz.fazy}), otwarte wpisy z \`${zrodloOpisu}/known-issues.md'\` (brak pliku = brak wpisow). Pierwsza linia opisu:
+fazy N" dla faz ${cz.fazy}), otwarte wpisy z \`${zrodloOpisu}/known-issues.md'\` (${otwartyWpis}; brak pliku = brak wpisow). Pierwsza linia opisu:
 "Część ${cz.czesc} z ${cz.czesci} — fazy ${cz.fazy}${cz.ostatnia ? '' : '; kolejne części po merge\'u tej'}."\n${cz.czesc > 1 ? watkiPoprzednich(cz, zadanie) : ''}`
     : ''
   const wynik = await agent(
@@ -989,7 +1043,7 @@ STAN PULL REQUESTA:
      - podsumowanie z \`<katalog zadania>/${zadanie}-podsumowanie.md\` (gdy pliku nie ma — z pliku planu zadania),
      - sekcja \`## Swiadomie nienaprawione\` zlozona z: otwartych P3 z sekcji "## Do poprawy po review fazy N"
        w \`<katalog zadania>/*-zadania.md\` (wiersze \`- [ ]\` z tokenem [P3]) ORAZ otwartych wpisow
-       z \`<katalog zadania>/known-issues.md\` (otwarte = poza sekcja "## Zamkniete"). Gdy oba zrodla puste,
+       z \`<katalog zadania>/known-issues.md\` (${otwartyWpis}). Gdy oba zrodla puste,
        wpisz w tej sekcji jedna linie "Brak — wszystkie findingi review zamkniete."
      - ZADNYCH wartosci sekretow, tokenow ani hasel, takze gdy cytujesz known-issues.
   b) \`gh pr create --title "<tytul zadania>" --body-file /tmp/dev-pr-body-${zadanie}.md\`.
@@ -1157,7 +1211,8 @@ Zwroc obiekt zgodny ze schematem.${BLOK_STANU_PR}${BLOK_GH}`,
     mergeable: wynik.mergeable, mergeStateStatus: wynik.mergeStateStatus, ciZielone: wynik.ciZielone, ciDetal: wynik.ciDetal,
     watkiNapraw: licznik['napraw'] + licznik['napraw-szerzej'], watkiDoOperatora: licznik['do-operatora'],
     watkiOdrzucBezOdpowiedzi: watki.filter((w) => w.klasa === 'odrzuc' && w.naszaOdpowiedz !== true).length,
-    recenzjaCzubka: stanPr?.recenzjaCzubka,
+    // Punkt 55 (stara dziura): nieczytelny stan-pr dawal recenzjaCzubka: undefined, a `ok !== false` przepuszczal MERGUJ.
+    recenzjaCzubka: stanPr ? stanPr.recenzjaCzubka : { ok: false, powod: 'stan PR nieczytelny' },
   }, turaBiezaca - 1)
   log(`/dev-pr tura ${turaBiezaca}: rekomendacja ${rek}`)
   log(`/dev-pr tura ${turaBiezaca}: ${watki.length} nierozwiazanych watkow (napraw ${licznik['napraw']}, szerzej ${licznik['napraw-szerzej']}, odrzuc ${licznik['odrzuc']}, do-operatora ${licznik['do-operatora']}), klastrow: ${klastry.length}${wynik.recenzjaAktualna ? '' : ' — UWAGA: recenzja NIE dotyczy biezacego czubka galezi'}`)
@@ -1306,7 +1361,7 @@ Zwroc obiekt zgodny ze schematem.${BLOK_STANU_PR}${BLOK_GH}`,
     return { status: 'GOTOWY-DO-DECYZJI', etap, rekomendacja: rek, stan: faktyBramki, niespelnione, warunki, informacje, krotkieReview }
   }
   if (!auto) {
-    log("/dev-pr: wszystkie warunki merge'a spelnione — merge zostaje decyzja operatora (tryb interaktywny)")
+    log("/dev-pr: wszystkie warunki merge'a spelnione — merge zostaje decyzja operatora (tryb interaktywny albo --bez-merge)")
     return { status: 'GOTOWY-DO-MERGE', etap, rekomendacja: rek, stan: faktyBramki, warunki, informacje }
   }
   const merge = await agent(
@@ -1396,19 +1451,19 @@ Zwroc obiekt zgodny ze schematem.`,
    \`git commit -m "docs(${zadanie}): CLAUDE.md uzgodniony po merge'u"\` — temat w jednej linii, stopka wylacznie drugim \`-m\`.
    commit = krotki hash.
 3. pole = sama wartosc (bez "claude_md: ") z \`git show HEAD:${u.plikDecyzji} | grep -m1 '^claude_md:'\`.
-4. ${KROK_CI_GLOWNEJ}
-5. ${KROK_PUSH}${uwagaBezPusha}
+${krokiPoCommicie(4)}
 Zwroc obiekt zgodny ze schematem.`,
     { schema: UZGODNIENIE_COMMIT, agentType: 'klasa-mechaniczny', label: `pr:claude-md-commit:${zadanie}` }
   )
   if (!c || c.pole !== 'uzgodniono') {
     return { status: 'BLAD', etap, powod: `pole claude_md po commicie: ${c ? c.pole : 'brak wyniku agenta'} — sprawdz ${u.plikDecyzji} i \`git log -1\`` }
   }
+  const naruszenie = await pushMimoBezPusha('claude-md', c)
   if (!c.push) log(`/dev-pr: UWAGA — commit ${c.commit} bez pusha (${c.pushDetal}); pojedzie z nastepna galezia`)
   logCiGlownej('claude-md', c.ciGlownej)
   log(`/dev-pr: CLAUDE.md uzgodniony (${u.znPrzed} -> ${u.znPo} zn), ${u.plikDecyzji}: claude_md: uzgodniono, commit ${c.commit}`)
   if (u.rozjazdy?.length) log(`/dev-pr: UWAGA — fakty sprzeczne z kodem, niewprowadzone: ${u.rozjazdy.join('; ')}`)
-  return { status: 'OK', etap, plikDecyzji: u.plikDecyzji, fakty: u.fakty, rozjazdy: u.rozjazdy || [], zmiany: u.zmiany, znPrzed: u.znPrzed, znPo: u.znPo, commit: c.commit, ciGlownej: c.ciGlownej, push: c.push, pushDetal: c.pushDetal }
+  return { status: 'OK', etap, plikDecyzji: u.plikDecyzji, fakty: u.fakty, rozjazdy: u.rozjazdy || [], zmiany: u.zmiany, znPrzed: u.znPrzed, znPo: u.znPo, commit: c.commit, ciGlownej: c.ciGlownej, push: c.push, pushDetal: c.pushDetal, pushMimoBezPusha: naruszenie }
 }
 
 // ── Etap: compound (Faza 7 — baza wiedzy + petla zwrotna do reviewerow) ───
@@ -1471,11 +1526,10 @@ ${JSON.stringify(odlozone, null, 2)}
    (czesc nieostatnia) = odlozoneZapisane 0 — start kolejnej czesci zbierze je z PR.
 ` : ''}5. Zacommituj artefakty bazy wiedzy jawnym pathspec (docs/solutions/, docs/learned-patterns.md,
    docs/CONCEPTS.md, docs/reviews/propozycje-do-reviewerow.md, docs/completed/${zadanie}/known-issues.md — te, ktore realnie zmieniles), bez \`git add -A\` i \`git add .\`.
-   commit = krotki hash; bez zmian do zacommitowania commit null, push false, pushDetal "brak commita" i pomin pkt 7 (pkt 6 robisz).
-6. ${KROK_CI_GLOWNEJ}
-7. ${KROK_PUSH}${uwagaBezPusha}
+   commit = krotki hash; bez zmian do zacommitowania commit null, push false, pushDetal "brak commita"${bezPusha ? '' : ' i pomin pkt 7 (pkt 6 robisz)'}.
+${krokiPoCommicie(6)}${bezPusha ? '' : `
    Po merge'u z \`--delete-branch\` biezaca galaz to glowna, wiec push wysyla commit compoundu na glowna — bez niego
-   nastepny pull request wiozlby ten commit, a krok CLAUDE.md zatrzymalby sie na rozjechanej galezi glownej.
+   nastepny pull request wiozlby ten commit, a krok CLAUDE.md zatrzymalby sie na rozjechanej galezi glownej.`}
 
 Zwroc obiekt zgodny ze schematem.`,
     { schema: COMPOUND_PR, agentType: 'klasa-orkiestracyjny', effort: 'medium', label: `pr:compound:${zadanie}` }
@@ -1490,7 +1544,8 @@ Zwroc obiekt zgodny ze schematem.`,
   if (odlozone.length) log(`/dev-pr compound: watki odlozone ${odlozone.length}, w known-issues.md: ${wynik.odlozoneZapisane || 0}`)
   if (wynik.commit && !wynik.push) log(`/dev-pr compound: UWAGA — commit ${wynik.commit} bez pusha (${wynik.pushDetal}); wypchnij go przed kolejnym PR i krokiem CLAUDE.md`)
   logCiGlownej('compound', wynik.ciGlownej)
-  return { status: 'OK', etap, ...wynik, propozycjeBramek: bramki, bramkiWdrozone: wdrozone, uwagaIndeksu: wynik.indeks === 'bramka' ? INDEKS_PELNY : '' }
+  const naruszenie = await pushMimoBezPusha('compound', wynik)
+  return { status: 'OK', etap, ...wynik, propozycjeBramek: bramki, bramkiWdrozone: wdrozone, uwagaIndeksu: wynik.indeks === 'bramka' ? INDEKS_PELNY : '', pushMimoBezPusha: naruszenie }
 }
 
 return { status: 'BLAD', powod: `Nieznany etap "${etap}". Dozwolone: start, stan, decyzja, zbierz, napraw, merge, claude-md, compound.` }
