@@ -50,6 +50,13 @@ Testy E2E na symulatorze albo emulatorze (Maestro, dev-client, osobna baza e2e) 
 [`.claude/templates/e2e-env/README.md`](.claude/templates/e2e-env/README.md). Bramki domknięcia faz: wzory w
 `.claude/templates/bramki/`.
 
+### Najpierw iOS
+
+Pipeline (plan, autopilot, testy E2E Maestro, smoke, PR) jest sprawdzony na żywo na symulatorze iOS: pilot na kopii prawdziwej
+aplikacji, sześć runów do zmergowanego PR. Adapter E2E obsługuje też emulator Androida (`E2E_PLATFORMA=android` w `.env.e2e`), ale tej ścieżki
+nikt jeszcze nie przeszedł na żywo. Zacznij od iOS; pierwszy run na Androidzie traktuj jak test i zgłoś każdą usterkę do
+`claude-code-starter`.
+
 ## Aktualizacja
 
 `/sync-template` w projekcie zaciąga najnowszą wersję z tego repo. Adres bierze z `szablon.repo` w
@@ -62,9 +69,23 @@ Projekt zsynchronizowany z tym repo przed listopadem 2026 ma starszy zestaw (inn
 `learned-patterns.md` w `.claude/rules/`). Pierwszy sync usunie pliki, których nowy wariant już nie ma. Przed nim:
 
 1. Przenieś reguły z `.claude/rules/learned-patterns.md` do `docs/solutions/` albo do reguł projektu i zacommituj je.
-   Sync nadpisuje pliki szablonu, więc edytowana kopia zniknie (zostanie tylko w backupie).
+   Nowy wariant tego pliku nie czyta, a sync może go usunąć (zostanie tylko w `.claude/.backups/`). Reguły bez wpisu w
+   `docs/solutions/`, które przyszły ze starym szablonem (np. o granicach Maestro), są już w skillach wariantu: możesz je
+   pominąć. Odwołania do starego pliku w komentarzach kodu mogą zostać jako historia.
 2. Uruchom `/sync-template --dry-run` i przejrzyj listę zmian.
-3. Zacommituj stan projektu, potem uruchom sync bez `--dry-run`.
+3. Zacommituj stan projektu, potem uruchom sync bez `--dry-run`. Pierwszy sync wykonuje jeszcze stary skrypt projektu, który
+   podmienia sam siebie w trakcie i może skończyć się błędem `syntax error` w połowie. Uruchom sync drugi raz: nowy skrypt
+   dokończy usunięcia, marker wersji i manifest.
+4. Usuń własne skille syncu sprzed wariantu (np. `.claude/skills/sync-claude-template/`), żeby nie konkurowały z `/sync-template`.
+5. Dokumenty wymagań trzymaj w `docs/brainstorms/` (tam szuka ich `/dev-plan`); katalog o innej nazwie, np. `docs/dev-brainstorms/`,
+   przenieś. Wpisy `docs/solutions/` z odsyłaczem do `.claude/rules/learned-patterns.md` popraw na odsyłacz do samego wpisu.
+
+Projekt z własną konfiguracją ESLint nie dostaje reguł ESLint szablonu (doctor: UWAGA „własny eslint.config…”), dopóki nie
+zainstaluje wzoru z `.claude/templates/bramki/` osobnym zadaniem; wzór wymaga ESLint 10 i TypeScript < 6.1.
+
+Tokeny kont (`SUPABASE_ACCESS_TOKEN`, `EXPO_TOKEN`) w profilu shella widzi każda sesja i agent; doctor zgłasza je jako UWAGA.
+Token do advisors trzymaj w `.env.e2e`, a w projekcie, który ma ich nie widzieć, zastąp je pustymi wartościami w
+`.claude/settings.local.json` (`"env": { "SUPABASE_ACCESS_TOKEN": "", "EXPO_TOKEN": "" }`).
 
 ## Bonus: Output Style „adhd"
 
